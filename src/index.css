@@ -1,0 +1,163 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * L5-tokens (2026-05-21) — semantic colour tokens consumed by tailwind.config.ts.
+ * Light-mode values live in `:root`, dark-mode overrides in `html.dark { … }`.
+ * Today the app boots with `class="dark"` on <html>; once a theme toggle is wired
+ * up, the same tokens become the swap surface.
+ */
+:root {
+  /* Light theme defaults (preserved for future toggle). */
+  --surface: 248 250 252;
+  --surface-raised: 255 255 255;
+  --surface-hover: 241 245 249;
+  --surface-active: 226 232 240;
+  --border-subtle: 226 232 240;
+  --border-strong: 203 213 225;
+  --text-primary: 15 23 42;
+  --text-secondary: 51 65 85;
+  --text-tertiary: 100 116 139;
+  --text-disabled: 148 163 184;
+  --accent-primary: 14 165 233;
+  --accent-secondary: 168 85 247;
+  --accent-transition: 217 70 239;
+  --status-info: 14 165 233;
+  --status-success: 22 163 74;
+  --status-warning: 234 179 8;
+  --status-error: 239 68 68;
+}
+
+html.dark {
+  --surface: 2 6 23;             /* slate-950 */
+  --surface-raised: 15 23 42;    /* slate-900 */
+  --surface-hover: 30 41 59;     /* slate-800 */
+  --surface-active: 51 65 85;    /* slate-700 */
+  --border-subtle: 30 41 59;     /* slate-800, but used at 60% via opacity utilities */
+  --border-strong: 51 65 85;     /* slate-700 */
+  --text-primary: 248 250 252;   /* slate-50 */
+  --text-secondary: 203 213 225; /* slate-300 */
+  --text-tertiary: 148 163 184;  /* slate-400 */
+  --text-disabled: 100 116 139;  /* slate-500 */
+  --accent-primary: 34 211 238;  /* cyan-400 */
+  --accent-secondary: 168 85 247; /* purple-500 */
+  --accent-transition: 217 70 239; /* fuchsia-500 — transition edges/pills */
+  --status-info: 34 211 238;
+  --status-success: 74 222 128;
+  --status-warning: 250 204 21;
+  --status-error: 248 113 113;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+@keyframes pulseSlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(34, 211, 238, 0); }
+}
+.animate-pulse-slow {
+  animation: pulseSlow 2s ease-in-out infinite;
+}
+
+/* S5 — animated drone particle that travels along a flow edge.
+ * The edge sets `offset-path: path(...)`; this keyframe drives `offset-distance`
+ * from 0 % to 100 % so the dot slides along the bezier curve. */
+@keyframes flowEdgeParticle {
+  from { offset-distance: 0%; opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  to   { offset-distance: 100%; opacity: 0; }
+}
+
+/* Transition-pill fade-in — applied for ~400ms after a new flow edge is
+ * created so the edge gracefully appears rather than popping. */
+@keyframes transitionPillFadeIn {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.85); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+.transition-pill-fade-in {
+  animation: transitionPillFadeIn 320ms cubic-bezier(0.22, 1.2, 0.44, 1) both;
+}
+
+/* Entry motion vocabulary — applied to dialogs, palettes, popovers, context
+ * menus, tab swaps and HUD hints so surfaces arrive instead of popping.
+ * Entry-only by design: exit animations need unmount-delay state machinery.
+ * Durations/easings mirror the motion tokens in tailwind.config.ts. */
+@keyframes dialogIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.animate-dialog-in {
+  animation: dialogIn 200ms cubic-bezier(0.0, 0, 0.2, 1) both;
+}
+
+@keyframes backdropIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.animate-backdrop-in {
+  animation: backdropIn 150ms cubic-bezier(0.0, 0, 0.2, 1) both;
+}
+
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.animate-panel-in {
+  animation: panelIn 150ms cubic-bezier(0.0, 0, 0.2, 1) both;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.animate-fade-in {
+  animation: fadeIn 150ms cubic-bezier(0.0, 0, 0.2, 1) both;
+}
+
+@keyframes hintRise {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.animate-hint-rise {
+  animation: hintRise 150ms cubic-bezier(0.0, 0, 0.2, 1) both;
+}
+
+/* Unified glassmorphic surface for floating 3D-stage controls (view switcher,
+ * manipulation HUD, audience overlay, empty-state card). One base so every
+ * floating control in build mode shares the same blur / ring / radius / shadow. */
+.floating-panel {
+  background-color: rgb(0 0 0 / 0.45);
+  backdrop-filter: blur(12px);
+  border-radius: 0.75rem;
+  box-shadow: 0 8px 24px -8px rgb(0 0 0 / 0.5);
+  --tw-ring-color: rgb(255 255 255 / 0.1);
+  box-shadow: 0 8px 24px -8px rgb(0 0 0 / 0.5), inset 0 0 0 1px rgb(255 255 255 / 0.08);
+}
+
+/* Respect users who prefer reduced motion. Disables most transitions across
+ * the app. Components that need motion can opt out with `motion-safe:`.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Visible keyboard focus ring across the app — accessibility floor for any
+ * keyboard-navigable control. Buttons / inputs that suppress this should be
+ * deliberate (e.g. inputs handle their own focus indicators).
+ */
+:focus-visible {
+  outline: 2px solid rgb(var(--accent-primary));
+  outline-offset: 2px;
+  border-radius: 2px;
+}
