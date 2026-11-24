@@ -1,4 +1,4 @@
-import { Undo2, Redo2, MonitorPlay, Menu, ShieldCheck, ShieldAlert, Wrench, Settings2, FilePlus2, FolderOpen, Save, Download, Music, Keyboard, Sparkles, Wand2, PenLine, MessageSquareText, FileText, KeyRound, Box } from 'lucide-react'
+import { Undo2, Redo2, MonitorPlay, Menu, ShieldCheck, ShieldAlert, Wrench, Settings2, FilePlus2, FolderOpen, Save, Download, Music, Keyboard, Sparkles, Wand2, PenLine, MessageSquareText, FileText, KeyRound, Box, Wind } from 'lucide-react'
 import { openCopilot } from './ai/openCopilot'
 import { STARTERS } from '@/ai/copilotStore'
 import { getState, useStore } from '@/state/store'
@@ -107,6 +107,7 @@ function SafetyStatus() {
           </div>
           <div className="hint" style={{ marginTop: 8 }}>Checks are exact, not sampled: every pair of drones in every flight, peak speeds, accelerations and jerk from the motion curves. Flights that would pass too close take a collision-free detour automatically.</div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+            <button className="btn sm ghost" onClick={() => { close(); getState().set({ dialog: 'wind' }) }} title="Fly the show through a physical simulation with wind and gusts"><Wind size={12} /> Wind test</button>
             <button className="btn sm ghost" onClick={() => { close(); getState().select({ kind: 'show' }) }}>Edit limits</button>
           </div>
         </div>

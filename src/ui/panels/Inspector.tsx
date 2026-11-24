@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { AlertTriangle, ChevronDown, ChevronRight, Copy, Maximize, Plus, Trash2, Wrench, CheckCircle2, ImageUp, Crosshair, Sparkles } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Copy, Maximize, Plus, Trash2, Wrench, CheckCircle2, ImageUp, Crosshair, Sparkles, Wind } from 'lucide-react'
 import type { Draft } from 'immer'
 import { getState, useStore } from '@/state/store'
 import { useShallow } from 'zustand/react/shallow'
@@ -483,6 +483,9 @@ function ShowInspector() {
             <div>Flight time</div><div className={validation.stats.duration > L.maxFlightTime ? 'bad' : ''}>{formatTime(validation.stats.duration)}</div>
           </div>
         )}
+        <button className="btn sm" style={{ marginTop: 10 }} onClick={() => getState().set({ dialog: 'wind' })} title="Fly the show through a physical simulation with wind, gusts and turbulence">
+          <Wind size={12} /> Wind test…
+        </button>
       </Section>
       <Section title="Fleet & site">
         <Row label="Drones"><NumberField value={doc.droneCount} step={10} min={1} max={2000} onChange={(v) => setDroneCount(v)} /></Row>

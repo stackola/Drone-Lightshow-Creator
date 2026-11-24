@@ -3,6 +3,7 @@ import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import { evaluate } from '@/core/evaluate'
 import { getState, useStore } from '@/state/store'
+import { simPositions } from '@/state/sim'
 
 /** Latest drone positions (shared with overlays such as issue markers). */
 export const frame = { positions: new Float32Array(0) }
@@ -63,6 +64,8 @@ export function Drones({ present }: { present: boolean }) {
     const geo = geoRef.current
     if (!c || !geo || c.n !== n) return
     evaluate(c, s.time, positions, colors)
+    // Wind test playback: real (simulated) positions, planned colours.
+    if (!present) simPositions(c, s.time, positions)
     frame.positions = positions
     const pa = geo.getAttribute('position') as THREE.BufferAttribute
     const ca = geo.getAttribute('color') as THREE.BufferAttribute

@@ -123,3 +123,17 @@ test('idle drones: spare drones become a halo, and the formation breathes safely
   await expect(page.getByRole('radio', { name: 'Starfield' })).toHaveAttribute('aria-checked', 'true')
   await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 20000 })
 })
+
+test('wind test: simulates the show and plays the simulated flight in the viewport', async ({ page }) => {
+  await fresh(page)
+  await page.getByRole('button', { name: /Wind test/ }).click()
+  await page.getByRole('radio', { name: 'Calm' }).click()
+  await page.getByRole('button', { name: 'Run wind test' }).click()
+  await expect(page.locator('.wind-verdict')).toBeVisible({ timeout: 60000 })
+  await expect(page.locator('.wind-verdict')).toHaveClass(/ok/)
+  await page.getByRole('button', { name: 'Watch in viewport' }).click()
+  await page.getByRole('button', { name: 'Close' }).click()
+  await expect(page.locator('.sim-badge')).toContainText('Simulated in 2 m/s wind')
+  await page.locator('.sim-badge').getByRole('button', { name: 'Show plan' }).click()
+  await expect(page.locator('.sim-badge')).toHaveCount(0)
+})

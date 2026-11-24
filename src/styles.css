@@ -434,3 +434,22 @@ input, textarea { user-select: text; }
 .role-chip.role-halo { background: radial-gradient(circle, transparent 0 3px, var(--accent) 3.5px 5px, transparent 5.5px), #0b1020; }
 .role-chip.role-frame { background: #0b1020; box-shadow: inset 0 0 0 2px var(--accent); }
 .role-chip.role-base { background: linear-gradient(to top, var(--accent) 0 3px, #0b1020 3px); }
+
+/* Wind test */
+.wind-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; margin: 10px 0 12px; }
+@media (max-width: 720px) { .wind-grid { grid-template-columns: 1fr; } }
+.wind-out { min-height: 150px; }
+.wind-progress { position: relative; height: 26px; border-radius: var(--radius-sm); background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; }
+.wind-progress > div { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, rgba(56,189,248,0.25), rgba(56,189,248,0.45)); transition: width 0.15s linear; }
+.wind-progress > span { position: relative; display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 10px; font-size: 12px; }
+.wind-verdict { display: flex; gap: 8px; align-items: flex-start; padding: 9px 11px; border-radius: var(--radius-sm); line-height: 1.45; border: 1px solid; }
+.wind-verdict svg { flex: none; margin-top: 2px; }
+.wind-verdict.ok { color: #9be7b8; border-color: rgba(52,211,153,0.35); background: rgba(52,211,153,0.08); }
+.wind-verdict.warn { color: #ffd38a; border-color: rgba(255,176,32,0.4); background: rgba(255,176,32,0.08); }
+.wind-verdict.bad { color: #ffb4b4; border-color: rgba(248,113,113,0.45); background: rgba(248,113,113,0.08); }
+.close-calls { display: flex; flex-direction: column; gap: 2px; }
+.close-call { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; padding: 4px 6px; background: none; border: 0; border-radius: 4px; color: var(--text); cursor: pointer; text-align: left; font-variant-numeric: tabular-nums; }
+.close-call:hover { background: var(--panel-3); }
+.close-call .bad { color: var(--err); }
+button.link { background: none; border: 0; padding: 0; color: var(--accent-2); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; font: inherit; }
+.sim-badge { display: flex; align-items: center; gap: 6px; color: #bfe8ff; }

@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 
 const CopilotPanel = lazy(() => import('./ai/CopilotPanel').then((m) => ({ default: m.CopilotPanel })))
-import { Users, Orbit, Map as MapIcon, AlertTriangle } from 'lucide-react'
+import { Users, Orbit, Map as MapIcon, AlertTriangle, Wind } from 'lucide-react'
 import { TopBar } from './TopBar'
 import { ScenesPanel } from './panels/ScenesPanel'
 import { Inspector } from './panels/Inspector'
@@ -22,6 +22,7 @@ import { addCue, addScene, deleteCue, deleteScene, duplicateCue, duplicateScene,
 import { loadMusic, openProjectFile, saveProject } from '@/state/persist'
 import { imageShape } from './content'
 import { sceneAt } from '@/core/evaluate'
+import { useSim } from '@/state/sim'
 
 function StageOverlay() {
   const camera = useStore((s) => s.camera)
@@ -37,6 +38,9 @@ function StageOverlay() {
   const computing = useStore((s) => s.computing)
   const error = useStore((s) => s.engineError)
   const focus = useStore((s) => s.focus)
+  const compiled = useStore((s) => s.compiled)
+  const sim = useSim(useShallow((s) => ({ view: s.view, wind: s.wind, result: s.result, forCompiled: s.forCompiled })))
+  const simOn = sim.view && !!sim.result?.frames && sim.forCompiled === compiled
   return (
     <>
       <div className="stage-overlay ov-tl">
@@ -58,6 +62,13 @@ function StageOverlay() {
         {now && (
           <div className="glass now-label">
             {now.verb} {now.name && <b>{now.name}</b>}
+          </div>
+        )}
+        {simOn && (
+          <div className="glass now-label sim-badge">
+            <Wind size={13} /> Simulated in {sim.result!.wind.speed} m/s wind
+            <button className="btn ghost sm" onClick={() => getState().set({ dialog: 'wind' })}>Results</button>
+            <button className="btn ghost sm" onClick={() => useSim.setState({ view: false })}>Show plan</button>
           </div>
         )}
       </div>
