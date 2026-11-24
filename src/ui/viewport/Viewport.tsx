@@ -3,6 +3,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Grid, Html, OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
 import { Drones, frame } from './Drones'
+import { SiteLayer } from './SiteLayer'
 import { Manipulator, gizmoHovered, gizmoJustUsed } from './Manipulator'
 import { getState, useStore, type CameraMode } from '@/state/store'
 import { findCompiledScene, type Compiled } from '@/core/compile'
@@ -310,6 +311,7 @@ export function Viewport({ present = false }: { present?: boolean }) {
     >
       <CameraRig present={present} />
       <Ground present={present} />
+      <SiteLayer present={present} />
       <Pads />
       <Drones present={present} />
       {!present && <SelectionBox />}

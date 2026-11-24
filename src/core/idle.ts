@@ -6,6 +6,7 @@
 // they turn and spin with it. Hold motions (breathe, bob, sway) never bring
 // drones closer than the base formation; see motion.ts.
 
+import { safeSpacing } from './site'
 import type { Effect, HoldMotion, Layer, Scene, ShapeSpec, ShowDoc, SpareRole, Vec3 } from './types'
 import { generateShape } from './shapes'
 import { allocate, sceneGeometry } from './compile'
@@ -188,7 +189,7 @@ export function applySpareRole(scene: Scene, doc: ShowDoc, layerId: string, role
 export function applySpareRoles(scene: Scene, doc: ShowDoc, roles: [string, SpareRole][]): Scene {
   const n = doc.droneCount
   const counts = allocate(n, scene.layers.map((l) => l.weight))
-  const target = comfortableSpacing(doc.limits.minSpacing)
+  const target = comfortableSpacing(safeSpacing(doc.limits))
   const room = doc.limits.maxAltitude - doc.limits.minAltitude - 10
   // Width available across the flight area at the scene's position (it may be offset sideways).
   const roomW = 2 * Math.max(15, doc.limits.maxRadius - 15 - Math.hypot(scene.position[0], scene.position[2]))
@@ -210,7 +211,7 @@ export function applySpareRoles(scene: Scene, doc: ShowDoc, roles: [string, Spar
  */
 export function fitRolesToAirspace(scene: Scene, doc: ShowDoc): Scene {
   const n = doc.droneCount
-  const target = comfortableSpacing(doc.limits.minSpacing)
+  const target = comfortableSpacing(safeSpacing(doc.limits))
   const roleLayers = scene.layers.filter((l) => l.role && l.role !== 'park')
   if (!roleLayers.length || fitsAirspace(scene, doc)) return scene
   const counts = allocate(n, scene.layers.map((l) => l.weight))
@@ -243,7 +244,7 @@ export function fitRolesToAirspace(scene: Scene, doc: ShowDoc): Scene {
 export function addSpareLayer(scene: Scene, doc: ShowDoc, role: SpareRole, fraction = 0.3): Scene {
   const n = doc.droneCount
   const f = Math.max(0.02, Math.min(0.85, fraction))
-  const target = comfortableSpacing(doc.limits.minSpacing)
+  const target = comfortableSpacing(safeSpacing(doc.limits))
   const total = scene.layers.reduce((a, l) => a + l.weight, 0) || 1
   const before = allocate(n, scene.layers.map((l) => l.weight))
   const layer: Layer = { id: newId('layer'), role, shape: newShape('grid'), weight: (total * f) / (1 - f), offset: [0, 0, 0], rotation: [0, 0, 0], effect: defaultEffect('off') }

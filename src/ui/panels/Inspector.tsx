@@ -1,5 +1,6 @@
+import { safeSpacing } from '@/core/site'
 import { useMemo, useState } from 'react'
-import { AlertTriangle, ChevronDown, ChevronRight, Copy, Maximize, Plus, Trash2, Wrench, CheckCircle2, ImageUp, Crosshair, Sparkles, Wind, Split, CornerLeftUp } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Copy, Maximize, Plus, Trash2, Wrench, CheckCircle2, ImageUp, Crosshair, Sparkles, Wind, Split, CornerLeftUp, MapPin } from 'lucide-react'
 import type { Draft } from 'immer'
 import { getState, useStore } from '@/state/store'
 import { useShallow } from 'zustand/react/shallow'
@@ -10,6 +11,7 @@ import {
 } from '@/state/actions'
 import { SHAPES, SHAPE_BY_KIND, gridRows, sizeLabel } from '@/core/shapes'
 import { allocate, findCompiledScene, findSceneTime } from '@/core/compile'
+import { ACCURACY_PRESETS, accuracyOf } from '@/core/site'
 import { findScene, groupSizes, sceneDroneCount, replaceSceneIn } from '@/core/groups'
 import { comfortableSpacing, extremeRels, maxSafeMotionAmount, maxSafeSpin, formatTime, type Issue } from '@/core/validate'
 import { MOTION_KINDS, SPARE_ROLES, defaultMotion, motionAmountUnit } from '@/core/idle'
@@ -344,13 +346,13 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
   const limits = useStore((s) => s.doc.limits)
   const def = SHAPE_BY_KIND[layer.shape.kind]
   const shape = layer.shape
-  const target = comfortableSpacing(limits.minSpacing)
+  const target = comfortableSpacing(safeSpacing(limits))
   const unit = useMemo(() => unitSpacing({ ...shape, size: 1 } as ShapeSpec, count), [JSON.stringify({ ...shape, size: 0 }), count]) // eslint-disable-line react-hooks/exhaustive-deps
   const spacing = unit * shape.size
   const upLayer = (recipe: (l: Draft<Layer>) => void, label: string, key?: string) =>
     updateScene(scene.id, (s) => { const l = s.layers.find((x) => x.id === layer.id); if (l) recipe(l) }, label, key)
   const upShape = (patch: Record<string, unknown>, label: string, key?: string) => upLayer((l) => { Object.assign(l.shape, patch) }, label, key)
-  const spacingOk = !Number.isFinite(spacing) || spacing + 1e-6 >= limits.minSpacing
+  const spacingOk = !Number.isFinite(spacing) || spacing + 1e-6 >= safeSpacing(limits)
   const k = `${scene.id}:${layer.id}`
 
   const setText = (text: string, font: TextFont) => {
@@ -420,7 +422,7 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
         </Row>
         {Number.isFinite(spacing) && (
           <div className={`hint ${spacingOk ? (spacing + 1e-6 >= target ? 'ok' : '') : 'err'}`} style={{ margin: '2px 0 4px 100px' }}>
-            {spacingOk ? `Drones ${spacing.toFixed(1)} m apart` : `Drones only ${spacing.toFixed(2)} m apart — needs ${limits.minSpacing} m`}
+            {spacingOk ? `Drones ${spacing.toFixed(1)} m apart` : `Drones only ${spacing.toFixed(2)} m apart — needs ${safeSpacing(limits).toFixed(1)} m`}
             {spacingOk && spacing + 1e-6 < target ? ` · below ${target.toFixed(1)} m, flights are checked pair by pair` : ''}
           </div>
         )}
@@ -560,7 +562,7 @@ function ShowInspector() {
   const validation = useStore((s) => s.validation)
   const up = useStore((s) => s.update)
   const L = doc.limits
-  const lim = (key: keyof typeof L, label: string, step: number, unit: string, min = 0, scale = 1) => (
+  const lim = (key: Exclude<keyof typeof L, 'accuracy'>, label: string, step: number, unit: string, min = 0, scale = 1) => (
     <Row label={label}>
       <NumberField value={L[key] / scale} step={step} unit={unit} min={min} onChange={(v) => up((d) => { d.limits[key] = v * scale }, `Edit ${label.toLowerCase()}`, `lim:${key}`)} />
     </Row>
@@ -600,6 +602,34 @@ function ShowInspector() {
       <Section title="Fleet & site">
         <Row label="Drones"><NumberField value={doc.droneCount} step={10} min={1} max={2000} onChange={(v) => setDroneCount(v)} /></Row>
         <Row label="Audience at"><NumberField value={doc.site.audienceDistance} step={10} unit="m" min={10} onChange={(v) => up((d) => { d.site.audienceDistance = v }, 'Audience distance', 'aud')} /></Row>
+        <div className="site-summary">
+          <div>
+            <MapPin size={12} />{' '}
+            {doc.site.geo ? `${doc.site.geo.lat.toFixed(5)}, ${doc.site.geo.lon.toFixed(5)} · audience faces ${Math.round(doc.site.geo.heading)}°` : 'Not placed on a map yet'}
+          </div>
+          <div className="hint">
+            {(doc.site.zones?.length ?? 0) === 0 ? 'No keep-out zones' : `${doc.site.zones!.length} keep-out zone${doc.site.zones!.length > 1 ? 's' : ''}`}
+            {doc.site.area ? ' · flight area set' : ''}
+          </div>
+          <button className="btn sm" onClick={() => getState().set({ dialog: 'site' })}><MapPin size={12} /> {doc.site.geo ? 'Edit site…' : 'Place on a map…'}</button>
+        </div>
+      </Section>
+      <Section title="Position accuracy">
+        <Segmented
+          full
+          value={ACCURACY_PRESETS.find((p) => p.h === accuracyOf(L).h && p.v === accuracyOf(L).v)?.label ?? 'Custom'}
+          options={[...ACCURACY_PRESETS.map((p) => ({ value: p.label, label: p.label, title: p.hint })), ...(ACCURACY_PRESETS.some((p) => p.h === accuracyOf(L).h && p.v === accuracyOf(L).v) ? [] : [{ value: 'Custom', label: 'Custom' }])]}
+          onChange={(v) => { const p = ACCURACY_PRESETS.find((x) => x.label === v); if (p) up((d) => { if (p.h || p.v) d.limits.accuracy = { h: p.h, v: p.v }; else delete d.limits.accuracy }, 'Position accuracy') }}
+        />
+        <Row label="Across / up" title="How far a real drone may be from its planned position, across and up/down">
+          <NumberField value={accuracyOf(L).h} step={0.05} unit="m" min={0} max={20} onChange={(v) => up((d) => { d.limits.accuracy = { h: v, v: accuracyOf(d.limits).v } }, 'Position accuracy', 'acc-h')} />
+          <NumberField value={accuracyOf(L).v} step={0.05} unit="m" min={0} max={20} onChange={(v) => up((d) => { d.limits.accuracy = { h: accuracyOf(d.limits).h, v } }, 'Position accuracy', 'acc-v')} />
+        </Row>
+        <p className="hint" style={{ margin: '4px 0 0' }}>
+          {accuracyOf(L).h || accuracyOf(L).v
+            ? `Every clearance allows for it: drones are kept ${safeSpacing(L).toFixed(2)} m apart (${L.minSpacing} m + twice the accuracy), and further from the floor, ceiling, fence and zones.`
+            : 'Checks assume drones fly exactly on their planned paths. Set your positioning system’s accuracy so every clearance allows for it.'}
+        </p>
       </Section>
       <Section title="Drone limits">
         {lim('minSpacing', 'Min spacing', 0.1, 'm', 0.3)}

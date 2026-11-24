@@ -92,6 +92,46 @@ test('groups: a formation splits, each half flies its own formations, then every
   await expect(page.locator('.srow.step')).toHaveCount(2)
 })
 
+test('site: place the show, draw a keep-out zone, and fix the formation that intrudes', async ({ page }) => {
+  await page.route('https://tile.openstreetmap.org/**', (route) => route.fulfill({
+    status: 200, contentType: 'image/svg+xml', headers: { 'Access-Control-Allow-Origin': '*' },
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><rect width="256" height="256" fill="#445"/></svg>',
+  }))
+  await fresh(page)
+  await page.getByRole('button', { name: /Place on a map/ }).click()
+  await page.getByLabel('Location').fill('51.5079, -0.0877')
+  await page.getByLabel('Location').press('Enter')
+  await expect(page.getByText('Launch site 51.507900, -0.087700')).toBeVisible()
+  await expect(page.locator('.site-tiles image').first()).toBeAttached()
+  // Draw a no-fly zone over the right of the show.
+  await page.getByRole('radio', { name: /Zone/ }).first().click()
+  const box = (await page.locator('svg.site-map').boundingBox())!
+  for (const [fx, fy] of [[0.62, 0.28], [0.75, 0.28], [0.75, 0.42], [0.62, 0.42], [0.62, 0.28]] as const) await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy)
+  await expect(page.locator('.zone-card')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Done' }).click()
+  await expect(page.locator('.status-btn')).toContainText('1 issue')
+  await expect(page.locator('.issue-card, .issue').first()).toContainText(/no-fly zone/)
+  await page.getByRole('button', { name: /Fix 1 automatically/ }).click()
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly')
+  // The site is saved with the show.
+  await expect(page.locator('.site-summary')).toContainText('51.50790')
+  await expect(page.locator('.site-summary')).toContainText('1 keep-out zone')
+})
+
+test('position accuracy widens the spacing everything keeps', async ({ page }) => {
+  await fresh(page)
+  await page.getByRole('radio', { name: 'RTK+' }).click()
+  await expect(page.getByText(/kept 3\.00 m apart/)).toBeVisible()
+  const status = page.locator('.status-btn')
+  await expect(status).not.toContainText('Planning')
+  if (!(await status.textContent())?.includes('Safe to fly')) await page.getByRole('button', { name: /Fix \d+ automatically/ }).click()
+  await expect(status).toContainText('Safe to fly', { timeout: 20000 })
+  // GPS without RTK needs 8 m between drones: this fleet no longer fits the airspace, and the editor says so.
+  await page.getByRole('radio', { name: 'GPS' }).click()
+  await expect(page.getByText(/kept 8\.00 m apart/)).toBeVisible()
+  await expect(status).not.toContainText('Safe to fly')
+})
+
 test('logo import becomes a safe formation with image colours', async ({ page }) => {
   await fresh(page)
   await page.locator('.panel-head .btn.primary').click()

@@ -1,7 +1,7 @@
 // Project files: versioned JSON. Loading is defensive — any missing or
 // malformed field falls back to a sane default instead of crashing the editor.
 
-import type { AudioMeta, CascadeOrder, Effect, FlightSpec, Group, Layer, LightCue, Limits, ModelPart, Scene, ShapeSpec, ShowDoc, Site, TransitionKind, TransitionStyle, Vec3 } from './types'
+import type { AudioMeta, CascadeOrder, Effect, FlightSpec, Group, Layer, Zone, LightCue, Limits, ModelPart, Scene, ShapeSpec, ShowDoc, Site, TransitionKind, TransitionStyle, Vec3 } from './types'
 import { MAX_PARTS } from './model3d'
 import { DEFAULT_LIMITS, DEFAULT_SITE, newId } from './defaults'
 import { SHAPE_BY_KIND } from './shapes'
@@ -75,6 +75,7 @@ export function normalizeDoc(r: Obj): ShowDoc {
     maxAltitude: num(L.maxAltitude, DEFAULT_LIMITS.maxAltitude, 1, 5000),
     maxRadius: num(L.maxRadius, DEFAULT_LIMITS.maxRadius, 1, 10000),
     maxFlightTime: num(L.maxFlightTime, DEFAULT_LIMITS.maxFlightTime, 10, 36000),
+    ...(isObj(L.accuracy) ? { accuracy: { h: num(L.accuracy.h, 0, 0, 20), v: num(L.accuracy.v, 0, 0, 20) } } : {}),
   }
   const S = isObj(r.site) ? r.site : {}
   const site: Site = {
@@ -83,6 +84,7 @@ export function normalizeDoc(r: Obj): ShowDoc {
     audienceDistance: num(S.audienceDistance, DEFAULT_SITE.audienceDistance, 10, 5000),
     landing: S.landing === 'home' ? 'home' : 'any',
     returnFlight: flight(S.returnFlight),
+    ...siteExtras(S),
   }
   return {
     version: 1,
@@ -112,6 +114,34 @@ function transitionStyle(v: unknown): TransitionStyle | undefined {
   if (kind === 'cascade') out.order = ORDERS.includes(v.order as CascadeOrder) ? (v.order as CascadeOrder) : 'left'
   if (kind === 'swirl') out.turns = Math.round(num(v.turns, 0.5, -3, 3) * 8) / 8 || 0.5
   if (kind === 'ant') out.lanes = Math.round(num(v.lanes, 0, 0, 40))
+  return out
+}
+
+const poly = (v: unknown): [number, number][] =>
+  Array.isArray(v) ? v.filter((p): p is [number, number] => Array.isArray(p) && p.length >= 2 && Number.isFinite(p[0]) && Number.isFinite(p[1])).slice(0, 200).map((p) => [num(p[0], 0, -1e5, 1e5), num(p[1], 0, -1e5, 1e5)]) : []
+
+/** Location, keep-out zones, flight area and map settings of the site. */
+function siteExtras(S: Obj): Partial<Site> {
+  const out: Partial<Site> = {}
+  if (isObj(S.geo) && Number.isFinite(S.geo.lat) && Number.isFinite(S.geo.lon)) {
+    out.geo = { lat: num(S.geo.lat, 0, -90, 90), lon: num(S.geo.lon, 0, -180, 180), heading: ((num(S.geo.heading, 0, -720, 720) % 360) + 360) % 360 }
+  }
+  if (Array.isArray(S.zones)) {
+    const kinds: Zone['kind'][] = ['audience', 'building', 'no-fly']
+    const zones = S.zones.filter(isObj).slice(0, 50).map((z): Zone => ({
+      id: str(z.id, newId('zone')),
+      name: str(z.name, 'Zone').slice(0, 80),
+      kind: kinds.includes(z.kind as Zone['kind']) ? (z.kind as Zone['kind']) : 'no-fly',
+      points: poly(z.points),
+      top: z.top === null || z.top === undefined ? null : num(z.top, 20, 0, 10000),
+      buffer: num(z.buffer, 5, 0, 1000),
+    })).filter((z) => z.points.length >= 3)
+    if (zones.length) out.zones = zones
+  }
+  const area = poly(S.area)
+  if (area.length >= 3) out.area = area
+  if (typeof S.tiles === 'string' && /^https:\/\/[^\s"'<>]+$/.test(S.tiles) && S.tiles.includes('{z}')) out.tiles = S.tiles.slice(0, 500)
+  if (S.mapInView === true) out.mapInView = true
   return out
 }
 

@@ -2,6 +2,7 @@
 // through the same safe paths the UI uses, and reports the resulting safety
 // status so the model sees the consequences of its edits.
 
+import { safeSpacing } from '@/core/site'
 import { z } from 'zod'
 import type { BetaToolResultBlockParam, BetaToolUnion } from '@anthropic-ai/sdk/resources/beta/messages/messages'
 import type { LightCue, Scene, ShapeSpec, ShowDoc } from '@/core/types'
@@ -219,7 +220,7 @@ export const TOOLS = [
         changes.push(`size ×${k}`)
       }
       if (i.size_scale !== undefined || i.tilt !== undefined || i.turn !== undefined || i.roll !== undefined) {
-        out = fitScene(out, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'grow')
+        out = fitScene(out, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'grow')
       }
       if (i.idle_motion) {
         const m = motionFromInput(i.idle_motion)
@@ -258,7 +259,7 @@ export const TOOLS = [
       const shape = custom ?? shapeFromInput(i.shape)
       const effect = custom ? defaultEffect('image') : layer.effect.kind === 'image' ? effectFromInput({ effect: 'solid' }) : layer.effect
       let s: Scene = { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, shape, effect } : l)) }
-      s = fitScene(s, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'exact')
+      s = fitScene(s, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'exact')
       const scale = Math.max(1, Math.min(4, i.shape.scale ?? 1))
       if (scale > 1.001) s = { ...s, layers: s.layers.map((l, k) => (k === li ? { ...l, shape: { ...l.shape, size: ceilTo(l.shape.size * scale, 0.1) } as ShapeSpec } : l)) }
       s = fitToAirspace(s, sub)
@@ -300,7 +301,7 @@ export const TOOLS = [
       const { critique, next } = await lookAndFix(shape.name, attempt, count, fourViews, { feedback: i.feedback, signal: ctx.signal })
       if (!next) return { summary: `Looks right: ${critique}`, content: `No change needed. ${critique}\n${safetyLine()}` }
       let s: Scene = { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, shape: { ...shape, name: next.name, parts: next.parts } } : l)) }
-      s = fitToAirspace(fitScene(s, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'exact'), sub)
+      s = fitToAirspace(fitScene(s, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'exact'), sub)
       replaceScene(scene.id, s, `Improve ${shape.name}`)
       return {
         summary: `Improved the 3D model: ${critique}`,

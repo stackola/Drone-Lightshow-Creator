@@ -2,6 +2,7 @@
 // formations go through the same safe-sizing path as manual edits — the model
 // suggests, the engine decides what is physically safe.
 
+import { safeSpacing } from '@/core/site'
 import type { Effect, LightCue, Scene, ShapeSpec, ShowDoc, Vec3 } from '@/core/types'
 import type { IdleMotionInput, LightInput, SceneInput, ShapeInput, ShowPlan, SplitInput, StepInput, TransitionInput } from './schemas'
 import { separateGroups, splitSceneDoc } from '@/core/splits'
@@ -107,7 +108,7 @@ export function sceneFromInput(doc: ShowDoc, input: SceneInput | StepInput, opts
     scene = { ...scene, layers: [{ ...main!, shape: { ...main!.shape, size: ceilTo(main!.shape.size * scale, 0.1) } as ShapeSpec }, ...rest] }
   }
   // Rotation changes the extent, so re-check spacing between layers, then make it fit the airspace.
-  scene = fitScene(scene, doc.droneCount, comfortableSpacing(doc.limits.minSpacing), 'grow')
+  scene = fitScene(scene, doc.droneCount, comfortableSpacing(safeSpacing(doc.limits)), 'grow')
   scene = fitToAirspace(scene, doc)
   if (input.spare_role && input.spare_role !== 'park') scene = withSpareRole(scene, doc, input.spare_role, input.spare_fraction)
   return calmMotion(scene, doc)

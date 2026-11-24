@@ -246,6 +246,22 @@ export function sceneIdOfDroneAt(c: Compiled, t: number, i: number): string | nu
   return parent.id
 }
 
+/** The formation drone `i` is in at time t, and whether it's holding it (not flying). */
+export function droneStateAt(c: Compiled, t: number, i: number): { sceneId: string | null; holding: boolean } {
+  const seg = c.segments[segmentAt(c, t)]!
+  if (seg.kind === 'hold') return { sceneId: c.scenes[seg.scene]!.id, holding: true }
+  if (seg.kind === 'split') {
+    const parent = c.scenes[seg.scene]!
+    for (const tr of seg.tracks) {
+      if (!tr.drones.includes(i)) continue
+      const sg = trackSegmentAt(tr, t)
+      if (sg.kind === 'flight') return { sceneId: tr.steps[sg.into]!.id, holding: false }
+      return { sceneId: sg.scene >= 0 ? tr.steps[sg.scene]!.id : parent.id, holding: true }
+    }
+  }
+  return { sceneId: sceneIdOfDroneAt(c, t, i), holding: false }
+}
+
 /** Which scene (index) is on show at time t, for UI labels. During a split, the scene the groups came from. */
 export function sceneAt(c: Compiled, t: number): { scene: number; phase: 'takeoff' | 'flight' | 'hold' | 'groups' | 'land' } {
   const seg = c.segments[segmentAt(c, t)]!

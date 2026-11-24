@@ -1,6 +1,7 @@
 // Splitting a scene into groups (pure document transforms, shared by the
 // editor and the AI features).
 
+import { safeSpacing } from './site'
 import type { Group, Scene, ShapeKind, ShapeSpec, ShowDoc, Vec3 } from './types'
 import { compileScene, sceneGeometry } from './compile'
 import { newId, newScene, newShape } from './defaults'
@@ -103,7 +104,7 @@ export function separateGroups(doc: ShowDoc, sceneId: string): ShowDoc {
   const groups = scene?.groups
   if (!scene || !groups || groups.length < 2) return doc
   const sizes = groupSizes(scene, doc.droneCount)
-  const gap = 2 * comfortableSpacing(doc.limits.minSpacing)
+  const gap = 2 * comfortableSpacing(safeSpacing(doc.limits))
   // Lower and upper halves stack vertically if there's room under the ceiling; otherwise side by side.
   let axis: 0 | 1 = groups.every((g) => g.part?.axis === 'y') ? 1 : 0
   if (axis === 1) {

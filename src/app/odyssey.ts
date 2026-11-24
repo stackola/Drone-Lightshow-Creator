@@ -4,6 +4,7 @@
 // Built only through the public model API, and required by the tests to pass
 // every safety check.
 
+import { safeSpacing } from '@/core/site'
 import type { Effect, HoldMotion, LightCue, ModelPart, Scene, ShapeSpec, ShowDoc, TextFont, TransitionStyle } from '@/core/types'
 import { fitToAirspace, fittedSize, newId, newLayer, newLedSign, newScene, newShape, newShow, rasterizeText } from '@/core/defaults'
 import { comfortableSpacing } from '@/core/validate'
@@ -118,7 +119,7 @@ function words(doc: ShowDoc, text: string, font: TextFont, effect: Effect, o: Op
 /** A main shape of `count` drones plus spare layers sharing the rest of the fleet by weight. */
 function withRoles(doc: ShowDoc, spec: ShapeSpec, name: string, effect: Effect, o: Opts, count: number, spares: [Role, number][]): Scene {
   const n = doc.droneCount
-  const target = comfortableSpacing(doc.limits.minSpacing)
+  const target = comfortableSpacing(safeSpacing(doc.limits))
   const main = { ...newLayer({ ...spec, size: fittedSize(spec, count, target) } as ShapeSpec, effect), weight: count }
   const total = spares.reduce((a, [, w]) => a + w, 0)
   const extra = spares.map(([role, w]) => ({ ...newLayer(newShape('grid'), effect), role, weight: ((n - count) * w) / total }))

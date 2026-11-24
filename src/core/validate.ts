@@ -14,8 +14,10 @@
 //   hold motion peaks are measured on the closed-form trajectory.
 
 import { choreoExtents, type Compiled, type CompiledScene, type SceneTime, type Segment, type TrackSegment } from './compile'
-import { crossGroupSeparation } from './sampled'
-import { evaluate } from './evaluate'
+import { crossGroupSeparation, zonesClearance, type PosAt } from './sampled'
+import { accuracyOf, areaClearanceFn, centroid2, planningLimits, zoneClearanceFn } from './site'
+import { droneStateAt, evaluate } from './evaluate'
+import { findScene } from './groups'
 import { choreoPairs, choreoPeaks, sampledPeaks, scalePeaks, wrapPos, type Choreo, type PairResult, type UPeaks } from './transitions'
 import { NO_MOTION, holdPeaks, holdRange, isMoving, moveExtents, profileInverse, profilePeaks, type HoldRange, type MotionPeaks } from './motion'
 import type { HoldMotion, Limits, Scene, ShowDoc } from './types'
@@ -200,6 +202,98 @@ function verticalExtent(cs: CompiledScene, range: HoldRange): { minY: number; ma
   return { minY, maxY, lowK, highK }
 }
 
+/**
+ * Keep-out zones and the permitted flight area, checked for every drone over
+ * the whole show (takeoff and landing included) with a proven speed bound.
+ * When a held formation intrudes, the fix moves it just clear.
+ */
+function checkSite(doc: ShowDoc, c: Compiled, issues: Issue[], vBound: number, probe: PosAt): void {
+  const zones = (doc.site.zones ?? []).filter((z) => z.points.length >= 3)
+  const area = doc.site.area && doc.site.area.length >= 3 ? doc.site.area : null
+  if (!zones.length && !area) return
+  const acc = accuracyOf(doc.limits)
+  const accNote = acc.h || acc.v ? ` plus ±${fmt(Math.max(acc.h, acc.v), 2)} m position accuracy` : ''
+  const fns = [...zones.map((z) => zoneClearanceFn(z, acc)), ...(area ? [areaClearanceFn(area, acc)] : [])]
+  const found = zonesClearance(probe, c.n, 0, c.duration, fns, vBound, 0.5)
+  // Every held formation (scenes and group formations), for finding the one that intrudes.
+  const holds: { cs: CompiledScene; t: number }[] = [
+    ...c.scenes.map((cs) => ({ cs, t: c.sceneTimes[cs.index]!.holdStart })),
+    ...c.segments.flatMap((sg) => (sg.kind === 'split' ? sg.tracks.flatMap((tr) => tr.steps.map((cs, i) => ({ cs, t: tr.stepTimes[i]!.holdStart }))) : [])),
+  ]
+  const nameOf = (id: string) => findScene(doc, id)?.scene.name ?? 'formation'
+  found.forEach((r, k) => {
+    if (r.clearance >= -1e-6) return
+    const fn = fns[k]!
+    const zone = zones[k]
+    // Is a held formation what intrudes? Then move it clear (as little as needed).
+    let fix: Issue['fix'], time = r.t, sceneId: string | undefined, drone = r.drone, holding = false
+    for (const h of holds) {
+      if (worstClearance(h.cs, fn) >= -1e-6) continue
+      holding = true
+      sceneId = h.cs.id
+      time = h.t
+      const [cx, , cz] = h.cs.center
+      let [ux, uz] = zone ? (() => { const [zx, zz] = centroid2(zone.points); return [cx - zx, cz - zz] })() : (() => { const [ax, az] = centroid2(area!); return [ax - cx, az - cz] })()
+      if (Math.hypot(ux, uz) < 1e-3) [ux, uz] = Math.hypot(cx, cz) > 1e-3 ? [cx, cz] : [1, 0]
+      const len = Math.hypot(ux, uz)
+      ux /= len; uz /= len
+      const d = clearShift(h.cs, fn, ux, uz)
+      if (d !== null) fix = { label: zone ? `Move “${nameOf(h.cs.id)}” ${fmt(d)} m clear of “${zone.name}”` : `Move “${nameOf(h.cs.id)}” ${fmt(d)} m into the flight area`, action: { kind: 'move', sceneId: h.cs.id, delta: [Math.round(ux * d * 10) / 10, 0, Math.round(uz * d * 10) / 10] } }
+      break
+    }
+    if (!holding) {
+      const st = droneStateAt(c, r.t, r.drone)
+      sceneId = st.sceneId ?? undefined
+      drone = r.drone
+    }
+    const onGround = !holding && (r.t <= c.takeoff.t1 || r.t >= c.landing.t0)
+    const where = holding ? ` while holding “${nameOf(sceneId!)}”` : onGround ? ' on takeoff or landing (move the pads, or the zone)' : sceneId ? ` on the way into “${nameOf(sceneId)}” (move a formation so the straight path avoids it, or dim and route around)` : ''
+    if (zone) {
+      const what = zone.kind === 'audience' ? `Drones fly over or too near “${zone.name}”` : zone.kind === 'building' ? `Drones come too close to “${zone.name}”` : `Drones enter the no-fly zone “${zone.name}”`
+      issues.push({
+        id: `zone:${zone.id}`, severity: 'error', kind: 'geofence', sceneId,
+        title: what,
+        detail: `Closest at ${formatTime(r.t)}: drone ${r.drone + 1} ${r.clearance + zone.buffer + Math.max(acc.h, acc.v) < 0 ? 'is inside it' : `comes within ${fmt(Math.max(0, r.clearance + zone.buffer + Math.max(acc.h, acc.v)))} m`}${where}. Drones must keep ${fmt(zone.buffer)} m clear${accNote}.`,
+        time, drones: [drone], fix,
+      })
+    } else {
+      issues.push({
+        id: 'area', severity: 'error', kind: 'geofence', sceneId,
+        title: 'Drones leave the permitted flight area',
+        detail: `Furthest out at ${formatTime(r.t)}: drone ${r.drone + 1} is ${fmt(-r.clearance)} m ${-r.clearance > acc.h ? 'outside' : 'too close to the edge'}${where}${acc.h ? ` (±${fmt(acc.h, 2)} m position accuracy included)` : ''}.`,
+        time, drones: [drone], fix,
+      })
+    }
+  })
+}
+
+/** Lowest clearance of a held formation (its start and end pose, and turned positions while it spins). */
+function worstClearance(cs: CompiledScene, fn: (x: number, y: number, z: number) => number, dx = 0, dz = 0): number {
+  const n = cs.points.length / 3
+  let worst = Infinity
+  const turns = cs.omega !== 0 ? 16 : 0
+  const [cx, , cz] = cs.center
+  for (let k = 0; k < n; k++) {
+    const x = cs.points[k * 3]!, y = cs.points[k * 3 + 1]!, z = cs.points[k * 3 + 2]!
+    worst = Math.min(worst, fn(x + dx, y, z + dz), fn(cs.endPoints[k * 3]! + dx, cs.endPoints[k * 3 + 1]!, cs.endPoints[k * 3 + 2]! + dz))
+    for (let a = 1; a < turns; a++) {
+      const th = (a / turns) * 2 * Math.PI, co = Math.cos(th), si = Math.sin(th)
+      const rx = x - cx, rz = z - cz
+      worst = Math.min(worst, fn(cx + co * rx + si * rz + dx, y, cz - si * rx + co * rz + dz))
+    }
+  }
+  return worst
+}
+
+/** Smallest move (m, to 0.5 m, up to 600 m) along (ux, uz) that brings a held formation clear, or null. */
+function clearShift(cs: CompiledScene, fn: (x: number, y: number, z: number) => number, ux: number, uz: number): number | null {
+  const ok = (d: number) => worstClearance(cs, fn, ux * d, uz * d) >= 1
+  if (!ok(600)) return null
+  let lo = 0, hi = 600
+  for (let i = 0; i < 24; i++) { const m = (lo + hi) / 2; if (ok(m)) hi = m; else lo = m }
+  return Math.ceil(hi * 2) / 2
+}
+
 interface Seq {
   n: number
   scenes: CompiledScene[]
@@ -217,7 +311,8 @@ function segmentLabel(seg: Segment | TrackSegment, sceneName: (i: number) => str
 }
 
 export function validate(doc: ShowDoc, c: Compiled): Validation {
-  const L = doc.limits
+  // Every clearance is widened by the drones' position accuracy (see site.ts).
+  const L = planningLimits(doc.limits)
   const issues: Issue[] = []
   const stats: SafetyStats = {
     minDistance: Infinity, minDistanceTime: 0, peakSpeedH: 0, peakClimb: 0, peakDescent: 0, peakAccel: 0, peakJerk: 0,
@@ -523,6 +618,9 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
       })
     }
   }
+
+  // --- The real site: keep-out zones and the permitted flight area ---
+  checkSite(doc, c, issues, vBound, probe)
 
   // --- Battery ---
   if (c.duration - EPS > L.maxFlightTime) {

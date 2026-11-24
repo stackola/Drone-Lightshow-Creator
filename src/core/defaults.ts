@@ -1,3 +1,4 @@
+import { safeSpacing } from './site'
 import type { Effect, Layer, Limits, Mask, Scene, ShapeKind, ShapeSpec, ShowDoc, Site, TextFont, Vec3 } from './types'
 import { SHAPE_BY_KIND, generateShape } from './shapes'
 import { allocate, sceneGeometry } from './compile'
@@ -129,7 +130,7 @@ export function newScene(doc: ShowDoc, kind: ShapeKind, opts: { name?: string; p
     layers: [newLayer(shape, effect)],
   }
   // New formations are valid from the start: safe spacing, inside the airspace.
-  return fitToAirspace(fitScene(scene, doc.droneCount, comfortableSpacing(doc.limits.minSpacing), 'exact'), doc)
+  return fitToAirspace(fitScene(scene, doc.droneCount, comfortableSpacing(safeSpacing(doc.limits)), 'exact'), doc)
 }
 
 /**
@@ -145,7 +146,7 @@ export function newLedSign(doc: ShowDoc, text = 'WELCOME', opts: { color?: strin
   const rows = Math.min(font, Math.max(1, n))
   const cols = Math.max(1, Math.min(opts.columns ? Math.round(opts.columns) : Infinity, Math.floor(n / rows)))
   const panel = rows * cols
-  const spacing = comfortableSpacing(doc.limits.minSpacing)
+  const spacing = comfortableSpacing(safeSpacing(doc.limits))
   const speed = opts.speed ?? 6
   const effect: Effect = { kind: 'matrix', text: text.toUpperCase(), a: opts.color ?? '#ffb020', b: '#1c1406', speed, font, brightness: 1 }
   const grid: ShapeSpec = { kind: 'grid', size: Math.max(1, (cols - 1) * spacing), aspect: cols / rows, scatter: 0, fill: 'filled' }
@@ -180,7 +181,7 @@ export function withSpareDrones(scene: Scene, doc: ShowDoc, fraction: number): S
   spare.role = 'park'
   spare.offset = [0, 0, -25]
   const layers = [{ ...main, weight: 1 - f }, { ...spare, weight: f }]
-  const fitted = fitScene({ ...scene, layers }, doc.droneCount, comfortableSpacing(doc.limits.minSpacing), 'exact')
+  const fitted = fitScene({ ...scene, layers }, doc.droneCount, comfortableSpacing(safeSpacing(doc.limits)), 'exact')
   return placeAboveFloor(fitted, doc)
 }
 
@@ -212,7 +213,7 @@ export function fitsAirspace(s: Scene, doc: ShowDoc): boolean {
 export function fitToAirspace(scene: Scene, doc: ShowDoc): Scene {
   const L = doc.limits
   const fits = (s: Scene) => fitsAirspace(s, doc)
-  const target = comfortableSpacing(L.minSpacing)
+  const target = comfortableSpacing(safeSpacing(L))
   let s = scene
   const main = s.layers[0]!
   if (!fits(s) && 'fill' in main.shape && main.shape.fill === 'outline') {

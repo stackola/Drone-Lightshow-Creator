@@ -14,6 +14,7 @@ import {
 } from './transitions'
 import { assignMinSquared } from './assign'
 import { allocate, hasSplit, pointGroups } from './groups'
+import { planningLimits } from './site'
 import { generateShape, gridRows } from './shapes'
 import { DEG, ceilTo, centroid, hash01, hashArray, isIdentityRotation, minPairDistance, rotationMatrix, transformPoints } from './math'
 import { NO_MOTION, ZERO_PROFILE, fastestProfile, moveExtents, spinAngle, stretchProfile, type Profile } from './motion'
@@ -645,7 +646,9 @@ function permute(points: Float32Array, slot: Int32Array): Float32Array {
 
 export function compile(doc: ShowDoc): Compiled {
   const n = Math.max(1, Math.floor(doc.droneCount))
-  const { limits, site } = doc
+  // Plan with every clearance widened by the drones' position accuracy.
+  const limits = planningLimits(doc.limits)
+  const site = doc.site
   const beats = showBeats(doc)
   const downbeat = doc.audio?.downbeat ?? 0
   const musicEnergy = doc.audio?.energy ?? []

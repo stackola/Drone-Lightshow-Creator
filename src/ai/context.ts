@@ -56,6 +56,7 @@ export function summarizeShow(doc: ShowDoc, compiled: Compiled = compile(doc), v
   const lines: string[] = []
   lines.push(`Show "${doc.name}" — ${doc.droneCount} drones, total ${formatTime(compiled.duration)} (battery limit ${formatTime(L.maxFlightTime)}).`)
   lines.push(`Limits: min spacing ${L.minSpacing} m, speed ${L.maxSpeedH} m/s, climb ${L.maxSpeedUp} m/s, descent ${L.maxSpeedDown} m/s, accel ${L.maxAccel} m/s², jerk ${L.maxJerk} m/s³, airspace ${L.minAltitude}–${L.maxAltitude} m high, radius ${L.maxRadius} m. Audience ${doc.site.audienceDistance} m away facing the formations.`)
+  lines.push(...describeSite(doc))
   if (doc.audio) {
     const end = doc.audio.offset + doc.audio.duration
     lines.push(`Music: "${doc.audio.name}", ${Math.round(doc.audio.bpm)} BPM, plays ${formatTime(doc.audio.offset)}–${formatTime(end)} (call get_music for bars and loudness).`)
@@ -99,6 +100,24 @@ export function summarizeShow(doc: ShowDoc, compiled: Compiled = compile(doc), v
     for (const i of validation.issues) lines.push(`- ${i.title} — ${i.detail}${i.fix ? ` (automatic fix available: ${i.fix.label})` : ''}`)
   } else lines.push(`Safety: all checks pass (closest approach ${st.minDistance.toFixed(2)} m, highest drone ${st.maxAltitude.toFixed(0)} m).`)
   return lines.join('\n')
+}
+
+/** The real site as the model needs it: accuracy, keep-out zones and the flight area, in show metres. */
+function describeSite(doc: ShowDoc): string[] {
+  const out: string[] = []
+  const acc = doc.limits.accuracy
+  if (acc && (acc.h || acc.v)) out.push(`Position accuracy ±${acc.h} m across, ±${acc.v} m up/down: drones are kept ${(doc.limits.minSpacing + 2 * Math.max(acc.h, acc.v)).toFixed(2)} m apart and further from every boundary.`)
+  const box = (pts: [number, number][]) => {
+    const xs = pts.map((p) => p[0]), zs = pts.map((p) => p[1])
+    return `x ${f1(Math.min(...xs))}…${f1(Math.max(...xs))}, z ${f1(Math.min(...zs))}…${f1(Math.max(...zs))}`
+  }
+  const zones = doc.site.zones ?? []
+  if (zones.length) {
+    out.push('Keep-out zones on the ground (show metres; x = across, + to the audience’s right; z + toward the audience) — formations and flights must keep clear:')
+    for (const z of zones) out.push(`- "${z.name}" (${z.kind === 'building' ? 'obstacle' : z.kind}): ${box(z.points)}, ${z.top === null ? 'no ceiling (keep out entirely)' : `up to ${z.top} m (drones may pass above with the buffer)`}, buffer ${z.buffer} m.`)
+  }
+  if (doc.site.area?.length) out.push(`Permitted flight area: polygon spanning ${box(doc.site.area)}; every drone must stay inside.`)
+  return out
 }
 
 export function describeMusic(doc: ShowDoc): string {

@@ -1,3 +1,4 @@
+import { safeSpacing } from '@/core/site'
 import type { Draft } from 'immer'
 import type { Effect, Group, LightCue, Scene, ShapeKind, ShapeSpec, ShowDoc, SpareRole } from '@/core/types'
 import { SPARE_ROLES, addSpareLayer, applySpareRole, calmMotion } from '@/core/idle'
@@ -75,7 +76,7 @@ export function resizeLedPanel(sceneId: string, layerId: string, cols: number, r
   const R = Math.max(1, Math.round(rows))
   const C = Math.max(1, Math.min(Math.round(cols), Math.floor((n - otherCount) / R)))
   const panel = C * R
-  const spacing = comfortableSpacing(s.doc.limits.minSpacing)
+  const spacing = comfortableSpacing(safeSpacing(s.doc.limits))
   const grid = { ...layer.shape, aspect: C / R, scatter: 0, fill: 'filled' as const, size: Math.max(1, (C - 1) * spacing) }
   const rest = n - otherCount - panel
   const park = scene.layers.find((l) => l.role === 'park') ?? { ...newLayer(newShape('grid'), defaultEffect('off')), role: 'park' as const, offset: [0, 0, -25] as [number, number, number] }
@@ -154,7 +155,7 @@ export function setLayerShape(sceneId: string, layerId: string, shape: ShapeSpec
   const { scene, sub } = ctx(sceneId)
   if (!scene) return
   const draft: Scene = { ...scene, layers: scene.layers.map((l) => (l.id === layerId ? { ...l, shape } : l)) }
-  const fitted = fitToAirspace(fitScene(draft, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'grow'), sub)
+  const fitted = fitToAirspace(fitScene(draft, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'grow'), sub)
   put(sceneId, fitted, label)
 }
 
@@ -164,7 +165,7 @@ export function changeLayerKind(sceneId: string, layerId: string, kind: ShapeKin
   if (!scene || !layer || layer.shape.kind === kind) return
   const next = newShape(kind)
   const s2: Scene = { ...scene, layers: scene.layers.map((l) => (l.id === layerId ? { ...l, shape: next } : l)) }
-  const fitted = fitToAirspace(fitScene(s2, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'exact'), sub)
+  const fitted = fitToAirspace(fitScene(s2, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'exact'), sub)
   const renamed = scene.layers.length === 1 && scene.name === SHAPE_BY_KIND[layer.shape.kind].label ? { ...fitted, name: SHAPE_BY_KIND[kind].label } : fitted
   put(sceneId, renamed, `Change to ${SHAPE_BY_KIND[kind].label}`)
 }
@@ -180,7 +181,7 @@ export function addLayer(sceneId: string, kind: ShapeKind | 'spare') {
     layer.weight = 0.3
   }
   const s2: Scene = { ...scene, layers: [...scene.layers, layer] }
-  const fitted = fitToAirspace(fitScene(s2, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'grow'), sub)
+  const fitted = fitToAirspace(fitScene(s2, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'grow'), sub)
   put(sceneId, fitted, spare ? 'Park spare drones' : 'Add shape')
 }
 
@@ -223,7 +224,7 @@ export function setLayerCount(sceneId: string, layerId: string, count: number, c
 export function fitSceneToSpacing(sceneId: string, mode: 'exact' | 'grow' = 'exact', target?: number) {
   const { scene, sub } = ctx(sceneId)
   if (!scene) return
-  const t = target ?? comfortableSpacing(sub.limits.minSpacing)
+  const t = target ?? comfortableSpacing(safeSpacing(sub.limits))
   const fitted = fitToAirspace(fitScene(scene, sub.droneCount, t, mode), sub)
   put(sceneId, fitted, 'Fit to safe spacing')
 }
@@ -284,7 +285,7 @@ export function transformScene(id: string, t: { position?: [number, number, numb
   if (t.scale && Math.abs(t.scale - 1) > 1e-4) {
     const k = t.scale
     next.layers = next.layers.map((l) => ({ ...l, shape: { ...l.shape, size: Math.round(l.shape.size * k * 10) / 10 } as ShapeSpec, offset: l.offset.map((v) => v * k) as [number, number, number] }))
-    next = fitScene(next, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'grow')
+    next = fitScene(next, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'grow')
   }
   put(id, next, label)
 }

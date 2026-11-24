@@ -127,43 +127,55 @@ export interface ZoneFinding {
 }
 
 /**
- * Smallest clearance of every drone against a fixed region over [t0, t1],
- * proven: `clearance(x, y, z)` is the distance to the region minus what must
- * be kept (it changes at most as fast as the drone moves). Either every drone
- * keeps clearance ≥ 0 throughout, or the finding is a real sampled position
- * below 0. `skip(t)` can exclude times (e.g. on the ground).
+ * Smallest clearance of every drone against fixed regions over [t0, t1],
+ * proven. Each `clearance(x, y, z)` is the distance to a region minus what
+ * must be kept (it changes at most as fast as the drone moves). For each
+ * region: either every drone keeps clearance ≥ 0 throughout, or the finding
+ * is a real sampled position below 0.
  */
-export function zoneClearance(posAt: PosAt, n: number, t0: number, t1: number, clearance: (x: number, y: number, z: number) => number, v: number, step = 0.5): ZoneFinding {
-  const best: ZoneFinding = { clearance: Infinity, t: t0, drone: 0 }
-  if (t1 < t0) return best
+export function zonesClearance(posAt: PosAt, n: number, t0: number, t1: number, fns: ((x: number, y: number, z: number) => number)[], v: number, step = 0.5): ZoneFinding[] {
+  const K = fns.length
+  const best: ZoneFinding[] = fns.map(() => ({ clearance: Infinity, t: t0, drone: 0 }))
+  if (t1 < t0 || !K) return best
   const steps = Math.max(1, Math.ceil((t1 - t0) / step))
   const dt = (t1 - t0) / steps
   const pa = new Float32Array(n * 3), pb = new Float32Array(n * 3), pm = new Float32Array(n * 3)
-  const ca = new Float32Array(n), cb = new Float32Array(n)
-  const clr = (p: Float32Array, i: number) => clearance(p[i * 3]!, p[i * 3 + 1]!, p[i * 3 + 2]!)
-  const note = (c: number, t: number, i: number) => { if (c < best.clearance) { best.clearance = c; best.t = t; best.drone = i } }
-  posAt(t0, pa)
-  for (let i = 0; i < n; i++) { ca[i] = clr(pa, i); note(ca[i]!, t0, i) }
-  const refine = (i: number, ta: number, tb: number, a: number, b: number, depth: number) => {
+  const ca = new Float32Array(n * K), cb = new Float32Array(n * K)
+  const clr = (p: Float32Array, i: number, k: number) => fns[k]!(p[i * 3]!, p[i * 3 + 1]!, p[i * 3 + 2]!)
+  const note = (c: number, t: number, i: number, k: number) => { const b = best[k]!; if (c < b.clearance) { b.clearance = c; b.t = t; b.drone = i } }
+  const refine = (i: number, k: number, ta: number, tb: number, a: number, b: number, depth: number) => {
     if ((a + b) / 2 - (v * (tb - ta)) / 2 >= 0) return
     if (a < 0 || b < 0 || tb - ta < MIN_DT || depth > 24) return
     const tm = (ta + tb) / 2
     posAt(tm, pm)
-    const m = clr(pm, i)
-    note(m, tm, i)
-    refine(i, ta, tm, a, m, depth + 1)
-    refine(i, tm, tb, m, b, depth + 1)
+    const m = clr(pm, i, k)
+    note(m, tm, i, k)
+    refine(i, k, ta, tm, a, m, depth + 1)
+    refine(i, k, tm, tb, m, b, depth + 1)
   }
-  for (let k = 1; k <= steps; k++) {
-    const ta = t0 + (k - 1) * dt, tb = k === steps ? t1 : t0 + k * dt
+  posAt(t0, pa)
+  for (let i = 0; i < n; i++) for (let k = 0; k < K; k++) { ca[i * K + k] = clr(pa, i, k); note(ca[i * K + k]!, t0, i, k) }
+  for (let s = 1; s <= steps; s++) {
+    const ta = t0 + (s - 1) * dt, tb = s === steps ? t1 : t0 + s * dt
     posAt(tb, pb)
     for (let i = 0; i < n; i++) {
-      cb[i] = clr(pb, i)
-      note(cb[i]!, tb, i)
-      refine(i, ta, tb, ca[i]!, cb[i]!, 0)
+      for (let k = 0; k < K; k++) {
+        const c = clr(pb, i, k)
+        cb[i * K + k] = c
+        note(c, tb, i, k)
+        // Once a region is known to be violated, finding the deepest point exactly doesn't change the verdict.
+        if (best[k]!.clearance >= 0) refine(i, k, ta, tb, ca[i * K + k]!, c, 0)
+      }
     }
     pa.set(pb)
     ca.set(cb)
   }
   return best
+}
+
+export interface ZoneFinding {
+  /** Smallest clearance seen (negative = inside the zone or its buffer). */
+  clearance: number
+  t: number
+  drone: number
 }

@@ -240,7 +240,7 @@ export async function openProjectFile(file: File) {
 export function exportCsv(rate: number) {
   const s = getState()
   if (!s.compiled) return
-  const zip = exportCsvZip(s.compiled, { rate }, s.doc.name)
+  const zip = exportCsvZip(s.compiled, { rate }, s.doc.name, s.doc.site)
   download(zip as BlobPart, `${safeName(s.doc.name)}-trajectories.zip`, 'application/zip')
   s.toast(`Exported ${s.compiled.n} drone trajectories`)
 }

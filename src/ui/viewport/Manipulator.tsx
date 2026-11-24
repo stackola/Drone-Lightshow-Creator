@@ -4,6 +4,7 @@
 // light up while dragging. The edit is committed once, on release, as one
 // undo step — the flight planner then re-plans the show.
 
+import { safeSpacing } from '@/core/site'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { Html, TransformControls } from '@react-three/drei'
@@ -107,7 +108,7 @@ export function Manipulator() {
   })
 
   if (!scene || !local) return null
-  const minScale = spacing && spacing > 0 ? Math.min(1, comfortableSpacing(limits.minSpacing) / spacing) : 0.2
+  const minScale = spacing && spacing > 0 ? Math.min(1, comfortableSpacing(safeSpacing(limits)) / spacing) : 0.2
 
   /** Check the dragged formation against the airspace and describe the change. */
   const inspect = () => {

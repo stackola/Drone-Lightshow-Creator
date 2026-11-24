@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { SiteDialog } from './SiteDialog'
 import { AlertTriangle } from 'lucide-react'
 import { getState, useStore } from '@/state/store'
 import { Modal, NumberField, Segmented } from './components/controls'
@@ -23,6 +24,7 @@ export function Dialogs() {
   if (dialog === 'new') return <NewShowDialog onClose={close} />
   if (dialog === 'export') return <ExportDialog onClose={close} />
   if (dialog === 'shortcuts') return <ShortcutsDialog onClose={close} />
+  if (dialog === 'site') return <SiteDialog onClose={close} />
   const ai =
     dialog === 'ai-settings' ? <AiSettingsDialog onClose={close} />
     : dialog === 'director' ? <DirectorDialog onClose={close} />

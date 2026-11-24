@@ -33,6 +33,12 @@ export interface Limits {
   maxRadius: number
   /** Battery budget: total show length including takeoff and landing (s). */
   maxFlightTime: number
+  /**
+   * How far a real drone may be from its planned position (GPS/RTK accuracy,
+   * metres, horizontal and vertical). Every clearance grows by it: spacing by
+   * twice the larger value, the floor, ceiling, fence and keep-out zones by it.
+   */
+  accuracy?: { h: number; v: number }
 }
 
 export interface FlightSpec {
@@ -80,6 +86,30 @@ export interface Site {
   landing: 'any' | 'home'
   /** Flight from the last formation back above the pads. */
   returnFlight: FlightSpec
+  /** Where the show is on Earth: the centre of the takeoff grid, and the compass bearing the audience faces. */
+  geo?: { lat: number; lon: number; heading: number }
+  /** Areas drones must keep out of (the audience, buildings, trees, roads…). */
+  zones?: Zone[]
+  /** The permitted flight area (e.g. from the permit), as a polygon on the ground; drones must stay inside. */
+  area?: [number, number][]
+  /** Map tiles URL template ({z}/{x}/{y}); default OpenStreetMap. */
+  tiles?: string
+  /** Show the map on the ground in the 3D view. */
+  mapInView?: boolean
+}
+
+/**
+ * A keep-out zone: a polygon on the ground (show metres: x across, z toward
+ * the audience) extruded up to `top` (null = all the way up), plus a buffer
+ * drones must also keep clear of.
+ */
+export interface Zone {
+  id: string
+  name: string
+  kind: 'audience' | 'building' | 'no-fly'
+  points: [number, number][]
+  top: number | null
+  buffer: number
 }
 
 // --- Colour effects ---------------------------------------------------------
