@@ -1,0 +1,181 @@
+// Light effects. Each drone's colour is a pure function of the effect, the
+// drone's place in its shape, and time — so preview and export agree exactly.
+
+import type { Effect, EffectKind } from './types'
+import { hexToRgb, hsv, type RGB } from './color'
+import { DEG } from './math'
+
+export interface DroneLook {
+  /** Local position normalised to roughly [-1, 1] by the layer's largest half-extent. */
+  u: number
+  v: number
+  /** 0..1 along the shape's natural order (outline direction, reading order). */
+  order: number
+  /** Stable random in [0, 1). */
+  rand: number
+  /** Image colour if the shape has one. */
+  image: RGB | null
+}
+
+export interface EffectDef {
+  kind: EffectKind
+  label: string
+}
+
+export const EFFECTS: EffectDef[] = [
+  { kind: 'solid', label: 'Solid' },
+  { kind: 'gradient', label: 'Gradient' },
+  { kind: 'rainbow', label: 'Rainbow' },
+  { kind: 'pulse', label: 'Pulse' },
+  { kind: 'twinkle', label: 'Twinkle' },
+  { kind: 'chase', label: 'Chase' },
+  { kind: 'wave', label: 'Wave' },
+  { kind: 'image', label: 'Image colours' },
+  { kind: 'flash', label: 'Flash' },
+  { kind: 'strobe', label: 'Strobe' },
+  { kind: 'off', label: 'Lights off' },
+]
+
+export function defaultEffect(kind: EffectKind, base = '#38bdf8'): Effect {
+  switch (kind) {
+    case 'solid': return { kind, color: base, brightness: 1 }
+    case 'gradient': return { kind, a: base, b: '#f472b6', angle: 90, brightness: 1 }
+    case 'rainbow': return { kind, angle: 0, speed: 0.15, scale: 1, brightness: 1 }
+    case 'pulse': return { kind, a: base, b: '#0b1020', period: 1, beatSync: true, brightness: 1 }
+    case 'twinkle': return { kind, a: base, b: '#ffffff', rate: 1.5, brightness: 1 }
+    case 'chase': return { kind, a: '#1e293b', b: base, speed: 0.4, width: 0.15, brightness: 1 }
+    case 'wave': return { kind, a: base, b: '#ffffff', angle: 0, speed: 0.5, width: 0.3, brightness: 1 }
+    case 'image': return { kind, brightness: 1 }
+    case 'flash': return { kind, color: '#ffffff', decay: 0.35, beatSync: true, every: 1, brightness: 1 }
+    case 'strobe': return { kind, color: '#ffffff', rate: 8, brightness: 1 }
+    case 'off': return { kind, brightness: 0 }
+  }
+}
+
+/**
+ * Beat clock at show time t: phase within the current beat (0..1), the beat's
+ * index, and seconds since it started — or null outside the music.
+ */
+export type BeatPhase = (t: number) => { phase: number; index: number; since: number } | null
+
+function mix(a: RGB, b: RGB, t: number, out: RGB): RGB {
+  out[0] = a[0] + (b[0] - a[0]) * t
+  out[1] = a[1] + (b[1] - a[1]) * t
+  out[2] = a[2] + (b[2] - a[2]) * t
+  return out
+}
+
+/**
+ * Colour of one drone.
+ * @param tau seconds since the formation's hold started
+ * @param t   show time (for beat sync)
+ */
+export function effectColor(e: Effect, d: DroneLook, tau: number, t: number, beat: BeatPhase, out: RGB): RGB {
+  switch (e.kind) {
+    case 'solid': {
+      const c = hexToRgb(e.color)
+      out[0] = c[0]; out[1] = c[1]; out[2] = c[2]
+      break
+    }
+    case 'gradient': {
+      const a = e.angle * DEG
+      const p = (d.u * Math.cos(a) + d.v * Math.sin(a)) * 0.5 + 0.5
+      mix(hexToRgb(e.a), hexToRgb(e.b), Math.max(0, Math.min(1, p)), out)
+      break
+    }
+    case 'rainbow': {
+      const a = e.angle * DEG
+      const p = (d.u * Math.cos(a) + d.v * Math.sin(a)) * 0.5 * e.scale
+      const c = hsv(p + tau * e.speed, 0.85, 1)
+      out[0] = c[0]; out[1] = c[1]; out[2] = c[2]
+      break
+    }
+    case 'pulse': {
+      const b = e.beatSync ? beat(t) : null
+      // On beat: snap to A then decay to B. Free-running: smooth sine.
+      const k = b !== null ? Math.exp(-b.phase * 5) : 0.5 + 0.5 * Math.cos((tau / Math.max(0.05, e.period)) * Math.PI * 2)
+      mix(hexToRgb(e.b), hexToRgb(e.a), k, out)
+      break
+    }
+    case 'twinkle': {
+      const speed = e.rate * (0.6 + 0.8 * d.rand)
+      const x = Math.sin(tau * speed * Math.PI * 2 + d.rand * 40)
+      const k = Math.pow(Math.max(0, x), 12)
+      mix(hexToRgb(e.a), hexToRgb(e.b), k, out)
+      break
+    }
+    case 'chase': {
+      let p = (d.order - tau * e.speed) % 1
+      if (p < 0) p += 1
+      const w = Math.max(0.01, e.width)
+      const k = p < w ? 1 - p / w : 0
+      mix(hexToRgb(e.a), hexToRgb(e.b), k, out)
+      break
+    }
+    case 'wave': {
+      const a = e.angle * DEG
+      const p = (d.u * Math.cos(a) + d.v * Math.sin(a)) * 0.5 + 0.5
+      let x = (p - tau * e.speed) % 1
+      if (x < 0) x += 1
+      const w = Math.max(0.02, e.width)
+      const k = Math.max(0, 1 - Math.abs(x - 0.5) / (w / 2))
+      mix(hexToRgb(e.a), hexToRgb(e.b), k * k * (3 - 2 * k), out)
+      break
+    }
+    case 'image': {
+      const c = d.image ?? [1, 1, 1]
+      out[0] = c[0]; out[1] = c[1]; out[2] = c[2]
+      break
+    }
+    case 'flash': {
+      // Flash on every Nth beat when synced (and music is playing), else once at the start.
+      let since = tau
+      if (e.beatSync) {
+        const b = beat(t)
+        if (b) {
+          const every = Math.max(1, Math.round(e.every))
+          const k = ((b.index % every) + every) % every
+          // Seconds since the last flash beat: approximate earlier beats by this beat's length.
+          const len = b.phase > 0 ? b.since / b.phase : 0.5
+          since = b.since + k * len
+        }
+      }
+      const k = since >= 0 ? Math.exp(-since / Math.max(0.02, e.decay)) : 0
+      const c = hexToRgb(e.color)
+      out[0] = c[0] * k; out[1] = c[1] * k; out[2] = c[2] * k
+      break
+    }
+    case 'strobe': {
+      const on = (tau * e.rate) % 1 < 0.35
+      const c = hexToRgb(e.color)
+      out[0] = on ? c[0] : 0; out[1] = on ? c[1] : 0; out[2] = on ? c[2] : 0
+      break
+    }
+    case 'off': {
+      out[0] = 0; out[1] = 0; out[2] = 0
+      break
+    }
+  }
+  const b = Math.max(0, Math.min(1, e.brightness))
+  out[0] *= b; out[1] *= b; out[2] *= b
+  return out
+}
+
+/** Representative colour for UI chips. */
+export function effectSwatch(e: Effect): string {
+  switch (e.kind) {
+    case 'solid': return e.color
+    case 'gradient': return `linear-gradient(90deg, ${e.a}, ${e.b})`
+    case 'rainbow': return 'linear-gradient(90deg,#f87171,#facc15,#4ade80,#38bdf8,#a78bfa,#f472b6)'
+    case 'pulse': return `linear-gradient(90deg, ${e.a}, ${e.b})`
+    case 'twinkle': return `linear-gradient(90deg, ${e.a}, ${e.b})`
+    case 'chase': return `linear-gradient(90deg, ${e.a}, ${e.b})`
+    case 'wave': return `linear-gradient(90deg, ${e.a}, ${e.b}, ${e.a})`
+    case 'image': return 'linear-gradient(90deg,#f87171,#38bdf8)'
+    case 'flash': return e.color
+    case 'strobe': return `repeating-linear-gradient(90deg, ${e.color} 0 4px, #000 4px 8px)`
+    case 'off': return '#05070d'
+  }
+}
+
+export { mix }
