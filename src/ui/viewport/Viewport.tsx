@@ -5,7 +5,7 @@ import * as THREE from 'three'
 import { Drones, frame } from './Drones'
 import { Manipulator, gizmoHovered, gizmoJustUsed } from './Manipulator'
 import { getState, useStore, type CameraMode } from '@/state/store'
-import type { Compiled } from '@/core/compile'
+import { findCompiledScene, type Compiled } from '@/core/compile'
 
 function presetFor(mode: CameraMode, c: Compiled | null, audience: number): { pos: THREE.Vector3; target: THREE.Vector3 } {
   const cy = c?.stage.cy ?? 50
@@ -248,7 +248,7 @@ function SelectionBox() {
   const compiled = useStore((s) => s.compiled)
   const box = useMemo(() => {
     if (!compiled || (sel.kind !== 'scene' && sel.kind !== 'flight')) return null
-    const cs = compiled.scenes.find((x) => x.id === sel.id)
+    const cs = findCompiledScene(compiled, sel.id)
     if (!cs) return null
     const b = new THREE.Box3()
     const v = new THREE.Vector3()

@@ -216,6 +216,59 @@ export function Timeline() {
           />
         </div>,
       )
+      // Groups flying their own sequences after the hold: one row per group, each step on its own clock.
+      const split = compiled.segments.find((sg) => sg.kind === 'split' && sg.scene === i)
+      if (split?.kind === 'split') {
+        const rows = split.tracks.filter((tr) => tr.id)
+        blocks.push(
+          <div key={`s-${scene.id}`} className="blk split" style={{ left: toX(split.t0), width: Math.max(4, (split.t1 - split.t0) * pps) }} title={`Groups of ${scene.name} · ${fmtTime(split.t0)}–${fmtTime(split.t1)}, then everyone merges`}>
+            {rows.map((tr, r) => {
+              const g = scene.groups?.find((x) => x.id === tr.id)
+              return (
+                <div key={tr.id} className="split-row" style={{ top: `${(r * 100) / rows.length}%`, height: `${100 / rows.length}%` }}>
+                  {tr.stepTimes.flatMap((stt, k) => {
+                    const step = g?.steps[k]
+                    if (!step) return []
+                    const fx = (stt.flightStart - split.t0) * pps, fw = (stt.holdStart - stt.flightStart) * pps
+                    const hx = (stt.holdStart - split.t0) * pps, hw = (stt.holdEnd - stt.holdStart) * pps
+                    const selH = selection.kind === 'scene' && selection.id === step.id
+                    const selF = selection.kind === 'flight' && selection.id === step.id
+                    return [
+                      <div
+                        key={`f${k}`}
+                        className={`sub flight${stt.transition.used !== 'direct' ? ' styled' : ''}${selF ? ' sel' : ''}`}
+                        style={{ left: fx, width: Math.max(2, fw - 1) }}
+                        title={`${g!.name}: flight into ${step.name} · ${(stt.holdStart - stt.flightStart).toFixed(1)} s`}
+                        onClick={() => getState().select({ kind: 'flight', id: step.id })}
+                      >
+                        <div className="grip r" onPointerDown={(e) => drag(e, (tt, ev) => {
+                          const dur = Math.max(ceilTo(stt.minFlight, 0.1), snapT(tt, ev.altKey) - stt.flightStart)
+                          updateScene(step.id, (s) => { s.flight.duration = Math.round(dur * 100) / 100 }, 'Flight duration', `flight:${step.id}`)
+                        }, () => getState().select({ kind: 'flight', id: step.id }))} />
+                      </div>,
+                      <div
+                        key={`h${k}`}
+                        className={`sub hold${selH ? ' sel' : ''}`}
+                        style={{ left: hx, width: Math.max(3, hw), ['--c' as string]: sceneColor(step) }}
+                        title={`${g!.name} · ${step.name} · ${fmtTime(stt.holdStart)}–${fmtTime(stt.holdEnd)}`}
+                        onPointerDown={(e) => drag(e, () => {}, () => { getState().select({ kind: 'scene', id: step.id }); seekToScene(step.id) })}
+                      >
+                        {issueScenes.has(step.id) && <span className="err-dot" />}
+                        {hw > 46 ? step.name : ''}
+                        <div className="grip r" onPointerDown={(e) => drag(e, (tt, ev) => {
+                          const hold = Math.max(0, snapT(tt, ev.altKey) - stt.holdStart)
+                          updateScene(step.id, (s) => { s.hold = Math.round(hold * 100) / 100 }, 'Hold duration', `hold:${step.id}`)
+                        }, () => { getState().select({ kind: 'scene', id: step.id }); seekToScene(step.id) })} />
+                      </div>,
+                    ]
+                  })}
+                  {split.t1 - tr.end > 0.05 && <div className="sub wait" style={{ left: (tr.end - split.t0) * pps, width: (split.t1 - tr.end) * pps }} title={`${g?.name ?? 'Group'} waits for the others`} />}
+                </div>
+              )
+            })}
+          </div>,
+        )
+      }
     })
     const rf = compiled.returnFlight
     const rw = (rf.t1 - rf.t0) * pps

@@ -127,7 +127,7 @@ export function fitToSong(doc: ShowDoc, opts: { from?: number } = {}): { doc: Sh
   for (let pass = 0; pass < 6; pass++) {
     const c = compile(d)
     const last = c.sceneTimes[c.sceneTimes.length - 1]!
-    const gapBars = Math.round((songEnd - last.holdEnd) / barLen)
+    const gapBars = Math.round((songEnd - last.splitEnd) / barLen)
     if (gapBars === 0) break
     // Spread whole bars over the holds: add to the longest holds first; remove from the longest too (keeping ≥ 1 bar).
     const order = d.scenes.map((s, i) => ({ i, hold: s.hold })).sort((p, q) => q.hold - p.hold)
@@ -143,7 +143,7 @@ export function fitToSong(doc: ShowDoc, opts: { from?: number } = {}): { doc: Sh
     d = alignScenesToBars({ ...d, scenes }).doc
   }
   const c = compile(d)
-  return { doc: d, endGap: songEnd - c.sceneTimes[c.sceneTimes.length - 1]!.holdEnd }
+  return { doc: d, endGap: songEnd - c.sceneTimes[c.sceneTimes.length - 1]!.splitEnd }
 }
 
 /**
@@ -154,9 +154,9 @@ export function fitToSong(doc: ShowDoc, opts: { from?: number } = {}): { doc: Sh
 function fitTail(doc: ShowDoc, from: number, barLen: number, songEnd: number): { doc: ShowDoc; endGap: number } {
   const c = compile(doc)
   const last = c.sceneTimes[c.sceneTimes.length - 1]!
-  const gapBars = Math.round((songEnd - last.holdEnd) / barLen)
+  const gapBars = Math.round((songEnd - last.splitEnd) / barLen)
   const idx = doc.scenes.map((_, i) => i).filter((i) => i >= from)
-  if (!gapBars || !idx.length) return { doc, endGap: songEnd - last.holdEnd }
+  if (!gapBars || !idx.length) return { doc, endGap: songEnd - last.splitEnd }
   const scenes = doc.scenes.map((s) => ({ ...s }))
   let left = Math.abs(gapBars), k = 0, guard = 0
   while (left > 0 && guard++ < 10000) {
@@ -168,7 +168,7 @@ function fitTail(doc: ShowDoc, from: number, barLen: number, songEnd: number): {
   }
   const next = { ...doc, scenes }
   const c2 = compile(next)
-  return { doc: next, endGap: songEnd - c2.sceneTimes[c2.sceneTimes.length - 1]!.holdEnd }
+  return { doc: next, endGap: songEnd - c2.sceneTimes[c2.sceneTimes.length - 1]!.splitEnd }
 }
 
 /** Scenes that get a drop by default: every other scene from the second, never the last of 3+. */

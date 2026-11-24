@@ -5,15 +5,18 @@ import { compile } from './compile'
 import { comfortableSpacing, validate, type FixAction, type Validation } from './validate'
 import { fitScene, fitToAirspace, placeAboveFloor } from './defaults'
 import { fitRolesToAirspace } from './idle'
+import { mapScene } from './groups'
+import { separateGroups } from './splits'
 
-function replaceScene(doc: ShowDoc, id: string, f: (s: Scene) => Scene): ShowDoc {
-  return { ...doc, scenes: doc.scenes.map((s) => (s.id === id ? f(s) : s)) }
+/** Apply `f` to a scene or group step; `sub` is the document as that scene sees it (its own drone count). */
+function replaceScene(doc: ShowDoc, id: string, f: (s: Scene, sub: ShowDoc) => Scene): ShowDoc {
+  return mapScene(doc, id, (s, n) => f(s, n === doc.droneCount ? doc : { ...doc, droneCount: n }))
 }
 
 export function applyFixToDoc(doc: ShowDoc, action: FixAction): ShowDoc {
   switch (action.kind) {
     case 'fit-spacing':
-      return replaceScene(doc, action.sceneId, (s) => placeAboveFloor(fitScene(s, doc.droneCount, action.target, 'grow'), doc))
+      return replaceScene(doc, action.sceneId, (s, sub) => placeAboveFloor(fitScene(s, sub.droneCount, action.target, 'grow'), sub))
     case 'set-spin':
       return replaceScene(doc, action.sceneId, (s) => ({ ...s, spin: action.value }))
     case 'move':
@@ -25,13 +28,38 @@ export function applyFixToDoc(doc: ShowDoc, action: FixAction): ShowDoc {
       return { ...doc, site: { ...doc.site, gridSpacing: action.value } }
     case 'fit-airspace':
       // Scenes with supporting roles shrink by giving drones to their roles; others park spares.
-      return replaceScene(doc, action.sceneId, (s) => (s.layers.some((l) => l.role && l.role !== 'park') ? fitRolesToAirspace(s, doc) : fitToAirspace(s, doc)))
+      return replaceScene(doc, action.sceneId, (s, sub) => (s.layers.some((l) => l.role && l.role !== 'park') ? fitRolesToAirspace(s, sub) : fitToAirspace(s, sub)))
     case 'calm-hold':
       return replaceScene(doc, action.sceneId, (s) => calmHold(s, action.factor))
+    case 'separate-groups':
+      return separateGroups(doc, action.sceneId)
     case 'flight-style':
       if (action.sceneId === null) return { ...doc, site: { ...doc.site, returnFlight: { ...doc.site.returnFlight, style: undefined } } }
       return replaceScene(doc, action.sceneId, (s) => ({ ...s, flight: { ...s.flight, style: undefined } }))
   }
+}
+
+/**
+ * After a split: apply the automatic fixes for the split's own issues (its
+ * group formations, and groups passing too close), leaving the rest of the
+ * show untouched.
+ */
+export function tidySplit(doc: ShowDoc, sceneId: string): ShowDoc {
+  for (let pass = 0; pass < 3; pass++) {
+    const scene = doc.scenes.find((s) => s.id === sceneId)
+    const ids = new Set([sceneId, ...(scene?.groups ?? []).flatMap((g) => g.steps.map((st) => st.id))])
+    const v = validate(doc, compile(doc))
+    const mine = v.issues.filter((i) => i.fix && i.sceneId && ids.has(i.sceneId) && (i.sceneId !== sceneId || i.fix.action.kind === 'separate-groups'))
+    if (!mine.length) break
+    const seen = new Set<string>()
+    for (const i of mine) {
+      const key = (i.fix!.action as { sceneId?: string }).sceneId ?? ''
+      if (seen.has(key)) continue
+      seen.add(key)
+      doc = applyFixToDoc(doc, i.fix!.action)
+    }
+  }
+  return doc
 }
 
 /** Scale spin and hold motion down together (rounded toward calmer). */

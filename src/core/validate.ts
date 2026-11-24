@@ -13,10 +13,12 @@
 // • Flight speed, acceleration and jerk come from the exact S-curve peaks;
 //   hold motion peaks are measured on the closed-form trajectory.
 
-import { choreoExtents, type Compiled, type CompiledScene, type Segment } from './compile'
+import { choreoExtents, type Compiled, type CompiledScene, type SceneTime, type Segment, type TrackSegment } from './compile'
+import { crossGroupSeparation } from './sampled'
+import { evaluate } from './evaluate'
 import { choreoPairs, choreoPeaks, sampledPeaks, scalePeaks, wrapPos, type Choreo, type PairResult, type UPeaks } from './transitions'
 import { NO_MOTION, holdPeaks, holdRange, isMoving, moveExtents, profileInverse, profilePeaks, type HoldRange, type MotionPeaks } from './motion'
-import type { HoldMotion, Limits, ShowDoc } from './types'
+import type { HoldMotion, Limits, Scene, ShowDoc } from './types'
 import { DEG } from './math'
 
 export type FixAction =
@@ -30,6 +32,8 @@ export type FixAction =
   | { kind: 'calm-hold'; sceneId: string; factor: number }
   /** Change a flight's transition style (sceneId null = the return flight). */
   | { kind: 'flight-style'; sceneId: string | null; style: 'direct' }
+  /** Move a scene's groups apart so their formations don't overlap. */
+  | { kind: 'separate-groups'; sceneId: string }
 
 export interface Issue {
   id: string
@@ -196,7 +200,18 @@ function verticalExtent(cs: CompiledScene, range: HoldRange): { minY: number; ma
   return { minY, maxY, lowK, highK }
 }
 
-function segmentLabel(seg: Segment, sceneName: (i: number) => string): string {
+interface Seq {
+  n: number
+  scenes: CompiledScene[]
+  times: SceneTime[]
+  segments: (Segment | TrackSegment)[]
+  scene: (i: number) => Scene
+  name: (i: number) => string
+  /** Show-wide index of the sequence's drone i. */
+  drone: (i: number) => number
+}
+
+function segmentLabel(seg: Segment | TrackSegment, sceneName: (i: number) => string): string {
   if (seg.kind === 'flight') return seg.into >= 0 ? `Flight into “${sceneName(seg.into)}”` : 'Return flight'
   return seg.kind === 'takeoff' ? 'Takeoff' : seg.kind === 'land' ? 'Landing' : 'Hold'
 }
@@ -226,244 +241,285 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
     stats.minDistanceTime = 0
   }
 
-  // --- Holds ---
-  for (const cs of c.scenes) {
-    const scene = doc.scenes[cs.index]!
-    const ts = c.sceneTimes[cs.index]!
-    const droneOfPoint = new Int32Array(c.n)
-    for (let i = 0; i < c.n; i++) droneOfPoint[cs.slot[i]!] = i
+  /** Checks one sequence of formations and flights: the show itself, or one group's own timeline. */
+  const checkSequence = (seq: Seq) => {
+    // --- Holds ---
+    for (const cs of seq.scenes) {
+      const scene = seq.scene(cs.index)
+      const ts = seq.times[cs.index]!
+      const name = seq.name(cs.index)
+      const droneOfPoint = new Int32Array(seq.n)
+      for (let i = 0; i < seq.n; i++) droneOfPoint[cs.slot[i]!] = seq.drone(i)
 
-    if (c.n > 1) {
-      const cp = closestPair(cs.points)
-      if (cp.d < stats.minDistance) { stats.minDistance = cp.d; stats.minDistanceTime = ts.holdStart }
-      if (cp.d + EPS < L.minSpacing) {
-        const count = cp.below(L.minSpacing)
+      if (seq.n > 1) {
+        const cp = closestPair(cs.points)
+        if (cp.d < stats.minDistance) { stats.minDistance = cp.d; stats.minDistanceTime = ts.holdStart }
+        if (cp.d + EPS < L.minSpacing) {
+          const count = cp.below(L.minSpacing)
+          issues.push({
+            id: `spacing:${cs.id}`, severity: 'error', kind: 'spacing', sceneId: cs.id,
+            title: `“${name}” is too dense`,
+            detail: `${count} pair${count === 1 ? '' : 's'} of drones closer than ${fmt(L.minSpacing)} m (closest ${fmt(cp.d, 2)} m).`,
+            time: ts.holdStart, drones: [droneOfPoint[cp.i]!, droneOfPoint[cp.j]!],
+            fix: { label: 'Enlarge to safe spacing', action: { kind: 'fit-spacing', sceneId: cs.id, target: comfy } },
+          })
+        }
+      }
+
+      // Altitude: spin and sway keep it; breathe scales heights about the centre, bob shifts them.
+      const range = holdRange(cs.omega, cs.hold, cs.motion)
+      const { minY, maxY, lowK, highK } = verticalExtent(cs, range)
+      stats.maxAltitude = Math.max(stats.maxAltitude, maxY)
+      const room = L.maxAltitude - L.minAltitude - 2
+      // Moving can't help a formation taller than the airspace. If the formation
+      // itself is too tall it needs fewer drones; if only its motion makes it too
+      // tall, the motion needs calming.
+      const base = verticalExtent(cs, NO_RANGE)
+      const baseTooTall = base.maxY - base.minY > room
+      const tooTall = maxY - minY > room
+      let shrink: Issue['fix'] = { label: 'Shrink to fit (park spare drones)', action: { kind: 'fit-airspace' as const, sceneId: cs.id } }
+      if (tooTall && !baseTooTall && cs.motion.kind !== 'none') {
+        const f = calmFactor((k) => { const e = verticalExtent(cs, holdRange(cs.omega, cs.hold, scaleMotion(cs.motion, k))); return e.maxY - e.minY <= room })
+        shrink = { label: `Calm motion to ${Math.round(f * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor: f } }
+      }
+      if (minY + EPS < L.minAltitude) {
+        const dy = Math.ceil((L.minAltitude - minY) * 2) / 2
         issues.push({
-          id: `spacing:${cs.id}`, severity: 'error', kind: 'spacing', sceneId: cs.id,
-          title: `“${scene.name}” is too dense`,
-          detail: `${count} pair${count === 1 ? '' : 's'} of drones closer than ${fmt(L.minSpacing)} m (closest ${fmt(cp.d, 2)} m).`,
-          time: ts.holdStart, drones: [droneOfPoint[cp.i]!, droneOfPoint[cp.j]!],
-          fix: { label: 'Enlarge to safe spacing', action: { kind: 'fit-spacing', sceneId: cs.id, target: comfy } },
+          id: `alt-low:${cs.id}`, severity: 'error', kind: 'altitude', sceneId: cs.id,
+          title: `“${name}” is too low`,
+          detail: `Lowest drone at ${fmt(minY)} m; formations must stay above ${fmt(L.minAltitude)} m.`,
+          time: ts.holdStart, drones: [droneOfPoint[lowK]!],
+          fix: tooTall ? shrink : { label: `Raise ${fmt(dy)} m`, action: { kind: 'move', sceneId: cs.id, delta: [0, dy, 0] } },
         })
+      }
+      if (maxY - EPS > L.maxAltitude) {
+        const dy = Math.ceil((maxY - L.maxAltitude) * 2) / 2
+        issues.push({
+          id: `alt-high:${cs.id}`, severity: 'error', kind: 'altitude', sceneId: cs.id,
+          title: `“${name}” is too high`,
+          detail: `Highest drone at ${fmt(maxY)} m; the ceiling is ${fmt(L.maxAltitude)} m.`,
+          time: ts.holdStart, drones: [droneOfPoint[highK]!],
+          fix: tooTall ? shrink : { label: `Lower ${fmt(dy)} m`, action: { kind: 'move', sceneId: cs.id, delta: [0, -dy, 0] } },
+        })
+      }
+
+      // Geofence radius, exact over the whole range of turn and scale.
+      const { r, k: farK } = maxRadius(cs, range)
+      stats.maxRadius = Math.max(stats.maxRadius, r)
+      if (r - EPS > L.maxRadius) {
+        // If the formation itself fits inside the circle, move it toward the centre; otherwise shrink it.
+        const ch = Math.hypot(cs.center[0], cs.center[2])
+        const excess = Math.ceil((r - L.maxRadius + 1) * 2) / 2
+        const canMove = cs.spinRadius * range.scaleMax < L.maxRadius - 2 && ch > excess
+        issues.push({
+          id: `fence:${cs.id}`, severity: 'error', kind: 'geofence', sceneId: cs.id,
+          title: `“${name}” leaves the flight area`,
+          detail: `A drone reaches ${fmt(r)} m from the centre; the limit is ${fmt(L.maxRadius)} m.`,
+          time: ts.holdStart, drones: [droneOfPoint[farK]!],
+          fix: canMove
+            ? { label: `Move ${fmt(excess)} m toward the centre`, action: { kind: 'move', sceneId: cs.id, delta: [(-cs.center[0] / ch) * excess, 0, (-cs.center[2] / ch) * excess] } }
+            : shrink,
+        })
+      }
+
+      // Spin and hold-motion dynamics, measured on the fastest-moving points.
+      if (cs.omega !== 0 || isMoving(cs.motion)) {
+        const rels = extremeRels(cs)
+        const p = holdPeaks(rels, cs.omega, cs.hold, cs.motion)
+        stats.peakSpeedH = Math.max(stats.peakSpeedH, p.speedH)
+        stats.peakClimb = Math.max(stats.peakClimb, p.up)
+        stats.peakDescent = Math.max(stats.peakDescent, p.down)
+        stats.peakAccel = Math.max(stats.peakAccel, p.accel)
+        stats.peakJerk = Math.max(stats.peakJerk, p.jerk)
+        const over = (v: number, lim: number) => v - 1e-3 * Math.max(1, lim) > lim
+        const what =
+          over(p.speedH, L.maxSpeedH) ? `drones reach ${fmt(p.speedH)} m/s (limit ${fmt(L.maxSpeedH)})`
+            : over(p.up, L.maxSpeedUp) ? `drones climb at ${fmt(p.up)} m/s (limit ${fmt(L.maxSpeedUp)})`
+              : over(p.down, L.maxSpeedDown) ? `drones descend at ${fmt(p.down)} m/s (limit ${fmt(L.maxSpeedDown)})`
+                : over(p.accel, L.maxAccel) ? `drones accelerate at ${fmt(p.accel)} m/s² (limit ${fmt(L.maxAccel)})`
+                  : over(p.jerk, L.maxJerk) ? `acceleration changes at ${fmt(p.jerk)} m/s³ (jerk limit ${fmt(L.maxJerk)})`
+                    : null
+        if (what) {
+          const moving = isMoving(cs.motion)
+          const factor = safeHoldFactor(rels, cs.omega, cs.hold, cs.motion, L)
+          const motionName = moving ? cs.motion.kind === 'breathe' ? 'breathing' : cs.motion.kind === 'bob' ? 'bobbing' : 'swaying' : ''
+          const fix: Issue['fix'] = moving
+            ? { label: `Calm ${scene.spin ? 'spin and motion' : 'motion'} to ${Math.round(factor * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor } }
+            : { label: `Slow to ${fmt(Math.trunc(scene.spin * factor * 10) / 10)}°/s`, action: { kind: 'set-spin', sceneId: cs.id, value: Math.trunc(scene.spin * factor * 10) / 10 } }
+          issues.push({
+            id: `spin:${cs.id}`, severity: 'error', kind: 'spin', sceneId: cs.id,
+            title: moving ? `“${name}” moves too fast while held` : `“${name}” spins too fast`,
+            detail: moving ? `While ${scene.spin ? `spinning at ${fmt(scene.spin)}°/s and ` : ''}${motionName}, ${what}.` : `At ${fmt(scene.spin)}°/s ${what}.`,
+            time: ts.holdStart + Math.min(cs.hold / 2, 3), drones: [],
+            fix,
+          })
+        }
       }
     }
 
-    // Altitude: spin and sway keep it; breathe scales heights about the centre, bob shifts them.
-    const range = holdRange(cs.omega, cs.hold, cs.motion)
-    const { minY, maxY, lowK, highK } = verticalExtent(cs, range)
-    stats.maxAltitude = Math.max(stats.maxAltitude, maxY)
-    const room = L.maxAltitude - L.minAltitude - 2
-    // Moving can't help a formation taller than the airspace. If the formation
-    // itself is too tall it needs fewer drones; if only its motion makes it too
-    // tall, the motion needs calming.
-    const base = verticalExtent(cs, NO_RANGE)
-    const baseTooTall = base.maxY - base.minY > room
-    const tooTall = maxY - minY > room
-    let shrink: Issue['fix'] = { label: 'Shrink to fit (park spare drones)', action: { kind: 'fit-airspace' as const, sceneId: cs.id } }
-    if (tooTall && !baseTooTall && cs.motion.kind !== 'none') {
-      const f = calmFactor((k) => { const e = verticalExtent(cs, holdRange(cs.omega, cs.hold, scaleMotion(cs.motion, k))); return e.maxY - e.minY <= room })
-      shrink = { label: `Calm motion to ${Math.round(f * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor: f } }
-    }
-    if (minY + EPS < L.minAltitude) {
-      const dy = Math.ceil((L.minAltitude - minY) * 2) / 2
-      issues.push({
-        id: `alt-low:${cs.id}`, severity: 'error', kind: 'altitude', sceneId: cs.id,
-        title: `“${scene.name}” is too low`,
-        detail: `Lowest drone at ${fmt(minY)} m; formations must stay above ${fmt(L.minAltitude)} m.`,
-        time: ts.holdStart, drones: [droneOfPoint[lowK]!],
-        fix: tooTall ? shrink : { label: `Raise ${fmt(dy)} m`, action: { kind: 'move', sceneId: cs.id, delta: [0, dy, 0] } },
-      })
-    }
-    if (maxY - EPS > L.maxAltitude) {
-      const dy = Math.ceil((maxY - L.maxAltitude) * 2) / 2
-      issues.push({
-        id: `alt-high:${cs.id}`, severity: 'error', kind: 'altitude', sceneId: cs.id,
-        title: `“${scene.name}” is too high`,
-        detail: `Highest drone at ${fmt(maxY)} m; the ceiling is ${fmt(L.maxAltitude)} m.`,
-        time: ts.holdStart, drones: [droneOfPoint[highK]!],
-        fix: tooTall ? shrink : { label: `Lower ${fmt(dy)} m`, action: { kind: 'move', sceneId: cs.id, delta: [0, -dy, 0] } },
-      })
-    }
+    // --- Flights, takeoff, landing ---
+    for (const seg of seq.segments) {
+      if (seg.kind === 'hold' || seg.kind === 'split') continue
+      const n = seq.n
+      const label = segmentLabel(seg, seq.name)
+      const into = seg.kind === 'flight' && seg.into >= 0 ? seq.scenes[seg.into]! : null
+      const fromIdx = seg.kind === 'flight' ? (seg.into >= 0 ? seg.into - 1 : seq.scenes.length - 1) : -1
+      const from = fromIdx >= 0 ? seq.scenes[fromIdx]! : null
+      const sceneId = into?.id
+      // Suggest enlarging whichever end is densest below the guarantee threshold.
+      const denser = [from, into].filter((x): x is CompiledScene => !!x && x.spacing + EPS < comfy).sort((a, b) => a.spacing - b.spacing)[0]
+      const enlarge = denser ? { label: `Enlarge “${seq.name(denser.index)}”`, action: { kind: 'fit-spacing' as const, sceneId: denser.id, target: comfy } } : undefined
 
-    // Geofence radius, exact over the whole range of turn and scale.
-    const { r, k: farK } = maxRadius(cs, range)
-    stats.maxRadius = Math.max(stats.maxRadius, r)
-    if (r - EPS > L.maxRadius) {
-      // If the formation itself fits inside the circle, move it toward the centre; otherwise shrink it.
-      const ch = Math.hypot(cs.center[0], cs.center[2])
-      const excess = Math.ceil((r - L.maxRadius + 1) * 2) / 2
-      const canMove = cs.spinRadius * range.scaleMax < L.maxRadius - 2 && ch > excess
-      issues.push({
-        id: `fence:${cs.id}`, severity: 'error', kind: 'geofence', sceneId: cs.id,
-        title: `“${scene.name}” leaves the flight area`,
-        detail: `A drone reaches ${fmt(r)} m from the centre; the limit is ${fmt(L.maxRadius)} m.`,
-        time: ts.holdStart, drones: [droneOfPoint[farK]!],
-        fix: canMove
-          ? { label: `Move ${fmt(excess)} m toward the centre`, action: { kind: 'move', sceneId: cs.id, delta: [(-cs.center[0] / ch) * excess, 0, (-cs.center[2] / ch) * excess] } }
-          : shrink,
-      })
-    }
-
-    // Spin and hold-motion dynamics, measured on the fastest-moving points.
-    if (cs.omega !== 0 || isMoving(cs.motion)) {
-      const rels = extremeRels(cs)
-      const p = holdPeaks(rels, cs.omega, cs.hold, cs.motion)
-      stats.peakSpeedH = Math.max(stats.peakSpeedH, p.speedH)
-      stats.peakClimb = Math.max(stats.peakClimb, p.up)
-      stats.peakDescent = Math.max(stats.peakDescent, p.down)
-      stats.peakAccel = Math.max(stats.peakAccel, p.accel)
-      stats.peakJerk = Math.max(stats.peakJerk, p.jerk)
-      const over = (v: number, lim: number) => v - 1e-3 * Math.max(1, lim) > lim
-      const what =
-        over(p.speedH, L.maxSpeedH) ? `drones reach ${fmt(p.speedH)} m/s (limit ${fmt(L.maxSpeedH)})`
-          : over(p.up, L.maxSpeedUp) ? `drones climb at ${fmt(p.up)} m/s (limit ${fmt(L.maxSpeedUp)})`
-            : over(p.down, L.maxSpeedDown) ? `drones descend at ${fmt(p.down)} m/s (limit ${fmt(L.maxSpeedDown)})`
-              : over(p.accel, L.maxAccel) ? `drones accelerate at ${fmt(p.accel)} m/s² (limit ${fmt(L.maxAccel)})`
-                : over(p.jerk, L.maxJerk) ? `acceleration changes at ${fmt(p.jerk)} m/s³ (jerk limit ${fmt(L.maxJerk)})`
-                  : null
-      if (what) {
-        const moving = isMoving(cs.motion)
-        const factor = safeHoldFactor(rels, cs.omega, cs.hold, cs.motion, L)
-        const motionName = moving ? cs.motion.kind === 'breathe' ? 'breathing' : cs.motion.kind === 'bob' ? 'bobbing' : 'swaying' : ''
-        const fix: Issue['fix'] = moving
-          ? { label: `Calm ${scene.spin ? 'spin and motion' : 'motion'} to ${Math.round(factor * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor } }
-          : { label: `Slow to ${fmt(Math.trunc(scene.spin * factor * 10) / 10)}°/s`, action: { kind: 'set-spin', sceneId: cs.id, value: Math.trunc(scene.spin * factor * 10) / 10 } }
+      // Dynamics: exact peaks of each leg's S-curve — or of the transition's own paths.
+      const worst = { vh: 0, vu: 0, vd: 0, a: 0, j: 0, aAt: seg.t0, jAt: seg.t0, drone: 0 }
+      const style = seg.kind === 'flight' ? seg.style : undefined
+      const T = seg.t1 - seg.t0
+      const toDirect = seg.kind === 'flight' && style ? { label: 'Fly direct instead', action: { kind: 'flight-style' as const, sceneId: seg.into >= 0 ? seq.scene(seg.into).id : null, style: 'direct' as const } } : undefined
+      if (seg.kind === 'flight' && style && T > 0) {
+        const sp = style.kind === 'choreo'
+          ? (() => { const cc = checkChoreo(style.choreo, n); return { ...scalePeaks(cc.pk, T), ...cc.ext, minYDrone: 0, maxYDrone: 0, maxRDrone: 0 } })()
+          : (() => { const s0 = sampledPeaks(n, (u, out) => wrapPos(seg.legs, style.wrap, seg.t0, T, seg.t0 + u * T, out), 480); return { ...s0, ...scalePeaks(s0, T) } })()
+        worst.vh = sp.h; worst.vu = sp.up; worst.vd = sp.down; worst.a = sp.acc; worst.j = sp.jerk; worst.drone = sp.drone
+        worst.aAt = worst.jAt = seg.t0 + T / 2
+        stats.maxAltitude = Math.max(stats.maxAltitude, sp.maxY)
+        stats.maxRadius = Math.max(stats.maxRadius, sp.maxR)
+        const what = segmentLabel(seg, seq.name)
+        if (sp.minY + EPS < seg.floor) issues.push({ id: `style-low:${seg.t0}`, severity: 'error', kind: 'altitude', sceneId, title: `${what} dips below the floor`, detail: `A drone reaches ${fmt(sp.minY)} m during the ${seg.transition.used} transition (floor ${fmt(seg.floor)} m).`, time: seg.t0 + T / 2, drones: [seq.drone(sp.minYDrone)], fix: toDirect })
+        if (sp.maxY - EPS > L.maxAltitude) issues.push({ id: `style-high:${seg.t0}`, severity: 'error', kind: 'altitude', sceneId, title: `${what} climbs above the ceiling`, detail: `A drone reaches ${fmt(sp.maxY)} m during the ${seg.transition.used} transition (ceiling ${fmt(L.maxAltitude)} m).`, time: seg.t0 + T / 2, drones: [seq.drone(sp.maxYDrone)], fix: toDirect })
+        if (sp.maxR - EPS > L.maxRadius) issues.push({ id: `style-fence:${seg.t0}`, severity: 'error', kind: 'geofence', sceneId, title: `${what} leaves the flight area`, detail: `A drone reaches ${fmt(sp.maxR)} m from the centre during the ${seg.transition.used} transition (limit ${fmt(L.maxRadius)} m).`, time: seg.t0 + T / 2, drones: [seq.drone(sp.maxRDrone)], fix: toDirect })
+      }
+      for (const leg of style ? [] : seg.legs) {
+        const ext = moveExtents(leg.from, leg.to)
+        const T = leg.t1 - leg.t0
+        if (T > 0) {
+          const pk = profilePeaks(ext, leg.profile)
+          if (pk.h + pk.up + pk.down > worst.vh + worst.vu + worst.vd) worst.drone = Math.max(0, ext.drone)
+          worst.vh = Math.max(worst.vh, pk.h)
+          worst.vu = Math.max(worst.vu, pk.up)
+          worst.vd = Math.max(worst.vd, pk.down)
+          if (pk.acc > worst.a) { worst.a = pk.acc; worst.aAt = leg.t0 + leg.profile.r / 2 }
+          if (pk.jerk > worst.j) { worst.j = pk.jerk; worst.jAt = leg.t0 }
+        } else if (ext.d > 1e-6) {
+          issues.push({ id: `teleport:${leg.t0}`, severity: 'error', kind: 'speed', sceneId, title: 'Instant move', detail: `${label} has a zero-duration move.`, time: leg.t0, drones: [seq.drone(Math.max(0, ext.drone))] })
+        }
+      }
+      stats.peakSpeedH = Math.max(stats.peakSpeedH, worst.vh)
+      stats.peakClimb = Math.max(stats.peakClimb, worst.vu)
+      stats.peakDescent = Math.max(stats.peakDescent, worst.vd)
+      stats.peakAccel = Math.max(stats.peakAccel, worst.a)
+      stats.peakJerk = Math.max(stats.peakJerk, worst.j)
+      const over = (v: number, lim: number) => v - 1e-3 > lim
+      const mid = (seg.t0 + seg.t1) / 2
+      if (over(worst.vh, L.maxSpeedH) || over(worst.vu, L.maxSpeedUp) || over(worst.vd, L.maxSpeedDown)) {
         issues.push({
-          id: `spin:${cs.id}`, severity: 'error', kind: 'spin', sceneId: cs.id,
-          title: moving ? `“${scene.name}” moves too fast while held` : `“${scene.name}” spins too fast`,
-          detail: moving ? `While ${scene.spin ? `spinning at ${fmt(scene.spin)}°/s and ` : ''}${motionName}, ${what}.` : `At ${fmt(scene.spin)}°/s ${what}.`,
-          time: ts.holdStart + Math.min(cs.hold / 2, 3), drones: [],
-          fix,
+          id: `speed:${seg.t0}`, severity: 'error', kind: 'speed', sceneId,
+          title: `${label} is too fast`,
+          detail: `Peak speeds ${fmt(worst.vh)} m/s horizontal, ${fmt(worst.vu)} up, ${fmt(worst.vd)} down.`,
+          time: mid, drones: [seq.drone(worst.drone)],
+        })
+      }
+      if (over(worst.a, L.maxAccel)) {
+        issues.push({
+          id: `accel:${seg.t0}`, severity: 'error', kind: 'accel', sceneId,
+          title: `${label} accelerates too hard`,
+          detail: `Peak ${fmt(worst.a)} m/s² (limit ${fmt(L.maxAccel)}).`,
+          time: worst.aAt, drones: [seq.drone(worst.drone)],
+        })
+      }
+      if (over(worst.j, L.maxJerk)) {
+        issues.push({
+          id: `jerk:${seg.t0}`, severity: 'error', kind: 'accel', sceneId,
+          title: `${label} changes speed too abruptly`,
+          detail: `Peak jerk ${fmt(worst.j)} m/s³ (limit ${fmt(L.maxJerk)}).`,
+          time: worst.jAt, drones: [seq.drone(worst.drone)],
+        })
+      }
+
+      // Detour waypoints: legs are straight, so their extremes are at the endpoints.
+      for (let li = 0; li + 1 < seg.legs.length; li++) {
+        const leg = seg.legs[li]!
+        const p = leg.to
+        let lo = Infinity, hi = -Infinity, far = 0, farI = 0, loI = 0, hiI = 0
+        for (let i = 0; i < n; i++) {
+          const y = p[i * 3 + 1]!, r = Math.hypot(p[i * 3]!, p[i * 3 + 2]!)
+          if (y < lo) { lo = y; loI = i }
+          if (y > hi) { hi = y; hiI = i }
+          if (r > far) { far = r; farI = i }
+        }
+        stats.maxAltitude = Math.max(stats.maxAltitude, hi)
+        stats.maxRadius = Math.max(stats.maxRadius, far)
+        const where = leg.kind === 'spread' ? 'while spreading out' : 'while closing in'
+        if (lo + EPS < L.minAltitude && seg.kind === 'flight' && fromIdx >= 0 && into) {
+          issues.push({ id: `detour-low:${seg.t0}`, severity: 'error', kind: 'altitude', sceneId, title: `${label} dips too low ${where}`, detail: `A drone reaches ${fmt(lo)} m (floor ${fmt(L.minAltitude)} m) on the collision-avoiding detour.`, time: leg.t1, drones: [seq.drone(loI)], fix: enlarge })
+        }
+        if (hi - EPS > L.maxAltitude) {
+          issues.push({ id: `detour-high:${seg.t0}`, severity: 'error', kind: 'altitude', sceneId, title: `${label} climbs too high ${where}`, detail: `A drone reaches ${fmt(hi)} m (ceiling ${fmt(L.maxAltitude)} m) on the collision-avoiding detour.`, time: leg.t1, drones: [seq.drone(hiI)], fix: enlarge })
+        }
+        if (far - EPS > L.maxRadius) {
+          issues.push({ id: `detour-fence:${seg.t0}`, severity: 'error', kind: 'geofence', sceneId, title: `${label} leaves the flight area ${where}`, detail: `A drone reaches ${fmt(far)} m from the centre (limit ${fmt(L.maxRadius)} m) on the collision-avoiding detour.`, time: leg.t1, drones: [seq.drone(farI)], fix: enlarge })
+        }
+      }
+
+      // Spacing: takeoff/landing are vertical and synchronised, so spacing equals pad spacing.
+      // Swirl and burst only rotate and enlarge the flying formation, so the plain legs' exact check bounds them;
+      // choreographed transitions are checked on a fine grid with a proven margin.
+      if (seg.kind !== 'flight' || n < 2) continue
+      let ca = { d: Infinity, s: 0, i: 0, j: 0, pairsBelow: 0 }, at = seg.t0
+      if (seg.style?.kind === 'choreo') {
+        const r = checkChoreo(seg.style.choreo, n).pairs(L.minSpacing)
+        ca = { d: r.d, s: r.u, i: r.i, j: r.j, pairsBelow: r.pairsBelow }
+        at = seg.t0 + r.u * T
+      }
+      for (const leg of seg.style?.kind === 'choreo' ? [] : seg.legs) {
+        const r = flightClosestApproach(leg.from, leg.to, L.minSpacing)
+        if (r.d < ca.d) { ca = r; at = leg.t0 + profileInverse(leg.profile, r.s) }
+      }
+      if (ca.d < stats.minDistance) { stats.minDistance = ca.d; stats.minDistanceTime = at }
+      if (ca.d + EPS < L.minSpacing) {
+        issues.push({
+          id: `miss:${seg.t0}`, severity: 'error', kind: 'near-miss', sceneId: into?.id ?? from?.id,
+          title: `${label}: drones pass too close`,
+          detail: `${ca.pairsBelow} pair${ca.pairsBelow === 1 ? '' : 's'} come closer than ${fmt(L.minSpacing)} m (closest ${fmt(ca.d, 2)} m at ${formatTime(at)}). Formations spaced ≥ ${fmt(comfy)} m always fly clear.`,
+          time: at, drones: [seq.drone(ca.i), seq.drone(ca.j)],
+          fix: seg.style ? toDirect : enlarge,
         })
       }
     }
   }
 
-  // --- Flights, takeoff, landing ---
+  checkSequence({ n: c.n, scenes: c.scenes, times: c.sceneTimes, segments: c.segments, scene: (i) => doc.scenes[i]!, name: sceneName, drone: (i) => i })
+
+  // --- Groups: each group's own sequence exactly, and every group against the others ---
   for (const seg of c.segments) {
-    if (seg.kind === 'hold') continue
-    const n = c.n
-    const label = segmentLabel(seg, sceneName)
-    const into = seg.kind === 'flight' && seg.into >= 0 ? c.scenes[seg.into]! : null
-    const fromIdx = seg.kind === 'flight' ? (seg.into >= 0 ? seg.into - 1 : c.scenes.length - 1) : -1
-    const from = fromIdx >= 0 ? c.scenes[fromIdx]! : null
-    const sceneId = into?.id
-    // Suggest enlarging whichever end is densest below the guarantee threshold.
-    const denser = [from, into].filter((x): x is CompiledScene => !!x && x.spacing + EPS < comfy).sort((a, b) => a.spacing - b.spacing)[0]
-    const enlarge = denser ? { label: `Enlarge “${doc.scenes[denser.index]!.name}”`, action: { kind: 'fit-spacing' as const, sceneId: denser.id, target: comfy } } : undefined
-
-    // Dynamics: exact peaks of each leg's S-curve — or of the transition's own paths.
-    const worst = { vh: 0, vu: 0, vd: 0, a: 0, j: 0, aAt: seg.t0, jAt: seg.t0, drone: 0 }
-    const style = seg.kind === 'flight' ? seg.style : undefined
-    const T = seg.t1 - seg.t0
-    const toDirect = seg.kind === 'flight' && style ? { label: 'Fly direct instead', action: { kind: 'flight-style' as const, sceneId: seg.into >= 0 ? doc.scenes[seg.into]!.id : null, style: 'direct' as const } } : undefined
-    if (seg.kind === 'flight' && style && T > 0) {
-      const sp = style.kind === 'choreo'
-        ? (() => { const cc = checkChoreo(style.choreo, n); return { ...scalePeaks(cc.pk, T), ...cc.ext, minYDrone: 0, maxYDrone: 0, maxRDrone: 0 } })()
-        : (() => { const s0 = sampledPeaks(n, (u, out) => wrapPos(seg.legs, style.wrap, seg.t0, T, seg.t0 + u * T, out), 480); return { ...s0, ...scalePeaks(s0, T) } })()
-      worst.vh = sp.h; worst.vu = sp.up; worst.vd = sp.down; worst.a = sp.acc; worst.j = sp.jerk; worst.drone = sp.drone
-      worst.aAt = worst.jAt = seg.t0 + T / 2
-      stats.maxAltitude = Math.max(stats.maxAltitude, sp.maxY)
-      stats.maxRadius = Math.max(stats.maxRadius, sp.maxR)
-      const what = segmentLabel(seg, sceneName)
-      if (sp.minY + EPS < seg.floor) issues.push({ id: `style-low:${seg.t0}`, severity: 'error', kind: 'altitude', sceneId, title: `${what} dips below the floor`, detail: `A drone reaches ${fmt(sp.minY)} m during the ${seg.transition.used} transition (floor ${fmt(seg.floor)} m).`, time: seg.t0 + T / 2, drones: [sp.minYDrone], fix: toDirect })
-      if (sp.maxY - EPS > L.maxAltitude) issues.push({ id: `style-high:${seg.t0}`, severity: 'error', kind: 'altitude', sceneId, title: `${what} climbs above the ceiling`, detail: `A drone reaches ${fmt(sp.maxY)} m during the ${seg.transition.used} transition (ceiling ${fmt(L.maxAltitude)} m).`, time: seg.t0 + T / 2, drones: [sp.maxYDrone], fix: toDirect })
-      if (sp.maxR - EPS > L.maxRadius) issues.push({ id: `style-fence:${seg.t0}`, severity: 'error', kind: 'geofence', sceneId, title: `${what} leaves the flight area`, detail: `A drone reaches ${fmt(sp.maxR)} m from the centre during the ${seg.transition.used} transition (limit ${fmt(L.maxRadius)} m).`, time: seg.t0 + T / 2, drones: [sp.maxRDrone], fix: toDirect })
-    }
-    for (const leg of style ? [] : seg.legs) {
-      const ext = moveExtents(leg.from, leg.to)
-      const T = leg.t1 - leg.t0
-      if (T > 0) {
-        const pk = profilePeaks(ext, leg.profile)
-        if (pk.h + pk.up + pk.down > worst.vh + worst.vu + worst.vd) worst.drone = Math.max(0, ext.drone)
-        worst.vh = Math.max(worst.vh, pk.h)
-        worst.vu = Math.max(worst.vu, pk.up)
-        worst.vd = Math.max(worst.vd, pk.down)
-        if (pk.acc > worst.a) { worst.a = pk.acc; worst.aAt = leg.t0 + leg.profile.r / 2 }
-        if (pk.jerk > worst.j) { worst.j = pk.jerk; worst.jAt = leg.t0 }
-      } else if (ext.d > 1e-6) {
-        issues.push({ id: `teleport:${leg.t0}`, severity: 'error', kind: 'speed', sceneId, title: 'Instant move', detail: `${label} has a zero-duration move.`, time: leg.t0, drones: [Math.max(0, ext.drone)] })
-      }
-    }
-    stats.peakSpeedH = Math.max(stats.peakSpeedH, worst.vh)
-    stats.peakClimb = Math.max(stats.peakClimb, worst.vu)
-    stats.peakDescent = Math.max(stats.peakDescent, worst.vd)
-    stats.peakAccel = Math.max(stats.peakAccel, worst.a)
-    stats.peakJerk = Math.max(stats.peakJerk, worst.j)
-    const over = (v: number, lim: number) => v - 1e-3 > lim
-    const mid = (seg.t0 + seg.t1) / 2
-    if (over(worst.vh, L.maxSpeedH) || over(worst.vu, L.maxSpeedUp) || over(worst.vd, L.maxSpeedDown)) {
-      issues.push({
-        id: `speed:${seg.t0}`, severity: 'error', kind: 'speed', sceneId,
-        title: `${label} is too fast`,
-        detail: `Peak speeds ${fmt(worst.vh)} m/s horizontal, ${fmt(worst.vu)} up, ${fmt(worst.vd)} down.`,
-        time: mid, drones: [worst.drone],
+    if (seg.kind !== 'split') continue
+    const parent = doc.scenes[seg.scene]!
+    seg.tracks.forEach((tr) => {
+      const g = parent.groups?.find((x) => x.id === tr.id)
+      if (!g) return
+      checkSequence({
+        n: tr.drones.length, scenes: tr.steps, times: tr.stepTimes, segments: tr.segments,
+        scene: (i) => g.steps[i]!, name: (i) => `${g.name} · ${g.steps[i]?.name ?? ''}`, drone: (i) => tr.drones[i]!,
       })
-    }
-    if (over(worst.a, L.maxAccel)) {
+    })
+  }
+  // Groups don't share a clock, so between groups separation is proven with a speed bound (see sampled.ts).
+  const vBound = 1.1 * Math.hypot(stats.peakSpeedH, Math.max(stats.peakClimb, stats.peakDescent)) + 0.1
+  const probe = (t: number, out: Float32Array) => { evaluate(c, t, out, null) }
+  for (const seg of c.segments) {
+    if (seg.kind !== 'split' || seg.tracks.length < 2) continue
+    const parent = doc.scenes[seg.scene]!
+    const groupOf = new Int32Array(c.n).fill(-1)
+    seg.tracks.forEach((tr, k) => { for (const i of tr.drones) groupOf[i] = k })
+    const r = crossGroupSeparation(probe, c.n, groupOf, seg.t0, seg.t1, L.minSpacing, vBound)
+    if (r.d < stats.minDistance) { stats.minDistance = r.d; stats.minDistanceTime = r.t }
+    if (r.pairsBelow > 0) {
+      const gName = (i: number) => { const tr = seg.tracks[groupOf[i]!]!; return tr.id ? tr.name : `the rest of “${parent.name}”` }
       issues.push({
-        id: `accel:${seg.t0}`, severity: 'error', kind: 'accel', sceneId,
-        title: `${label} accelerates too hard`,
-        detail: `Peak ${fmt(worst.a)} m/s² (limit ${fmt(L.maxAccel)}).`,
-        time: worst.aAt, drones: [worst.drone],
-      })
-    }
-    if (over(worst.j, L.maxJerk)) {
-      issues.push({
-        id: `jerk:${seg.t0}`, severity: 'error', kind: 'accel', sceneId,
-        title: `${label} changes speed too abruptly`,
-        detail: `Peak jerk ${fmt(worst.j)} m/s³ (limit ${fmt(L.maxJerk)}).`,
-        time: worst.jAt, drones: [worst.drone],
-      })
-    }
-
-    // Detour waypoints: legs are straight, so their extremes are at the endpoints.
-    for (let li = 0; li + 1 < seg.legs.length; li++) {
-      const leg = seg.legs[li]!
-      const p = leg.to
-      let lo = Infinity, hi = -Infinity, far = 0, farI = 0, loI = 0, hiI = 0
-      for (let i = 0; i < n; i++) {
-        const y = p[i * 3 + 1]!, r = Math.hypot(p[i * 3]!, p[i * 3 + 2]!)
-        if (y < lo) { lo = y; loI = i }
-        if (y > hi) { hi = y; hiI = i }
-        if (r > far) { far = r; farI = i }
-      }
-      stats.maxAltitude = Math.max(stats.maxAltitude, hi)
-      stats.maxRadius = Math.max(stats.maxRadius, far)
-      const where = leg.kind === 'spread' ? 'while spreading out' : 'while closing in'
-      if (lo + EPS < L.minAltitude && seg.kind === 'flight' && fromIdx >= 0 && into) {
-        issues.push({ id: `detour-low:${seg.t0}`, severity: 'error', kind: 'altitude', sceneId, title: `${label} dips too low ${where}`, detail: `A drone reaches ${fmt(lo)} m (floor ${fmt(L.minAltitude)} m) on the collision-avoiding detour.`, time: leg.t1, drones: [loI], fix: enlarge })
-      }
-      if (hi - EPS > L.maxAltitude) {
-        issues.push({ id: `detour-high:${seg.t0}`, severity: 'error', kind: 'altitude', sceneId, title: `${label} climbs too high ${where}`, detail: `A drone reaches ${fmt(hi)} m (ceiling ${fmt(L.maxAltitude)} m) on the collision-avoiding detour.`, time: leg.t1, drones: [hiI], fix: enlarge })
-      }
-      if (far - EPS > L.maxRadius) {
-        issues.push({ id: `detour-fence:${seg.t0}`, severity: 'error', kind: 'geofence', sceneId, title: `${label} leaves the flight area ${where}`, detail: `A drone reaches ${fmt(far)} m from the centre (limit ${fmt(L.maxRadius)} m) on the collision-avoiding detour.`, time: leg.t1, drones: [farI], fix: enlarge })
-      }
-    }
-
-    // Spacing: takeoff/landing are vertical and synchronised, so spacing equals pad spacing.
-    // Swirl and burst only rotate and enlarge the flying formation, so the plain legs' exact check bounds them;
-    // choreographed transitions are checked on a fine grid with a proven margin.
-    if (seg.kind !== 'flight' || n < 2) continue
-    let ca = { d: Infinity, s: 0, i: 0, j: 0, pairsBelow: 0 }, at = seg.t0
-    if (seg.style?.kind === 'choreo') {
-      const r = checkChoreo(seg.style.choreo, n).pairs(L.minSpacing)
-      ca = { d: r.d, s: r.u, i: r.i, j: r.j, pairsBelow: r.pairsBelow }
-      at = seg.t0 + r.u * T
-    }
-    for (const leg of seg.style?.kind === 'choreo' ? [] : seg.legs) {
-      const r = flightClosestApproach(leg.from, leg.to, L.minSpacing)
-      if (r.d < ca.d) { ca = r; at = leg.t0 + profileInverse(leg.profile, r.s) }
-    }
-    if (ca.d < stats.minDistance) { stats.minDistance = ca.d; stats.minDistanceTime = at }
-    if (ca.d + EPS < L.minSpacing) {
-      issues.push({
-        id: `miss:${seg.t0}`, severity: 'error', kind: 'near-miss', sceneId: into?.id ?? from?.id,
-        title: `${label}: drones pass too close`,
-        detail: `${ca.pairsBelow} pair${ca.pairsBelow === 1 ? '' : 's'} come closer than ${fmt(L.minSpacing)} m (closest ${fmt(ca.d, 2)} m at ${formatTime(at)}). Formations spaced ≥ ${fmt(comfy)} m always fly clear.`,
-        time: at, drones: [ca.i, ca.j],
-        fix: seg.style ? toDirect : enlarge,
+        id: `groups:${parent.id}`, severity: 'error', kind: 'near-miss', sceneId: parent.id,
+        title: `Groups of “${parent.name}” pass too close`,
+        detail: `${gName(r.i)} and ${gName(r.j)}: ${r.pairsBelow} pair${r.pairsBelow === 1 ? '' : 's'} come closer than ${fmt(L.minSpacing)} m (closest ${fmt(r.d, 2)} m at ${formatTime(r.t)}). Keep the groups apart, or give one a delay.`,
+        time: r.t, drones: [r.i, r.j],
+        fix: { label: 'Move the groups apart', action: { kind: 'separate-groups', sceneId: parent.id } },
       })
     }
   }

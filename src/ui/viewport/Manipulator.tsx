@@ -9,7 +9,8 @@ import { useFrame } from '@react-three/fiber'
 import { Html, TransformControls } from '@react-three/drei'
 import * as THREE from 'three'
 import { getState, useStore } from '@/state/store'
-import { sceneGeometry } from '@/core/compile'
+import { findCompiledScene, findSceneTime, sceneGeometry } from '@/core/compile'
+import { findScene, sceneDroneCount } from '@/core/groups'
 import { comfortableSpacing } from '@/core/validate'
 import { transformScene } from '@/state/actions'
 import { DEG } from '@/core/math'
@@ -52,10 +53,10 @@ export function Manipulator() {
   const sel = useStore((s) => s.selection)
   const tool = useStore((s) => s.tool)
   const id = sel.kind === 'scene' || sel.kind === 'flight' ? sel.id : null
-  const scene = useStore((s) => (id ? s.doc.scenes.find((x) => x.id === id) : undefined))
-  const n = useStore((s) => s.doc.droneCount)
+  const scene = useStore((s) => (id ? findScene(s.doc, id)?.scene : undefined))
+  const n = useStore((s) => (id ? sceneDroneCount(s.doc, id) : s.doc.droneCount))
   const limits = useStore((s) => s.doc.limits)
-  const spacing = useStore((s) => (id ? s.compiled?.scenes.find((x) => x.id === id)?.spacing : undefined))
+  const spacing = useStore((s) => (id && s.compiled ? findCompiledScene(s.compiled, id)?.spacing : undefined))
   const group = useRef<THREE.Group>(null)
   const ghost = useRef<THREE.Points>(null)
   const [dragging, setDragging] = useState(false)
@@ -99,7 +100,7 @@ export function Manipulator() {
     const p = ghost.current
     if (!p || !id) return
     const s = getState()
-    const t = s.compiled?.sceneTimes.find((x) => x.id === id)
+    const t = s.compiled ? findSceneTime(s.compiled, id) : undefined
     const onShow = !!t && s.time >= t.holdStart && s.time <= t.holdEnd
     p.visible = dragging || !onShow
     material.opacity = dragging ? 0.75 : 0.32

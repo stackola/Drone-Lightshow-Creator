@@ -12,18 +12,20 @@ import { comfortableSpacing } from '@/core/validate'
 import { fitScene, fitToAirspace, newId } from '@/core/defaults'
 import { alignScenesToBars } from '@/core/music'
 import { MUSIC_TAG, arriveAt, composeScore, fitToSong, lightTheMusic, musicMoment } from '@/core/musicTools'
-import { autoFix } from '@/core/fixes'
+import { autoFix, tidySplit } from '@/core/fixes'
 import { ceilTo } from '@/core/math'
 import { defaultEffect } from '@/core/effects'
-import { CueTiming, IdleMotionInput, LightInput, SceneInput, ShapeInput, SpareRoleInput, TransitionInput } from './schemas'
-import { cueFromInput, effectFromInput, motionFromInput, sceneFromInput, shapeFromInput, transitionFromInput, withSpareRole } from './convert'
+import { CueTiming, GroupInput, IdleMotionInput, LightInput, SceneInput, ShapeInput, SpareRoleInput, StepInput, TransitionInput } from './schemas'
+import { applySplit, cueFromInput, effectFromInput, motionFromInput, sceneFromInput, shapeFromInput, stepFromInput, transitionFromInput, withSpareRole } from './convert'
 import { calmMotion } from '@/core/idle'
 import { describeMusic, summarizeShow } from './context'
 import { contactSheet, fourViews } from './render'
 import { createModel, lookAndFix, modelShape } from './model3d'
 import { sampleModel } from '@/core/model3d'
-import { allocate, scenePointColors } from '@/core/compile'
+import { allocate, findSceneTime, scenePointColors } from '@/core/compile'
 import { describeToShape } from './shapeGen'
+import { findScene as findAnyScene, findGroup, groupSizes, replaceSceneIn, sceneDroneCount } from '@/core/groups'
+import { groupDoc, groupSpots, splitSceneDoc } from '@/core/splits'
 
 export type ToolContent = BetaToolResultBlockParam['content']
 
@@ -51,10 +53,22 @@ class ToolError extends Error {}
 
 const doc = () => getState().doc
 
-function findScene(id: string): { scene: Scene; index: number } {
-  const index = doc().scenes.findIndex((s) => s.id === id)
-  if (index < 0) throw new ToolError(`No scene with id "${id}". Call get_show for current ids.`)
-  return { scene: doc().scenes[index]!, index }
+/**
+ * A scene or group step by id. `index` is the main scene's position (-1 for
+ * a group step); `sub` is the document as the scene sees it (a group step
+ * has only its group's drones).
+ */
+function findScene(id: string): { scene: Scene; index: number; sub: ShowDoc; step: boolean } {
+  const ref = findAnyScene(doc(), id)
+  if (!ref) throw new ToolError(`No scene with id "${id}". Call get_show for current ids.`)
+  const n = sceneDroneCount(doc(), id)
+  return { scene: ref.scene, index: ref.group ? -1 : ref.index, sub: n === doc().droneCount ? doc() : { ...doc(), droneCount: n }, step: !!ref.group }
+}
+
+function findMainScene(id: string): { scene: Scene; index: number } {
+  const r = findScene(id)
+  if (r.step) throw new ToolError('That is a formation inside a group; this only works on main scenes. Use remove_scene / edit_scene on group formations, or add_group_step.')
+  return r
 }
 
 function findCue(id: string): LightCue {
@@ -63,8 +77,8 @@ function findCue(id: string): LightCue {
   return q
 }
 
-function replaceScene(index: number, scene: Scene, label: string) {
-  getState().update((d) => { d.scenes[index] = scene as typeof d.scenes[number] }, label)
+function replaceScene(id: string, scene: Scene, label: string) {
+  getState().update((d) => { replaceSceneIn(d as ShowDoc, id, scene) }, label)
 }
 
 /** One line describing the show's safety after an edit. */
@@ -78,12 +92,12 @@ function ok(summary: string, detail?: string): ToolOutcome {
   return { summary, content: `${detail ?? summary}\n${safetyLine()}` }
 }
 
-async function resolveCustom(shape: z.infer<typeof ShapeInput>, signal?: AbortSignal): Promise<ShapeSpec | null> {
+async function resolveCustom(shape: z.infer<typeof ShapeInput>, signal?: AbortSignal, n = doc().droneCount): Promise<ShapeSpec | null> {
   if (shape.kind !== 'custom' && shape.kind !== 'model3d') return null
   if (!shape.description?.trim()) throw new ToolError(`A ${shape.kind} shape needs a description.`)
   if (shape.kind === 'custom') return (await describeToShape(shape.description, signal)).shape
   // 3D: generate, then one look-and-fix round.
-  const attempts = await createModel(shape.description, { n: doc().droneCount, rounds: 1, render: fourViews, signal })
+  const attempts = await createModel(shape.description, { n, rounds: 1, render: fourViews, signal })
   return modelShape(attempts[attempts.length - 1]!)
 }
 
@@ -151,8 +165,10 @@ export const TOOLS = [
       const custom = await resolveCustom(i.scene.shape, ctx.signal)
       const input = custom && i.scene.light.effect === 'solid' && !i.scene.light.color ? { ...i.scene, light: { ...i.scene.light, effect: 'image' as const } } : i.scene
       const scene = sceneFromInput(doc(), input, { custom })
-      const at = i.after_scene_id === 'start' ? 0 : i.after_scene_id ? findScene(i.after_scene_id).index + 1 : doc().scenes.length
-      getState().update((d) => { d.scenes.splice(at, 0, scene as typeof d.scenes[number]) }, `Add ${scene.name}`)
+      const at = i.after_scene_id === 'start' ? 0 : i.after_scene_id ? findMainScene(i.after_scene_id).index + 1 : doc().scenes.length
+      let next: ShowDoc = { ...doc(), scenes: [...doc().scenes.slice(0, at), scene, ...doc().scenes.slice(at)] }
+      if (i.scene.split?.groups.length) next = applySplit(next, scene.id, i.scene.split)
+      getState().replaceDoc(next, `Add ${scene.name}`)
       const main = scene.layers[0]!
       return ok(`Added “${scene.name}” as scene ${at + 1}`, `Added scene ${at + 1} [${scene.id}] "${scene.name}": ${main.shape.kind}, size ${main.shape.size} m${scene.layers.length > 1 ? `, ${scene.layers.length - 1} extra layer(s)` : ''}.`)
     },
@@ -180,7 +196,7 @@ export const TOOLS = [
     }),
     label: () => 'Editing a scene',
     run: (i) => {
-      const { scene, index } = findScene(i.scene_id)
+      const { scene, sub } = findScene(i.scene_id)
       const s: Scene = JSON.parse(JSON.stringify(scene))
       const changes: string[] = []
       if (i.name !== undefined) { s.name = i.name.slice(0, 60); changes.push(`name “${s.name}”`) }
@@ -203,14 +219,14 @@ export const TOOLS = [
         changes.push(`size ×${k}`)
       }
       if (i.size_scale !== undefined || i.tilt !== undefined || i.turn !== undefined || i.roll !== undefined) {
-        out = fitScene(out, doc().droneCount, comfortableSpacing(doc().limits.minSpacing), 'grow')
+        out = fitScene(out, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'grow')
       }
       if (i.idle_motion) {
         const m = motionFromInput(i.idle_motion)
         out = { ...out }
         if (m) out.motion = m
         else delete out.motion
-        out = calmMotion(out, doc())
+        out = calmMotion(out, sub)
         changes.push(out.motion ? `idle motion ${out.motion.kind} ${out.motion.amount}${m && out.motion.amount < m.amount ? ' (calmed to the safe limit)' : ''}` : m ? 'idle motion removed: too fast for this formation even when calmed' : 'still while held')
       }
       if (i.transition) {
@@ -221,10 +237,10 @@ export const TOOLS = [
         changes.push(`transition ${i.transition.style}`)
       }
       if (i.spare_role) {
-        out = withSpareRole(out, doc(), i.spare_role)
+        out = withSpareRole(out, sub, i.spare_role)
         changes.push(`spare drones: ${i.spare_role}`)
       }
-      replaceScene(index, out, `Edit ${out.name}`)
+      replaceScene(scene.id, out, `Edit ${out.name}`)
       return ok(`Edited “${out.name}”: ${changes.join(', ') || 'no change'}`)
     },
   }),
@@ -234,19 +250,19 @@ export const TOOLS = [
     schema: z.object({ scene_id: sceneRef, layer_index: z.number().optional().describe('Default 0 (the main shape)'), shape: ShapeInput }),
     label: (i) => `Changing shape to ${i.shape.kind === 'custom' ? i.shape.description ?? 'custom' : i.shape.kind}`,
     run: async (i, ctx) => {
-      const { scene, index } = findScene(i.scene_id)
+      const { scene, sub } = findScene(i.scene_id)
       const li = Math.round(i.layer_index ?? 0)
       const layer = scene.layers[li]
       if (!layer) throw new ToolError(`Scene has ${scene.layers.length} layer(s); layer_index ${li} doesn't exist.`)
-      const custom = await resolveCustom(i.shape, ctx.signal)
+      const custom = await resolveCustom(i.shape, ctx.signal, sub.droneCount)
       const shape = custom ?? shapeFromInput(i.shape)
       const effect = custom ? defaultEffect('image') : layer.effect.kind === 'image' ? effectFromInput({ effect: 'solid' }) : layer.effect
       let s: Scene = { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, shape, effect } : l)) }
-      s = fitScene(s, doc().droneCount, comfortableSpacing(doc().limits.minSpacing), 'exact')
+      s = fitScene(s, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'exact')
       const scale = Math.max(1, Math.min(4, i.shape.scale ?? 1))
       if (scale > 1.001) s = { ...s, layers: s.layers.map((l, k) => (k === li ? { ...l, shape: { ...l.shape, size: ceilTo(l.shape.size * scale, 0.1) } as ShapeSpec } : l)) }
-      s = fitToAirspace(s, doc())
-      replaceScene(index, s, `Change shape of ${s.name}`)
+      s = fitToAirspace(s, sub)
+      replaceScene(scene.id, s, `Change shape of ${s.name}`)
       return ok(`Changed “${s.name}” to ${custom ? `a custom drawing (${(shape as { name?: string }).name ?? ''})` : shape.kind}`, `Scene "${s.name}" layer ${li} is now ${shape.kind}${custom ? ' (custom drawing, lights use the drawing’s colours)' : ''}, size ${s.layers[li]!.shape.size} m.`)
     },
   }),
@@ -256,13 +272,13 @@ export const TOOLS = [
     schema: z.object({ scene_id: sceneRef, layer_index: z.number().optional(), light: LightInput }),
     label: (i) => `Setting light to ${i.light.effect}`,
     run: (i) => {
-      const { scene, index } = findScene(i.scene_id)
+      const { scene } = findScene(i.scene_id)
       const li = Math.round(i.layer_index ?? 0)
       const layer = scene.layers[li]
       if (!layer) throw new ToolError(`Scene has ${scene.layers.length} layer(s); layer_index ${li} doesn't exist.`)
       if (i.light.effect === 'image' && layer.shape.kind !== 'image' && layer.shape.kind !== 'model') throw new ToolError('Shape colours (effect "image") only work on image, custom and 3D model formations.')
       const effect = effectFromInput(i.light)
-      replaceScene(index, { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, effect } : l)) }, `Light for ${scene.name}`)
+      replaceScene(scene.id, { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, effect } : l)) }, `Light for ${scene.name}`)
       return ok(`Set “${scene.name}” light: ${i.light.effect}`)
     },
   }),
@@ -272,20 +288,20 @@ export const TOOLS = [
     schema: z.object({ scene_id: sceneRef, layer_index: z.number().optional(), feedback: z.string().optional().describe('What the designer wants changed') }),
     label: (i) => (i.feedback ? `Improving the 3D model: ${i.feedback}` : 'Looking at the 3D model and fixing it'),
     run: async (i, ctx) => {
-      const { scene, index } = findScene(i.scene_id)
+      const { scene, sub } = findScene(i.scene_id)
       const li = Math.round(i.layer_index ?? 0)
       const layer = scene.layers[li]
       if (!layer || layer.shape.kind !== 'model') throw new ToolError('That layer is not a 3D model. Use set_shape with kind "model3d" to create one.')
       const shape = layer.shape
-      const count = allocate(doc().droneCount, scene.layers.map((l) => l.weight))[li]!
+      const count = allocate(sub.droneCount, scene.layers.map((l) => l.weight))[li]!
       const current = sampleModel(shape.parts, count)
       if (!current) throw new ToolError('The current model has no usable parts.')
       const attempt = { name: shape.name, parts: shape.parts, image: fourViews(current.points, current.colors, shape.name), hiddenParts: current.hiddenParts }
       const { critique, next } = await lookAndFix(shape.name, attempt, count, fourViews, { feedback: i.feedback, signal: ctx.signal })
       if (!next) return { summary: `Looks right: ${critique}`, content: `No change needed. ${critique}\n${safetyLine()}` }
       let s: Scene = { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, shape: { ...shape, name: next.name, parts: next.parts } } : l)) }
-      s = fitToAirspace(fitScene(s, doc().droneCount, comfortableSpacing(doc().limits.minSpacing), 'exact'), doc())
-      replaceScene(index, s, `Improve ${shape.name}`)
+      s = fitToAirspace(fitScene(s, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'exact'), sub)
+      replaceScene(scene.id, s, `Improve ${shape.name}`)
       return {
         summary: `Improved the 3D model: ${critique}`,
         content: [
@@ -302,8 +318,13 @@ export const TOOLS = [
     schema: z.object({ scene_id: sceneRef }),
     label: () => 'Removing a scene',
     run: (i) => {
-      const { scene, index } = findScene(i.scene_id)
-      getState().update((d) => { d.scenes.splice(index, 1) }, `Delete ${scene.name}`)
+      const { scene } = findScene(i.scene_id)
+      getState().update((d) => {
+        const r = findAnyScene(d as ShowDoc, i.scene_id)
+        if (!r) return
+        if (r.group) r.group.steps.splice(r.index, 1)
+        else d.scenes.splice(r.index, 1)
+      }, `Delete ${scene.name}`)
       return ok(`Removed “${scene.name}”`)
     },
   }),
@@ -313,7 +334,7 @@ export const TOOLS = [
     schema: z.object({ scene_id: sceneRef, position: z.number().describe('1-based position') }),
     label: () => 'Reordering scenes',
     run: (i) => {
-      const { scene, index } = findScene(i.scene_id)
+      const { scene, index } = findMainScene(i.scene_id)
       const to = Math.max(0, Math.min(doc().scenes.length - 1, Math.round(i.position) - 1))
       getState().update((d) => {
         const [item] = d.scenes.splice(index, 1)
@@ -328,11 +349,80 @@ export const TOOLS = [
     schema: z.object({ scene_id: sceneRef, name: z.string().optional() }),
     label: () => 'Duplicating a scene',
     run: (i) => {
-      const { scene, index } = findScene(i.scene_id)
+      const { scene, index } = findMainScene(i.scene_id)
       const copy: Scene = { ...JSON.parse(JSON.stringify(scene)), id: newId('scene'), name: i.name ?? `${scene.name} copy` }
+      delete copy.groups
       copy.layers.forEach((l) => (l.id = newId('layer')))
       getState().update((d) => { d.scenes.splice(index + 1, 0, copy as typeof d.scenes[number]) }, 'Duplicate scene')
       return ok(`Duplicated “${scene.name}”`, `Added [${copy.id}] "${copy.name}" after "${scene.name}".`)
+    },
+  }),
+  tool({
+    name: 'split_scene',
+    description: 'Splits and merges: after a scene’s hold, its drones divide into groups that each fly their own formations at their own pace; the next scene merges everyone back. Divide by shape (each layer a group), left/right halves, lower/upper halves or three columns. Groups are checked against each other (they don’t share a clock), so keep them on their own sides. mode "merge" removes the groups.',
+    schema: z.object({
+      scene_id: sceneRef,
+      mode: z.enum(['shapes', 'halves', 'top-bottom', 'thirds', 'merge']),
+      groups: z.array(GroupInput).optional().describe('Per group, in order (by layer, left→right, or lower→upper): its formations. Omit for one default formation per group.'),
+    }),
+    label: (i) => (i.mode === 'merge' ? 'Merging groups back' : `Splitting a scene (${i.mode})`),
+    run: (i) => {
+      const { scene, step } = findScene(i.scene_id)
+      if (step) throw new ToolError('Formations inside a group cannot split again; split a main scene.')
+      if (i.mode === 'merge') {
+        const { groups: _g, ...rest } = scene
+        void _g
+        replaceScene(scene.id, rest, 'Remove groups')
+        return ok(`Removed the groups of “${scene.name}”`)
+      }
+      const base: ShowDoc = { ...doc(), scenes: doc().scenes.map((s) => (s.id === scene.id ? { ...s, groups: undefined } : s)) }
+      const next = i.groups?.length
+        ? applySplit(base, scene.id, { mode: i.mode, groups: i.groups })
+        : tidySplit(splitSceneDoc(base, scene.id, i.mode).doc, scene.id)
+      const after = next.scenes.find((s) => s.id === scene.id)
+      if (!after?.groups?.length) throw new ToolError('This scene has nothing to split (no shapes without a spare role).')
+      getState().replaceDoc(next, `Split ${scene.name}`)
+      const sizes = groupSizes(after, doc().droneCount)
+      return ok(`Split “${scene.name}” into ${after.groups.length} groups`, `Split "${scene.name}" (${i.mode}) into groups: ${after.groups.map((g, gi) => `[${g.id}] "${g.name}" ${sizes[gi]} drones → ${g.steps.map((st) => `[${st.id}] "${st.name}"`).join(', ') || 'no formations'}`).join('; ')}.`)
+    },
+  }),
+  tool({
+    name: 'add_group_step',
+    description: 'Add a formation to a group’s own sequence (during a split). It is sized for the group’s drones. Place it on the group’s side (across) so groups stay apart.',
+    schema: z.object({ group_id: z.string().describe('Group id from get_show'), step: StepInput, after_step_id: z.string().optional().describe('Insert after this formation of the group (default: at the end)') }),
+    label: (i) => `Adding “${i.step.name}” to a group`,
+    run: (i) => {
+      const f = findGroup(doc(), i.group_id)
+      if (!f) throw new ToolError(`No group with id "${i.group_id}". Call get_show for current ids.`)
+      const sub = groupDoc(doc(), f.parent, f.index)
+      if (!sub.droneCount) throw new ToolError('That group has no drones.')
+      const k = i.after_step_id ? f.group.steps.findIndex((s) => s.id === i.after_step_id) : f.group.steps.length - 1
+      const prev = f.group.steps[k] ?? null
+      const spot = prev ? prev.position : groupSpots(f.parent, f.parent.groups!, doc().droneCount)[f.index]!.out
+      const step = stepFromInput(sub, i.step, spot)
+      getState().update((d) => {
+        const g = findGroup(d as ShowDoc, i.group_id)
+        if (g) g.group.steps.splice(k + 1, 0, step)
+      }, `Add ${step.name} to ${f.group.name}`)
+      return ok(`Added “${step.name}” to ${f.group.name}`, `Added [${step.id}] "${step.name}" (${sub.droneCount} drones) to group "${f.group.name}".`)
+    },
+  }),
+  tool({
+    name: 'edit_group',
+    description: 'Rename a group, change when it sets off after the split (delay), or remove it (its drones stay in the formation).',
+    schema: z.object({ group_id: z.string(), name: z.string().optional(), delay_seconds: z.number().optional(), remove: z.boolean().optional() }),
+    label: () => 'Editing a group',
+    run: (i) => {
+      const f = findGroup(doc(), i.group_id)
+      if (!f) throw new ToolError(`No group with id "${i.group_id}". Call get_show for current ids.`)
+      getState().update((d) => {
+        const g = findGroup(d as ShowDoc, i.group_id)
+        if (!g) return
+        if (i.remove) { g.parent.groups!.splice(g.index, 1); if (!g.parent.groups!.length) delete g.parent.groups; return }
+        if (i.name !== undefined) g.group.name = i.name.slice(0, 40)
+        if (i.delay_seconds !== undefined) g.group.delay = Math.max(0, Math.min(120, i.delay_seconds))
+      }, i.remove ? `Remove ${f.group.name}` : `Edit ${f.group.name}`)
+      return ok(i.remove ? `Removed group “${f.group.name}”` : `Updated group “${i.name ?? f.group.name}”`)
     },
   }),
   tool({
@@ -349,8 +439,8 @@ export const TOOLS = [
     run: (i) => {
       let start = i.start_seconds
       if (i.scene_id) {
-        const { index } = findScene(i.scene_id)
-        const t = compile(doc()).sceneTimes[index]!
+        findScene(i.scene_id)
+        const t = findSceneTime(compile(doc()), i.scene_id)!
         start = t.holdStart + (i.offset_seconds ?? 0)
       }
       if (start === undefined) throw new ToolError('Give start_seconds, or scene_id with offset_seconds.')
@@ -452,7 +542,7 @@ export const TOOLS = [
     run: (i) => {
       if (!doc().scenes.length) throw new ToolError('The show has no formations yet.')
       const before = doc()
-      const idx = (ids?: string[]) => ids?.map((id) => findScene(id).index)
+      const idx = (ids?: string[]) => ids?.map((id) => findMainScene(id).index)
       const { doc: next, plan } = composeScore(before, { bpm: i.bpm, heroes: i.drops_at?.length ? idx(i.drops_at) : undefined, breaks: idx(i.breaks_at) })
       if (!plan) throw new ToolError('Nothing to compose to.')
       const relit = before.cues.some((q) => q.tag === MUSIC_TAG) ? lightTheMusic(next, 'subtle').doc : next
@@ -472,7 +562,7 @@ export const TOOLS = [
     }),
     label: () => 'Landing a formation on the music',
     run: (i) => {
-      const { index, scene } = findScene(i.scene_id)
+      const { index, scene } = findMainScene(i.scene_id)
       const t = musicMoment(doc(), { section: i.section !== undefined ? Math.round(i.section) - 1 : undefined, bar: i.bar, time: i.time })
       if (t === null) throw new ToolError('That section or bar does not exist (call get_music for the list).')
       const { doc: next, arrival } = arriveAt(doc(), index, t)

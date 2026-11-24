@@ -33,3 +33,17 @@ describe('Odyssey', () => {
     expect(validate(doc, c).issues).toEqual([])
   }, 180_000)
 })
+
+describe('splitting demo scenes', () => {
+  it('every default split of every scene of the starter show is safe (after its own one-click fixes)', async () => {
+    const { splitSceneDoc } = await import('@/core/splits')
+    const { tidySplit } = await import('@/core/fixes')
+    const doc0 = DEMOS.find((d) => d.id === 'hello')!.build()
+    for (const sc of doc0.scenes) {
+      for (const mode of ['halves', 'top-bottom', 'thirds'] as const) {
+        const doc = tidySplit(splitSceneDoc(doc0, sc.id, mode).doc, sc.id)
+        expect(validate(doc, compile(doc)).issues.map((i) => `${sc.name}/${mode}: ${i.title}`)).toEqual([])
+      }
+    }
+  }, 180_000)
+})

@@ -466,3 +466,32 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent-2); c
 .sec-band { position: absolute; top: 2px; height: 14px; border: 0; border-radius: 3px; padding: 0 5px; background: color-mix(in srgb, var(--c) 28%, transparent); box-shadow: inset 2px 0 0 var(--c); color: #e8ecf6; font: 600 9.5px/14px system-ui, sans-serif; text-transform: uppercase; letter-spacing: 0.06em; text-align: left; overflow: hidden; white-space: nowrap; cursor: pointer; }
 .sec-band:hover { background: color-mix(in srgb, var(--c) 45%, transparent); }
 .accent-tick { position: absolute; top: 16px; width: 7px; height: 7px; margin-left: -3.5px; background: #ffd666; transform: rotate(45deg); box-shadow: 0 0 6px rgba(255, 214, 102, 0.8); pointer-events: auto; z-index: 2; }
+
+/* Groups (splits and merges) */
+.srow-wrap { display: flex; flex-direction: column; gap: 3px; }
+.sgroup { margin-left: 22px; padding-left: 8px; border-left: 2px solid var(--line-2); display: flex; flex-direction: column; gap: 2px; }
+.sgroup-name { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; font-weight: 600; padding: 2px 4px 0; }
+.srow.step { padding: 4px 6px; gap: 8px; }
+.srow.step .sthumb { width: 44px; height: 30px; }
+.srow.step.sel::before { left: -12px; }
+.insp-kind .link-btn { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; font: inherit; letter-spacing: inherit; text-transform: none; display: inline-flex; align-items: center; gap: 3px; }
+.insp-kind .link-btn:hover { text-decoration: underline; }
+.group-card .name-input.sm { flex: 1; min-width: 0; background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 3px 6px; font-weight: 600; }
+.group-card .name-input.sm:hover, .group-card .name-input.sm:focus { border-color: var(--line-2); background: var(--panel); outline: none; }
+.step-list { list-style: none; margin: 8px 0 6px; padding: 0; display: flex; flex-direction: column; gap: 3px; counter-reset: step; }
+.step-list li { counter-increment: step; }
+.step-btn { width: 100%; display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 5px 8px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; text-align: left; }
+.step-btn::before { content: counter(step); color: var(--faint); font: 10.5px var(--mono); width: 12px; }
+.step-btn span:first-of-type { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-btn:hover { border-color: var(--line-2); }
+.blk.split { top: 3px; bottom: 3px; padding: 0; background: rgba(120, 140, 200, 0.06); border: 1px dashed rgba(150, 170, 230, 0.35); cursor: default; display: block; }
+.split-row { position: absolute; left: 0; right: 0; }
+.split-row .sub { position: absolute; top: 1px; bottom: 1px; border-radius: 4px; overflow: hidden; display: flex; align-items: center; padding: 0 5px; font-size: 10.5px; white-space: nowrap; cursor: pointer; }
+.split-row .sub.hold { background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02)), var(--c, #2a3550); border: 1px solid rgba(255,255,255,0.12); color: #fff; font-weight: 600; text-shadow: 0 1px 2px rgba(0,0,0,0.6); gap: 4px; }
+.split-row .sub.flight { top: 4px; bottom: 4px; background: repeating-linear-gradient(135deg, #232b3b 0 5px, #1b2230 5px 10px); border: 1px solid #2d3647; }
+.split-row .sub.flight.styled { background: repeating-linear-gradient(135deg, #2a2440 0 5px, #211c33 5px 10px); border-color: rgba(167,139,250,0.55); }
+.split-row .sub.sel { box-shadow: 0 0 0 2px var(--accent); z-index: 1; }
+.split-row .sub.wait { top: 45%; bottom: 45%; background: rgba(255,255,255,0.12); border-radius: 2px; cursor: default; padding: 0; }
+.split-row .sub .grip { position: absolute; top: 0; bottom: 0; right: 0; width: 6px; cursor: ew-resize; z-index: 2; }
+.split-row .sub .grip:hover { background: rgba(245,181,68,0.35); }
+.split-row .sub .err-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--err); box-shadow: 0 0 6px var(--err); flex: none; }

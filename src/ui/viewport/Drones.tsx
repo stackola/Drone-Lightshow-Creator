@@ -4,7 +4,7 @@ import * as THREE from 'three'
 import { evaluate } from '@/core/evaluate'
 import { getState, useStore } from '@/state/store'
 import { simPositions } from '@/state/sim'
-import { sceneAt } from '@/core/evaluate'
+import { sceneAt, sceneIdOfDroneAt } from '@/core/evaluate'
 import type { ThreeEvent } from '@react-three/fiber'
 import { gizmoJustUsed } from './Manipulator'
 
@@ -16,8 +16,11 @@ function pickDrone(e: ThreeEvent<MouseEvent>) {
   if (!c) return
   e.stopPropagation()
   const at = sceneAt(c, s.time)
+  // During a split, each group is on its own formation: pick the clicked drone's.
+  const own = at.phase === 'groups' && typeof e.index === 'number' ? sceneIdOfDroneAt(c, s.time, e.index) : null
   const scene = at.scene >= 0 ? s.doc.scenes[at.scene] : null
-  if (scene) s.select({ kind: 'scene', id: scene.id })
+  if (own) s.select({ kind: 'scene', id: own })
+  else if (scene) s.select({ kind: 'scene', id: scene.id })
   else s.select({ kind: at.phase === 'takeoff' ? 'takeoff' : 'landing' })
 }
 

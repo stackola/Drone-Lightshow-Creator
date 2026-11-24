@@ -71,6 +71,27 @@ test('music: compose an original score to the show, and undo back to the song', 
   await expect(page.locator('.music-clip .mname')).toHaveText('click-120.wav', { timeout: 20000 })
 })
 
+test('groups: a formation splits, each half flies its own formations, then everyone merges', async ({ page }) => {
+  await fresh(page)
+  await page.locator('.slist .srow:not(.fixed)', { hasText: 'Heart' }).first().click()
+  await page.getByRole('button', { name: 'Left | right' }).click()
+  await expect(page.locator('.srow.step')).toHaveCount(2)
+  await expect(page.locator('.blk.split .split-row')).toHaveCount(2)
+  await expect(page.locator('.insp-kind')).toContainText('Left · step 1')
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly')
+  // Back to the parent; give the right half a second formation of its own.
+  await page.locator('.insp-kind .link-btn').click()
+  await page.locator('.group-card', { hasText: 'Right' }).getByRole('button', { name: /Formation/ }).click()
+  await page.locator('.popover .shape-tile', { hasText: 'Circle' }).click()
+  await expect(page.locator('.srow.step')).toHaveCount(3)
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly')
+  // During the split the stage says so; undo takes the new formation away again.
+  await page.locator('.srow.step').first().click()
+  await expect(page.locator('.now-label')).toContainText('Groups of')
+  await page.keyboard.press('Control+z')
+  await expect(page.locator('.srow.step')).toHaveCount(2)
+})
+
 test('logo import becomes a safe formation with image colours', async ({ page }) => {
   await fresh(page)
   await page.locator('.panel-head .btn.primary').click()

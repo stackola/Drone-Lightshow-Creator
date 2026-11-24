@@ -3,7 +3,9 @@
 // suggests, the engine decides what is physically safe.
 
 import type { Effect, LightCue, Scene, ShapeSpec, ShowDoc, Vec3 } from '@/core/types'
-import type { IdleMotionInput, LightInput, SceneInput, ShapeInput, ShowPlan, TransitionInput } from './schemas'
+import type { IdleMotionInput, LightInput, SceneInput, ShapeInput, ShowPlan, SplitInput, StepInput, TransitionInput } from './schemas'
+import { separateGroups, splitSceneDoc } from '@/core/splits'
+import { sceneDroneCount } from '@/core/groups'
 import type { HoldMotion, SpareRole, TransitionStyle } from '@/core/types'
 import { applySpareRole, addSpareLayer, calmMotion, defaultMotion } from '@/core/idle'
 import { defaultEffect } from '@/core/effects'
@@ -80,7 +82,7 @@ export function shapeFromInput(s: ShapeInput): ShapeSpec {
  * Build a scene from model input. `custom` supplies already-generated shapes
  * for kind "custom" (from the SVG generator); otherwise it falls back to a sphere.
  */
-export function sceneFromInput(doc: ShowDoc, input: SceneInput, opts: { custom?: ShapeSpec | null; position?: Vec3 } = {}): Scene {
+export function sceneFromInput(doc: ShowDoc, input: SceneInput | StepInput, opts: { custom?: ShapeSpec | null; position?: Vec3 } = {}): Scene {
   const shapeIn = input.shape
   let shape: ShapeSpec
   if (shapeIn.kind === 'custom' || shapeIn.kind === 'model3d') shape = opts.custom ?? newShape(shapeIn.kind === 'model3d' ? 'model' : 'sphere')
@@ -109,6 +111,42 @@ export function sceneFromInput(doc: ShowDoc, input: SceneInput, opts: { custom?:
   scene = fitToAirspace(scene, doc)
   if (input.spare_role && input.spare_role !== 'park') scene = withSpareRole(scene, doc, input.spare_role, input.spare_fraction)
   return calmMotion(scene, doc)
+}
+
+/**
+ * Split a scene of `doc` into groups with the given formations. Each step is
+ * sized for its group's drones and placed on the group's own side unless it
+ * says where (`across`).
+ */
+export function applySplit(doc: ShowDoc, sceneId: string, split: SplitInput): ShowDoc {
+  const first = splitSceneDoc(doc, sceneId, split.mode, (sub, gi, spot) => {
+    const g = split.groups[gi]
+    return g?.steps.length ? stepFromInput(sub, g.steps[0]!, spot) : null
+  })
+  const done = addRemainingSteps(first.doc, sceneId, split)
+  const placed = split.groups.some((g) => g.steps.some((st) => st.across !== undefined))
+  return placed ? done : separateGroups(done, sceneId)
+}
+
+/** A group formation from model input, at `spot` unless it gives its own position. */
+export function stepFromInput(sub: ShowDoc, input: StepInput, spot: Vec3): Scene {
+  const pos: Vec3 = [input.across ?? spot[0], input.altitude ?? spot[1], spot[2]]
+  return sceneFromInput(sub, input, { position: pos })
+}
+
+function addRemainingSteps(doc: ShowDoc, sceneId: string, split: SplitInput): ShowDoc {
+  const scene = doc.scenes.find((s) => s.id === sceneId)
+  if (!scene?.groups) return doc
+  const groups = scene.groups.map((g, gi) => {
+    const more = split.groups[gi]?.steps.slice(1, 6) ?? []
+    if (!more.length || !g.steps.length) return { ...g, name: split.groups[gi]?.name?.slice(0, 40) || g.name, delay: clamp(split.groups[gi]?.delay_seconds, 0, 120, 0) }
+    const sub = { ...doc, droneCount: sceneDroneCount(doc, g.steps[0]!.id) }
+    let prev = g.steps[0]!
+    const steps = [prev]
+    for (const st of more) { prev = stepFromInput(sub, st, prev.position); steps.push(prev) }
+    return { ...g, steps, name: split.groups[gi]?.name?.slice(0, 40) || g.name, delay: clamp(split.groups[gi]?.delay_seconds, 0, 120, 0) }
+  })
+  return { ...doc, scenes: doc.scenes.map((s) => (s.id === sceneId ? { ...s, groups } : s)) }
 }
 
 /** Give the scene's spare drones a role, creating a spare layer (25% of drones) if it has none. */
@@ -170,7 +208,9 @@ export interface BuiltShow {
 export function buildShowFromPlan(plan: ShowPlan, base: ShowDoc, custom: Map<number, ShapeSpec> = new Map(), opts: { alignToMusic?: boolean; composeScore?: boolean } = {}): BuiltShow {
   let doc: ShowDoc = { ...base, name: plan.title.slice(0, 120) || base.name, scenes: [], cues: [] }
   plan.scenes.slice(0, 30).forEach((s, i) => {
-    doc = { ...doc, scenes: [...doc.scenes, sceneFromInput(doc, s, { custom: custom.get(i) })] }
+    const scene = sceneFromInput(doc, s, { custom: custom.get(i) })
+    doc = { ...doc, scenes: [...doc.scenes, scene] }
+    if (s.split?.groups.length) doc = applySplit(doc, scene.id, s.split)
   })
   const composing = !!opts.composeScore && doc.scenes.length > 0
   const music = composing || (opts.alignToMusic !== false && !!doc.audio)

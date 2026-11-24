@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react'
-import { Copy, Plus, Trash2, PlaneTakeoff, PlaneLanding, AlertTriangle, Type, ImageUp, Sparkles } from 'lucide-react'
+import { Copy, Plus, Trash2, PlaneTakeoff, PlaneLanding, AlertTriangle, Type, ImageUp, Sparkles, Split } from 'lucide-react'
 import { getState, useStore } from '@/state/store'
 import { addLedSign, addScene, deleteScene, duplicateScene, moveScene, seekToScene } from '@/state/actions'
 import { seek } from '@/state/playback'
 import { SHAPES, generateShape } from '@/core/shapes'
-import { scenePointColors } from '@/core/compile'
+import { findSceneTime, scenePointColors } from '@/core/compile'
 import { newShape } from '@/core/defaults'
 import { sceneAt } from '@/core/evaluate'
 import { Thumb } from '@/ui/components/Thumb'
@@ -109,6 +109,7 @@ export function ScenesPanel() {
   const thumbs = useMemo(() => {
     const m = new Map<string, { points: Float32Array; colors: Float32Array }>()
     for (const cs of compiled?.scenes ?? []) m.set(cs.id, { points: cs.points, colors: scenePointColors(cs) })
+    for (const sg of compiled?.segments ?? []) if (sg.kind === 'split') for (const tr of sg.tracks) for (const cs of tr.steps) m.set(cs.id, { points: cs.points, colors: scenePointColors(cs) })
     return m
   }, [compiled])
 
@@ -140,8 +141,8 @@ export function ScenesPanel() {
             const isSel = (selection.kind === 'scene' || selection.kind === 'flight') && selection.id === scene.id
             const cls = ['srow', isSel && 'sel', liveScene === i && 'live', dragId === scene.id && 'dragging', dropAt === i && 'drop-before', dropAt === i + 1 && i === doc.scenes.length - 1 && 'drop-after'].filter(Boolean).join(' ')
             return (
+              <div key={scene.id} className="srow-wrap">
               <div
-                key={scene.id}
                 className={cls}
                 draggable
                 onDragStart={(e) => { setDragId(scene.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', scene.id) }}
@@ -178,6 +179,30 @@ export function ScenesPanel() {
                   <button className="btn ghost icon sm" title="Duplicate (Ctrl+D)" aria-label="Duplicate scene" onClick={() => duplicateScene(scene.id)}><Copy size={13} /></button>
                   <button className="btn ghost icon sm danger" title="Delete (Del)" aria-label="Delete scene" onClick={() => deleteScene(scene.id)}><Trash2 size={13} /></button>
                 </div>
+              </div>
+              {(scene.groups ?? []).filter((g) => g.steps.length).map((g) => (
+                <div key={g.id} className="sgroup" aria-label={`Group ${g.name}`}>
+                  <div className="sgroup-name"><Split size={11} /> {g.name}{g.delay ? ` · +${g.delay} s` : ''}</div>
+                  {g.steps.map((st) => {
+                    const stt = compiled ? findSceneTime(compiled, st.id) : undefined
+                    const thumb = thumbs.get(st.id)
+                    const n = issuesBy.get(st.id)
+                    const on = (selection.kind === 'scene' || selection.kind === 'flight') && selection.id === st.id
+                    return (
+                      <div key={st.id} className={`srow step${on ? ' sel' : ''}`} title={`${g.name} · ${st.name}`} onClick={() => { getState().select({ kind: 'scene', id: st.id }); seekToScene(st.id) }}>
+                        <Thumb className="sthumb" points={thumb?.points ?? null} colors={thumb?.colors ?? null} width={44} height={30} />
+                        <div className="sinfo">
+                          <div className="sname">{st.name}</div>
+                          <div className="ssub">{n ? <span className="badge-err"><AlertTriangle size={11} /> {n}</span> : stt ? `${fmt(stt.holdStart)} · ${st.hold.toFixed(st.hold % 1 ? 1 : 0)} s` : '…'}</div>
+                        </div>
+                        <div className="sactions" onClick={(e) => e.stopPropagation()}>
+                          <button className="btn ghost icon sm danger" title="Delete step" aria-label="Delete step" onClick={() => deleteScene(st.id)}><Trash2 size={13} /></button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ))}
               </div>
             )
           })}

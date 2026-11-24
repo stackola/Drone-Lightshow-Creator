@@ -87,7 +87,7 @@ export const TransitionInput = z.object({
 })
 export type TransitionInput = z.infer<typeof TransitionInput>
 
-export const SceneInput = z.object({
+const SceneBase = z.object({
   name: z.string().describe('Short scene name shown in the editor'),
   shape: ShapeInput,
   light: LightInput,
@@ -102,6 +102,29 @@ export const SceneInput = z.object({
   idle_motion: IdleMotionInput.optional().describe('Gentle motion while held, to keep a long hold alive. Optional; spacing never shrinks.'),
   transition: TransitionInput.optional().describe('How the drones travel into this formation (default direct). Use spectacle transitions on a few key moments.'),
   arrive_at_section: z.number().optional().describe('With music: 1-based index of the song section this formation should arrive at the start of (e.g. the hero formation on the biggest drop). Leave out for formations that simply follow on.'),
+})
+
+/** A formation flown by one group during a split. */
+export const StepInput = SceneBase.omit({ arrive_at_section: true }).extend({
+  across: z.number().optional().describe('Horizontal centre in metres (+ = the audience’s right). Default: fanned out on the group’s own side, so groups keep apart.'),
+})
+export type StepInput = z.infer<typeof StepInput>
+
+export const GroupInput = z.object({
+  name: z.string().optional(),
+  delay_seconds: z.number().optional().describe('Seconds after the formation’s hold before this group sets off (staggers the groups)'),
+  steps: z.array(StepInput).describe('The group’s own formations, in order (1–4)'),
+})
+export type GroupInput = z.infer<typeof GroupInput>
+
+export const SplitInput = z.object({
+  mode: z.enum(['shapes', 'halves', 'top-bottom', 'thirds']).describe('How the drones divide: shapes = each layer of the formation is a group; halves = left/right halves; top-bottom = lower/upper halves; thirds = three columns'),
+  groups: z.array(GroupInput).describe('One entry per group, in order: by layer, left→right, or lower→upper'),
+})
+export type SplitInput = z.infer<typeof SplitInput>
+
+export const SceneInput = SceneBase.extend({
+  split: SplitInput.optional().describe('After its hold, the formation splits into groups that each fly their own formations at their own pace; the next scene merges everyone. Use for one or two showpiece moments.'),
 })
 export type SceneInput = z.infer<typeof SceneInput>
 

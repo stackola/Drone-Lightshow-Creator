@@ -86,6 +86,38 @@ describe('tools', () => {
     expect(cue.start).toBeGreaterThan(10)
   })
 
+  it('splits a scene into groups, edits a group formation, and adds another', async () => {
+    const heart = getState().doc.scenes[1]!
+    const out = await runTool('split_scene', {
+      scene_id: heart.id, mode: 'halves',
+      groups: [
+        { name: 'West', steps: [{ name: 'Ring', shape: { kind: 'circle', fill: 'outline' }, light: { effect: 'solid', color: '#ff0000' }, hold_seconds: 4 }] },
+        { name: 'East', delay_seconds: 2, steps: [{ name: 'Spark', shape: { kind: 'star' }, light: { effect: 'twinkle' } }, { name: 'Dot', shape: { kind: 'circle' }, light: { effect: 'solid' } }] },
+      ],
+    })
+    expect(out.error, String(out.content)).toBeUndefined()
+    const groups = getState().doc.scenes[1]!.groups!
+    expect(groups.map((g) => g.name)).toEqual(['West', 'East'])
+    expect(groups[1]!.delay).toBe(2)
+    expect(groups[1]!.steps.map((s) => s.name)).toEqual(['Spark', 'Dot'])
+    // West keeps to the left, East to the right.
+    expect(groups[0]!.steps[0]!.position[0]).toBeLessThan(groups[1]!.steps[0]!.position[0])
+    expect(String(out.content)).toMatch(/Safety: all checks pass/)
+    // Group formations are scenes: the scene tools work on them.
+    const ring = groups[0]!.steps[0]!
+    expect((await runTool('edit_scene', { scene_id: ring.id, hold_seconds: 9, spin: 5 })).error).toBeUndefined()
+    expect(getState().doc.scenes[1]!.groups![0]!.steps[0]!.hold).toBe(9)
+    expect((await runTool('add_group_step', { group_id: groups[0]!.id, step: { name: 'Heart', shape: { kind: 'heart' }, light: { effect: 'solid' } } })).error).toBeUndefined()
+    expect(getState().doc.scenes[1]!.groups![0]!.steps.map((s) => s.name)).toEqual(['Ring', 'Heart'])
+    // The summary shows the groups, their sizes and formations.
+    const s = summarizeShow(getState().doc)
+    expect(s).toMatch(/group \[group_[^\]]+\] "West": slice 1 of 2 left→right, 30 drones/)
+    expect(s).toContain(ring.id)
+    // Merge back.
+    expect((await runTool('split_scene', { scene_id: heart.id, mode: 'merge' })).error).toBeUndefined()
+    expect(getState().doc.scenes[1]!.groups).toBeUndefined()
+  })
+
   it('summaries carry ids and the safety status', () => {
     const s = summarizeShow(getState().doc)
     expect(s).toContain(getState().doc.scenes[0]!.id)

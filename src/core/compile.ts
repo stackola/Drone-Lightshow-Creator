@@ -7,12 +7,13 @@
 // `evaluate()` turns it into positions and colours at any time, and the same
 // function feeds the preview, the validator and the exporters.
 
-import type { Blend, Effect, HoldMotion, Limits, Scene, ShowDoc, TransitionStyle, Vec3 } from './types'
+import type { Blend, Effect, Group, HoldMotion, Limits, Scene, ShowDoc, TransitionStyle, Vec3 } from './types'
 import {
   PLAIN, buildAnt, buildCascade, buildRain, choreoPairs, choreoPeaks, choreoPos, legCentroids, minDurationFor, sampledPeaks, wrapPos,
   TRANSITIONS, type Choreo, type FlightStyle, type TransitionInfo, type Wrap,
 } from './transitions'
 import { assignMinSquared } from './assign'
+import { allocate, hasSplit, pointGroups } from './groups'
 import { generateShape, gridRows } from './shapes'
 import { DEG, ceilTo, centroid, hash01, hashArray, isIdentityRotation, minPairDistance, rotationMatrix, transformPoints } from './math'
 import { NO_MOTION, ZERO_PROFILE, fastestProfile, moveExtents, spinAngle, stretchProfile, type Profile } from './motion'
@@ -102,6 +103,47 @@ export type Segment =
     }
   | { kind: 'hold'; t0: number; t1: number; scene: number }
   | { kind: 'land'; t0: number; t1: number; from: Float32Array; to: Float32Array; legs: Leg[] }
+  /** Groups flying their own sequences after `scene`'s hold, until everyone merges into the next scene. */
+  | { kind: 'split'; t0: number; t1: number; scene: number; tracks: Track[] }
+
+export type FlightSegment = Extract<Segment, { kind: 'flight' }>
+
+/**
+ * A segment of one group's timeline. Holds play `scene` (a step index, or -1
+ * for the formation the group split from) from hold-local time `tau0`; the
+ * pose stops at the end of the scene's own hold (the group then waits, still),
+ * while colours keep animating.
+ */
+export type TrackSegment = FlightSegment | { kind: 'hold'; t0: number; t1: number; scene: number; tau0: number }
+
+export interface SceneTime {
+  id: string
+  flightStart: number
+  holdStart: number
+  holdEnd: number
+  /** When everyone is back together after this scene's groups (= holdEnd without groups). */
+  splitEnd: number
+  minFlight: number
+  auto: boolean
+  extended: boolean
+  detour: boolean
+  transition: TransitionInfo
+}
+
+/** One group's own timeline during a split (or the drones that stay behind, id ''). */
+export interface Track {
+  id: string
+  name: string
+  /** Show-wide drone index of each of this track's drones. */
+  drones: Int32Array
+  /** Point of the parent formation each drone held when the split began. */
+  parentSlot: Int32Array
+  steps: CompiledScene[]
+  segments: TrackSegment[]
+  stepTimes: SceneTime[]
+  /** When the group's own sequence ends; it then holds still until the merge. */
+  end: number
+}
 
 export interface Compiled {
   n: number
@@ -131,7 +173,7 @@ export interface Compiled {
   takeoff: { t0: number; t1: number }
   landing: { t0: number; t1: number }
   returnFlight: { t0: number; t1: number; minDuration: number; auto: boolean; extended: boolean; detour: boolean; transition: TransitionInfo }
-  sceneTimes: { id: string; flightStart: number; holdStart: number; holdEnd: number; minFlight: number; auto: boolean; extended: boolean; detour: boolean; transition: TransitionInfo }[]
+  sceneTimes: SceneTime[]
 }
 
 export interface CompiledCue {
@@ -146,18 +188,7 @@ export interface CompiledCue {
 
 // --- Layout helpers ---------------------------------------------------------------
 
-/** Largest-remainder split of `n` drones by layer weight. */
-export function allocate(n: number, weights: number[]): number[] {
-  const w = weights.map((x) => Math.max(0, x))
-  const total = w.reduce((a, b) => a + b, 0)
-  if (total <= 0) return w.map((_, i) => (i === 0 ? n : 0))
-  const exact = w.map((x) => (x / total) * n)
-  const counts = exact.map(Math.floor)
-  let rest = n - counts.reduce((a, b) => a + b, 0)
-  const order = exact.map((x, i) => [x - Math.floor(x), i] as const).sort((a, b) => b[0] - a[0] || a[1] - b[1])
-  for (let k = 0; rest > 0; k++, rest--) counts[order[k % order.length]![1]]!++
-  return counts
-}
+export { allocate }
 
 export function padGrid(n: number, spacing: number, altitude = 0): Float32Array {
   const cols = Math.max(1, Math.ceil(Math.sqrt(n)))
@@ -622,20 +653,7 @@ export function compile(doc: ShowDoc): Compiled {
   const beat = beatPhaseFn(beats, downbeat, musicEnergy, accents)
 
   // Geometry for every scene.
-  const scenes: CompiledScene[] = doc.scenes.map((scene, index) => {
-    const g = sceneGeometry(scene, n)
-    const center: Vec3 = [scene.position[0], scene.position[1], scene.position[2]]
-    const omega = scene.spin * DEG
-    const endPoints = omega === 0 ? g.points : rotateAboutVertical(g.points, center, spinAngle(omega, scene.hold, scene.hold))
-    let spinRadius = 0
-    for (let k = 0; k < n; k++) spinRadius = Math.max(spinRadius, Math.hypot(g.points[k * 3]! - center[0], g.points[k * 3 + 2]! - center[2]))
-    return {
-      id: scene.id, index, points: g.points, endPoints, center, omega, hold: Math.max(0, scene.hold),
-      slot: new Int32Array(n), layerOf: g.layerOf, layerCounts: g.layerCounts,
-      effects: scene.layers.map((l) => l.effect), look: g.look, image: g.image,
-      spacing: minPairDistance(g.points), spinRadius, motion: scene.motion ?? NO_MOTION,
-    }
-  })
+  const scenes: CompiledScene[] = doc.scenes.map((scene, index) => compileScene(scene, index, n))
 
   const pads = padGrid(n, site.gridSpacing, 0)
   const padsHigh = padGrid(n, site.gridSpacing, site.takeoffAltitude)
@@ -673,13 +691,26 @@ export function compile(doc: ShowDoc): Compiled {
     const flightStart = t
     t += dur
     segments.push({ kind: 'hold', t0: t, t1: t + cs.hold, scene: cs.index })
-    sceneTimes.push({ id: cs.id, flightStart, holdStart: t, holdEnd: t + cs.hold, minFlight: fd.min, auto: fd.auto, extended: fd.extended, detour: fd.detour, transition: fd.transition })
+    const st: SceneTime = { id: cs.id, flightStart, holdStart: t, holdEnd: t + cs.hold, splitEnd: t + cs.hold, minFlight: fd.min, auto: fd.auto, extended: fd.extended, detour: fd.detour, transition: fd.transition }
+    sceneTimes.push(st)
     curColors = sceneColors(cs, cs.hold, t + cs.hold, beat)
     t += cs.hold
     curPos = permute(cs.endPoints, slot)
     curPointsSet = cs.endPoints
     curSlot = slot
     curSpacing = cs.spacing
+    if (hasSplit(scene)) {
+      // Groups break away and fly their own sequences; everyone then merges into the next scene.
+      const sp = compileSplit(scene, cs, t, limits, beat)
+      segments.push({ kind: 'split', t0: t, t1: sp.end, scene: cs.index, tracks: sp.tracks })
+      st.splitEnd = sp.end
+      t = sp.end
+      curPos = sp.pos
+      curColors = sp.colors
+      curPointsSet = sp.pos
+      curSlot = identity(n)
+      curSpacing = minPairDistance(sp.pos)
+    }
   }
 
   // Return flight to the pads (at altitude), then descend.
@@ -702,8 +733,9 @@ export function compile(doc: ShowDoc): Compiled {
 
   // Stage box for position-based cue effects (stable for the whole show).
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-  for (const cs of scenes)
-    for (let k = 0; k < n; k++) {
+  const allScenes = [...scenes, ...segments.flatMap((sg) => (sg.kind === 'split' ? sg.tracks.flatMap((tr) => tr.steps) : []))]
+  for (const cs of allScenes)
+    for (let k = 0; k < cs.points.length / 3; k++) {
       const x = cs.points[k * 3]!, y = cs.points[k * 3 + 1]!
       if (x < minX) minX = x; if (x > maxX) maxX = x
       if (y < minY) minY = y; if (y > maxY) maxY = y
@@ -715,13 +747,15 @@ export function compile(doc: ShowDoc): Compiled {
   // Camera framing also covers transitions that travel outside the formations (arches, bursts).
   const view = { minX: stage.minX, maxX: stage.maxX, maxY: stage.maxY }
   const probe = new Float32Array(n * 3)
-  for (const seg of segments) {
-    if (seg.kind !== 'flight' || !seg.style) continue
+  const styled = segments.flatMap((sg): FlightSegment[] => (sg.kind === 'flight' ? [sg] : sg.kind === 'split' ? sg.tracks.flatMap((tr) => tr.segments.filter((x): x is FlightSegment => x.kind === 'flight')) : []))
+  for (const seg of styled) {
+    if (!seg.style) continue
+    const m = seg.from.length / 3
     for (let k = 0; k <= 40; k++) {
       const u = k / 40
-      if (seg.style.kind === 'choreo') for (let i = 0; i < n; i++) choreoPos(seg.style.choreo, i, u, probe)
+      if (seg.style.kind === 'choreo') for (let i = 0; i < m; i++) choreoPos(seg.style.choreo, i, u, probe)
       else wrapPos(seg.legs, seg.style.wrap, seg.t0, seg.t1 - seg.t0, seg.t0 + u * (seg.t1 - seg.t0), probe)
-      for (let i = 0; i < n * 3; i += 3) {
+      for (let i = 0; i < m * 3; i += 3) {
         view.minX = Math.min(view.minX, probe[i]!); view.maxX = Math.max(view.maxX, probe[i]!); view.maxY = Math.max(view.maxY, probe[i + 1]!)
       }
     }
@@ -736,6 +770,187 @@ export function compile(doc: ShowDoc): Compiled {
     n, duration: t, segments, scenes, pads, landPads, beats, downbeat, musicEnergy, accents, limits, cues, stage, view,
     takeoff: { t0: 0, t1: takeoffDur }, landing, returnFlight, sceneTimes,
   }
+}
+
+const lookup = new WeakMap<Compiled, Map<string, { cs: CompiledScene; time: SceneTime; track: Track | null }>>()
+function index(c: Compiled) {
+  let m = lookup.get(c)
+  if (!m) {
+    m = new Map()
+    c.scenes.forEach((cs, i) => m!.set(cs.id, { cs, time: c.sceneTimes[i]!, track: null }))
+    for (const sg of c.segments) if (sg.kind === 'split') for (const tr of sg.tracks) tr.steps.forEach((cs, i) => m!.set(cs.id, { cs, time: tr.stepTimes[i]!, track: tr }))
+    lookup.set(c, m)
+  }
+  return m
+}
+/** A compiled formation by scene id: a scene or a group step. */
+export function findCompiledScene(c: Compiled, id: string): CompiledScene | undefined {
+  return index(c).get(id)?.cs
+}
+/** Timing of a scene or group step. */
+export function findSceneTime(c: Compiled, id: string): SceneTime | undefined {
+  return index(c).get(id)?.time
+}
+/** The group track a step belongs to (null for main scenes). */
+export function findTrack(c: Compiled, id: string): Track | null {
+  return index(c).get(id)?.track ?? null
+}
+
+/** Geometry, spin and look of one formation for `n` drones. */
+export function compileScene(scene: Scene, index: number, n: number): CompiledScene {
+  const g = sceneGeometry(scene, n)
+  const center: Vec3 = [scene.position[0], scene.position[1], scene.position[2]]
+  const omega = scene.spin * DEG
+  const endPoints = omega === 0 ? g.points : rotateAboutVertical(g.points, center, spinAngle(omega, scene.hold, scene.hold))
+  let spinRadius = 0
+  for (let k = 0; k < n; k++) spinRadius = Math.max(spinRadius, Math.hypot(g.points[k * 3]! - center[0], g.points[k * 3 + 2]! - center[2]))
+  return {
+    id: scene.id, index, points: g.points, endPoints, center, omega, hold: Math.max(0, scene.hold),
+    slot: new Int32Array(n), layerOf: g.layerOf, layerCounts: g.layerCounts,
+    effects: scene.layers.map((l) => l.effect), look: g.look, image: g.image,
+    spacing: minPairDistance(g.points), spinRadius, motion: scene.motion ?? NO_MOTION,
+  }
+}
+
+/** Colours of the points `slot[j]` of a formation at hold-local time tau. */
+export function slotColors(cs: CompiledScene, slot: Int32Array, tau: number, t: number, beat: BeatPhase): Float32Array {
+  const out = new Float32Array(slot.length * 3)
+  for (let j = 0; j < slot.length; j++) {
+    pointColor(cs, slot[j]!, tau, t, beat, colTmp)
+    out[j * 3] = colTmp[0]; out[j * 3 + 1] = colTmp[1]; out[j * 3 + 2] = colTmp[2]
+  }
+  return out
+}
+
+/**
+ * The groups of a scene, after its hold at t0. Drones are grouped by the
+ * shape (layer) they hold; each group flies its steps with its own flights
+ * (each planned and checked like any flight, within the group). Drones in no
+ * group, and groups that finish early, hold still until the last group is done.
+ */
+function compileSplit(scene: Scene, cs: CompiledScene, t0: number, limits: Limits, beat: BeatPhase): { tracks: Track[]; end: number; pos: Float32Array; colors: Float32Array } {
+  const n = cs.slot.length
+  const groups = scene.groups ?? []
+  // Groups are chosen from where the drones are when the split begins (after any spin).
+  const groupOfPoint = pointGroups(scene, cs.endPoints, cs.layerOf)
+  const members: number[][] = groups.map(() => [])
+  const rest: number[] = []
+  for (let i = 0; i < n; i++) {
+    const gi = groupOfPoint[cs.slot[i]!]!
+    if (gi >= 0 && groups[gi]!.steps.length) members[gi]!.push(i)
+    else rest.push(i)
+  }
+  const tracks: Track[] = []
+  let end = t0
+  const steps = groups.map((g, gi) => g.steps.map((st, si) => compileScene(st, si, members[gi]!.length)))
+  const departure = planDeparture(groups, members, steps, cs, t0, limits)
+  groups.forEach((g, gi) => {
+    const D = members[gi]!
+    const m = D.length
+    if (!m) return
+    const drones = Int32Array.from(D)
+    const parentSlot = Int32Array.from(D, (i) => cs.slot[i]!)
+    const segs: TrackSegment[] = []
+    const stepTimes: SceneTime[] = []
+    let t = t0
+    const delay = Math.max(0, g.delay)
+    if (delay > 0) segs.push({ kind: 'hold', t0: t, t1: t + delay, scene: -1, tau0: cs.hold })
+    t += delay
+    let pos = permute(cs.endPoints, parentSlot)
+    let set = pos
+    let slot = identity(m)
+    let spacing = minPairDistance(pos)
+    let colors = slotColors(cs, parentSlot, cs.hold + delay, t, beat)
+    const together = departure?.part.get(gi)
+    steps[gi]!.forEach((sc, si) => {
+      const st = g.steps[si]!
+      // Groups that set off at once leave the formation together, on one clock (see planDeparture).
+      const fd = si === 0 && together ? together : planFlight(st.flight.style, pos, set, spacing, slot, sc.points, sc.spacing, limits, st.flight.duration, t, null)
+      sc.slot = fd.slot
+      const target = permute(sc.points, fd.slot)
+      segs.push({
+        kind: 'flight', t0: t, t1: t + fd.T, legs: fd.legs, detour: fd.detour, style: fd.style, transition: fd.transition, floor: fd.floor,
+        from: pos, to: target, c0: colors, c1: sceneColors(sc, 0, t + fd.T, beat),
+        dim: st.flight.dim, into: si, minDuration: fd.min, auto: fd.auto, extended: fd.extended,
+      })
+      const flightStart = t
+      t += fd.T
+      segs.push({ kind: 'hold', t0: t, t1: t + sc.hold, scene: si, tau0: 0 })
+      stepTimes.push({ id: sc.id, flightStart, holdStart: t, holdEnd: t + sc.hold, splitEnd: t + sc.hold, minFlight: fd.min, auto: fd.auto, extended: fd.extended, detour: fd.detour, transition: fd.transition })
+      t += sc.hold
+      colors = sceneColors(sc, sc.hold, t, beat)
+      pos = permute(sc.endPoints, fd.slot)
+      set = sc.endPoints
+      slot = fd.slot
+      spacing = sc.spacing
+    })
+    tracks.push({ id: g.id, name: g.name, drones, parentSlot, steps: steps[gi]!, segments: segs, stepTimes, end: t })
+    end = Math.max(end, t)
+  })
+  if (rest.length) {
+    const parentSlot = Int32Array.from(rest, (i) => cs.slot[i]!)
+    tracks.push({ id: '', name: scene.name, drones: Int32Array.from(rest), parentSlot, steps: [], segments: [], stepTimes: [], end: t0 })
+  }
+  // Everyone waits, still, for the last group: extend each track's final hold to the merge.
+  for (const tr of tracks) {
+    const last = tr.segments[tr.segments.length - 1]
+    if (last?.kind === 'hold') last.t1 = end
+    else if (!last) tr.segments.push({ kind: 'hold', t0, t1: end, scene: -1, tau0: cs.hold })
+    else tr.segments.push({ kind: 'hold', t0: last.t1, t1: end, scene: tr.steps.length - 1, tau0: tr.steps[tr.steps.length - 1]?.hold ?? 0 })
+  }
+  // Where everyone is when the merge flight starts.
+  const pos = new Float32Array(n * 3), colors = new Float32Array(n * 3)
+  for (const tr of tracks) {
+    const last = tr.segments[tr.segments.length - 1] as Extract<TrackSegment, { kind: 'hold' }>
+    const sc = last.scene < 0 ? cs : tr.steps[last.scene]!
+    const slot = last.scene < 0 ? tr.parentSlot : sc.slot
+    const tau = last.tau0 + (end - last.t0)
+    const c = slotColors(sc, slot, tau, end, beat)
+    for (let j = 0; j < tr.drones.length; j++) {
+      const i = tr.drones[j]!, k = slot[j]!
+      for (let a = 0; a < 3; a++) { pos[i * 3 + a] = sc.endPoints[k * 3 + a]!; colors[i * 3 + a] = c[j * 3 + a]! }
+    }
+  }
+  return { tracks, end, pos, colors }
+}
+
+/**
+ * The split itself: groups that set off as soon as the formation's hold ends
+ * fly out of it together, as one synchronised flight (each group keeping its
+ * own optimal drone↔point matching), so the moment the formation breaks up
+ * is planned (with a detour if needed) and checked exactly like any flight.
+ * Returns each group's share of that flight. Transitions apply to the
+ * groups' later flights.
+ */
+function planDeparture(groups: Group[], members: number[][], steps: CompiledScene[][], cs: CompiledScene, t0: number, limits: Limits): { part: Map<number, PlannedFlight> } | null {
+  const leaving = groups.map((g, gi) => gi).filter((gi) => Math.max(0, groups[gi]!.delay) <= 1e-9 && steps[gi]!.length && members[gi]!.length)
+  if (!leaving.length) return null
+  const N = leaving.reduce((a, gi) => a + members[gi]!.length, 0)
+  const from = new Float32Array(N * 3), to = new Float32Array(N * 3)
+  const rows: { gi: number; o: number; m: number; slot: Int32Array }[] = []
+  let o = 0
+  let requested: number | null = null
+  for (const gi of leaving) {
+    const D = members[gi]!, m = D.length
+    const sc = steps[gi]![0]!
+    const start = new Float32Array(m * 3)
+    for (let j = 0; j < m; j++) for (let a = 0; a < 3; a++) start[j * 3 + a] = cs.endPoints[cs.slot[D[j]!]! * 3 + a]!
+    const slot = cachedMatch(start, sc.points)
+    from.set(start, o * 3)
+    to.set(permute(sc.points, slot), o * 3)
+    rows.push({ gi, o, m, slot })
+    o += m
+    const d = groups[gi]!.steps[0]!.flight.duration
+    if (d !== null) requested = Math.max(requested ?? 0, d)
+  }
+  const spacing = minPairDistance(to)
+  const fd = planFlight(undefined, from, from, minPairDistance(from), identity(N), to, spacing, limits, requested, t0, identity(N))
+  const part = new Map<number, PlannedFlight>()
+  for (const r of rows) {
+    const cut = (a: Float32Array) => a.slice(r.o * 3, (r.o + r.m) * 3)
+    part.set(r.gi, { ...fd, slot: r.slot, legs: fd.legs.map((l) => ({ ...l, from: cut(l.from), to: cut(l.to) })) })
+  }
+  return { part }
 }
 
 function identity(n: number): Int32Array {

@@ -2,7 +2,8 @@
 // and rendered images of formations (browser only, in render.ts).
 
 import type { Effect, ShowDoc } from '@/core/types'
-import { compile, allocate, type Compiled } from '@/core/compile'
+import { compile, allocate, findSceneTime, type Compiled } from '@/core/compile'
+import { groupSizes } from '@/core/groups'
 import { validate, formatTime, type Validation } from '@/core/validate'
 import { SHAPE_BY_KIND, sizeLabel } from '@/core/shapes'
 import { summarizeMusic } from '@/core/music'
@@ -71,6 +72,19 @@ export function summarizeShow(doc: ShowDoc, compiled: Compiled = compile(doc), v
     s.layers.forEach((l, li) => {
       lines.push(`   layer ${li}${l.role ? ` (spare drones: ${l.role})` : ''}: ${counts[li]} drones, ${describeShape(l.shape)}; light: ${describeEffect(l.effect)}${l.offset.some((v) => v !== 0) ? `; offset (${l.offset.map(f1).join(', ')})` : ''}`)
     })
+    if (s.groups?.length && t) {
+      const sizes = groupSizes(s, doc.droneCount)
+      lines.push(`   Splits into groups after the hold: they fly on their own ${formatTime(t.holdEnd)}–${formatTime(t.splitEnd)}, then the next scene merges everyone (drones in no group keep holding).`)
+      s.groups.forEach((g, gi) => {
+        const which = g.part ? `${g.part.axis === 'x' ? 'slice' : 'band'} ${g.part.index + 1} of ${g.part.of} ${g.part.axis === 'x' ? 'left→right' : 'bottom→top'}` : `layer(s) ${g.layers.map((id) => s.layers.findIndex((l) => l.id === id)).join(', ')}`
+        lines.push(`   - group [${g.id}] "${g.name}": ${which}, ${sizes[gi]} drones${g.delay ? `, sets off ${g.delay} s after the hold` : ''}:`)
+        g.steps.forEach((st, k) => {
+          const tt = findSceneTime(compiled, st.id)
+          const main = st.layers[0]
+          lines.push(`      ${k + 1}. [${st.id}] "${st.name}" — ${tt ? `flies in ${formatTime(tt.flightStart)}–${formatTime(tt.holdStart)}, holds ${formatTime(tt.holdStart)}–${formatTime(tt.holdEnd)}` : ''}; centre (${st.position.map(f1).join(', ')}) m${st.spin ? `, spin ${st.spin}°/s` : ''}; ${main ? `${describeShape(main.shape)}; light: ${describeEffect(main.effect)}` : ''}${st.layers.length > 1 ? ` (+${st.layers.length - 1} layer)` : ''}`)
+        })
+      })
+    }
   })
   lines.push(`Return & land ${formatTime(compiled.returnFlight.t0)}–${formatTime(compiled.duration)}.`)
   if (doc.cues.length) {
@@ -92,9 +106,9 @@ export function describeMusic(doc: ShowDoc): string {
   if (!m) return 'No music is loaded (or no beat was detected).'
   const songEnd = m.offset + m.duration
   const c = compile(doc)
-  const showEnd = c.sceneTimes.length ? c.sceneTimes[c.sceneTimes.length - 1]!.holdEnd : 0
+  const showEnd = c.sceneTimes.length ? c.sceneTimes[c.sceneTimes.length - 1]!.splitEnd : 0
   const onScreen = (s: { start: number; end: number }) =>
-    doc.scenes.filter((_, i) => { const t = c.sceneTimes[i]; return t && t.holdStart < s.end && t.holdEnd > s.start }).map((sc) => `"${sc.name}"`).join(', ')
+    doc.scenes.filter((_, i) => { const t = c.sceneTimes[i]; return t && t.holdStart < s.end && t.splitEnd > s.start }).map((sc) => `"${sc.name}"`).join(', ')
   const lines = [
     ...(doc.audio?.generated ? [`“${doc.audio.name}” is an original score composed to this show (drops where hero formations arrive). After changing scenes or timing, call compose_score again so the music follows the show.`] : []),
     `${Math.round(m.bpm)} BPM, bar length ${m.barLength.toFixed(2)} s. The song plays ${formatTime(m.offset)}–${formatTime(songEnd)} in show time (${formatTime(m.duration)} long); the last formation currently ends at ${formatTime(showEnd)}${Math.abs(showEnd - songEnd) > m.barLength ? (showEnd < songEnd ? ` — ${Math.round(songEnd - showEnd)} s before the song ends` : ` — ${Math.round(showEnd - songEnd)} s after the song ends`) : ' (with the song)'}.`,

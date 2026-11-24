@@ -219,6 +219,29 @@ export interface Scene {
   /** Gentle motion while held; always eases in and out and returns to rest. */
   motion?: HoldMotion
   layers: Layer[]
+  /**
+   * Splits: after this formation's hold, some of its shapes break away as
+   * groups, each flying its own formations at its own pace. The next scene
+   * merges everyone back together. (Steps never have groups of their own.)
+   */
+  groups?: Group[]
+}
+
+/** Drones of some of a scene's shapes, continuing on their own timeline. */
+export interface Group {
+  id: string
+  name: string
+  /** Ids of the parent scene's layers whose drones form the group. */
+  layers: string[]
+  /**
+   * Only part of those drones: sorted across (x) or by height (y), the
+   * `index`-th of `of` equal slices (e.g. the left half of a heart).
+   */
+  part?: { axis: 'x' | 'y'; index: number; of: number }
+  /** Seconds after the parent's hold before the group sets off. */
+  delay: number
+  /** The group's own formations, flown in order. */
+  steps: Scene[]
 }
 
 /**

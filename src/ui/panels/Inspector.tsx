@@ -1,19 +1,21 @@
 import { useMemo, useState } from 'react'
-import { AlertTriangle, ChevronDown, ChevronRight, Copy, Maximize, Plus, Trash2, Wrench, CheckCircle2, ImageUp, Crosshair, Sparkles, Wind } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Copy, Maximize, Plus, Trash2, Wrench, CheckCircle2, ImageUp, Crosshair, Sparkles, Wind, Split, CornerLeftUp } from 'lucide-react'
 import type { Draft } from 'immer'
 import { getState, useStore } from '@/state/store'
 import { useShallow } from 'zustand/react/shallow'
 import {
   addLayer, addSpare, applyFix, changeLayerKind, deleteCue, deleteScene, duplicateCue, duplicateScene, fitSceneToSpacing, fixAll,
   focusIssue, removeLayer, resizeLedPanel, setDroneCount, setLayerCount, setLayerShape, setSpareRole, updateCue, updateScene,
+  splitScene, unsplitScene, addGroupStep, updateGroup, deleteGroup, seekToScene, SPLIT_MODES,
 } from '@/state/actions'
 import { SHAPES, SHAPE_BY_KIND, gridRows, sizeLabel } from '@/core/shapes'
-import { allocate } from '@/core/compile'
+import { allocate, findCompiledScene, findSceneTime } from '@/core/compile'
+import { findScene, groupSizes, sceneDroneCount, replaceSceneIn } from '@/core/groups'
 import { comfortableSpacing, extremeRels, maxSafeMotionAmount, maxSafeSpin, formatTime, type Issue } from '@/core/validate'
 import { MOTION_KINDS, SPARE_ROLES, defaultMotion, motionAmountUnit } from '@/core/idle'
 import { motionCycles } from '@/core/motion'
 import { fitScene, fitToAirspace, rasterizeText, unitSpacing } from '@/core/defaults'
-import type { HoldMotion, Layer, LightCue, Scene, ShapeKind, ShapeSpec, TextFont, Vec3 } from '@/core/types'
+import type { Group, HoldMotion, Layer, LightCue, Scene, ShapeKind, ShapeSpec, ShowDoc, TextFont, Vec3 } from '@/core/types'
 import { NumberField, Row, Segmented, Toggle, MenuButton } from '@/ui/components/controls'
 import { EffectEditor } from './EffectEditor'
 import { TransitionEditor } from './TransitionEditor'
@@ -82,13 +84,14 @@ function Vec3Field({ value, onChange, labels, step = 0.5 }: { value: Vec3; onCha
 // --- Scene -----------------------------------------------------------------------
 
 function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean }) {
-  const scene = useStore((s) => s.doc.scenes.find((x) => x.id === id))
-  const index = useStore((s) => s.doc.scenes.findIndex((x) => x.id === id))
-  const times = useStore((s) => s.compiled?.sceneTimes.find((x) => x.id === id))
-  const cs = useStore((s) => s.compiled?.scenes.find((x) => x.id === id))
+  const ref = useStore(useShallow((s) => { const r = findScene(s.doc, id); return r ? { scene: r.scene, parent: r.parent, group: r.group, index: r.index } : null }))
+  const scene = ref?.scene
+  const index = ref?.index ?? -1
+  const times = useStore((s) => (s.compiled ? findSceneTime(s.compiled, id) : undefined))
+  const cs = useStore((s) => (s.compiled ? findCompiledScene(s.compiled, id) : undefined))
   const issues = useStore(useShallow((s) => s.validation?.issues.filter((i) => i.sceneId === id) ?? []))
   const limits = useStore((s) => s.doc.limits)
-  const n = useStore((s) => s.doc.droneCount)
+  const n = useStore((s) => sceneDroneCount(s.doc, id))
   if (!scene) return <ShowInspector />
   const counts = allocate(n, scene.layers.map((l) => l.weight))
   const up = (recipe: (s: Draft<Scene>) => void, label: string, key?: string) => updateScene(id, recipe, label, key)
@@ -98,7 +101,14 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
 
   return (
     <>
-      <div className="insp-kind">Scene {index + 1}</div>
+      {ref?.group ? (
+        <div className="insp-kind">
+          <button className="link-btn" title="Back to the scene this group splits from" onClick={() => { getState().select({ kind: 'scene', id: ref.parent!.id }); seekToScene(ref.parent!.id) }}><CornerLeftUp size={11} /> {ref.parent!.name}</button>
+          {' · '}{ref.group.name} · step {index + 1} · {n} drones
+        </div>
+      ) : (
+        <div className="insp-kind">Scene {index + 1}</div>
+      )}
       <div className="insp-head">
         <input className="name-input" value={scene.name} aria-label="Scene name" onChange={(e) => up((s) => { s.name = e.target.value }, 'Rename scene', `name:${id}`)} />
         <button className="btn ghost icon sm" title="Duplicate (Ctrl+D)" aria-label="Duplicate scene" onClick={() => duplicateScene(id)}><Copy size={14} /></button>
@@ -172,6 +182,8 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
         ))}
       </Section>
 
+      {!ref?.group && <GroupsSection scene={scene} />}
+
       <Section title="Placement">
         <Row stack label="Centre (m) — across, altitude, depth">
           <Vec3Field value={scene.position} labels={['X', 'Alt', 'Z']} onChange={(v) => up((s) => { s.position = v }, 'Move scene', `pos:${id}`)} />
@@ -194,9 +206,89 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
   )
 }
 
+/**
+ * Splits and merges: after this scene's hold, its shapes can break away as
+ * groups that fly their own formations at their own pace; the next scene
+ * brings everyone back together.
+ */
+function GroupsSection({ scene }: { scene: Scene }) {
+  const n = useStore((s) => s.doc.droneCount)
+  const times = useStore((s) => (s.compiled ? findSceneTime(s.compiled, scene.id) : undefined))
+  const groups = scene.groups ?? []
+  const sizes = groupSizes(scene, n)
+  const shapes = scene.layers.filter((l) => !l.role).length
+  if (!groups.length) {
+    return (
+      <Section title="Groups">
+        <p className="hint" style={{ margin: '0 0 8px' }}>
+          After this formation, its drones can split into groups that each fly their own formations at their own pace. The next scene brings everyone back together.
+        </p>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {SPLIT_MODES.filter((m) => m.mode !== 'shapes' || shapes > 1).map((m) => (
+            <button key={m.mode} className="btn sm" title={m.hint} onClick={() => splitScene(scene.id, m.mode)}><Split size={13} /> {m.label}</button>
+          ))}
+        </div>
+      </Section>
+    )
+  }
+  return (
+    <Section
+      title={`Groups · ${groups.length}`}
+      right={<button className="btn ghost sm" title="Remove the groups: everyone stays together" onClick={() => unsplitScene(scene.id)}>Merge back</button>}
+    >
+      {times && times.splitEnd > times.holdEnd && (
+        <p className="hint" style={{ margin: '0 0 8px' }}>Groups fly on their own from {formatTime(times.holdEnd)} to {formatTime(times.splitEnd)}; then the next scene merges everyone.</p>
+      )}
+      {groups.map((g, gi) => <GroupCard key={g.id} scene={scene} group={g} drones={sizes[gi] ?? 0} />)}
+    </Section>
+  )
+}
+
+function partLabel(p: NonNullable<Group['part']>): string {
+  if (p.of === 2) return p.axis === 'x' ? ['Left half', 'Right half'][p.index]! : ['Lower half', 'Upper half'][p.index]!
+  if (p.of === 3 && p.axis === 'x') return ['Left third', 'Middle third', 'Right third'][p.index]!
+  return `Part ${p.index + 1} of ${p.of}`
+}
+
+function GroupCard({ scene, group, drones }: { scene: Scene; group: Group; drones: number }) {
+  const thumbs = useStore((s) => s.compiled)
+  const layerNames = group.layers.map((id) => { const l = scene.layers.find((x) => x.id === id); return l ? SHAPE_BY_KIND[l.shape.kind].label : '' }).filter(Boolean)
+  return (
+    <div className="layer-card group-card">
+      <div className="layer-head">
+        <input className="name-input sm" value={group.name} aria-label="Group name" onChange={(e) => updateGroup(group.id, (g) => { g.name = e.target.value }, 'Rename group', `gname:${group.id}`)} />
+        <span className="hint" style={{ padding: '0 4px', whiteSpace: 'nowrap' }}>{drones} drones</span>
+        <button className="btn ghost icon sm danger" aria-label="Remove group" title="Remove group (its drones stay in the formation)" onClick={() => deleteGroup(group.id)}><Trash2 size={13} /></button>
+      </div>
+      <div className="layer-body">
+        <div className="hint" style={{ marginBottom: 6 }}>{group.part ? `${partLabel(group.part)} of the ` : 'The '}{layerNames.join(' + ').toLowerCase() || 'shape'} drones</div>
+        <Row label="Sets off" title="Seconds after the formation's hold before this group starts moving">
+          <NumberField value={group.delay} step={0.5} unit="s later" min={0} max={600} onChange={(v) => updateGroup(group.id, (g) => { g.delay = v }, 'Group delay', `gdelay:${group.id}`)} />
+        </Row>
+        <ol className="step-list">
+          {group.steps.map((st) => {
+            const t = thumbs ? findSceneTime(thumbs, st.id) : undefined
+            return (
+              <li key={st.id}>
+                <button className="step-btn" onClick={() => { getState().select({ kind: 'scene', id: st.id }); seekToScene(st.id) }}>
+                  <span>{st.name}</span>
+                  <span className="hint">{t ? `${formatTime(t.holdStart)} · ${st.hold} s` : ''}</span>
+                </button>
+              </li>
+            )
+          })}
+        </ol>
+        <MenuButton className="btn ghost sm" title="Add a formation to this group" width={300} button={<><Plus size={12} /> Formation</>}>
+          {(close) => <ShapePicker scenePresets={false} onPick={(k) => { close(); if (k !== 'describe' && k !== 'image' && k !== 'led') addGroupStep(group.id, k) }} />}
+        </MenuButton>
+      </div>
+    </div>
+  )
+}
+
 /** Idle motion of a held formation: breathe, bob or sway, with a safe default amount. */
 function HoldMotionEditor({ scene }: { scene: Scene }) {
-  const cs = useStore((s) => s.compiled?.scenes.find((x) => x.id === scene.id))
+  const cs = useStore((s) => (s.compiled ? findCompiledScene(s.compiled, scene.id) : undefined))
   const limits = useStore((s) => s.doc.limits)
   const motion = scene.motion ?? defaultMotion('none')
   const u = motionAmountUnit(motion.kind)
@@ -263,14 +355,13 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
 
   const setText = (text: string, font: TextFont) => {
     const st = getState()
-    const sc = st.doc.scenes.find((x) => x.id === scene.id)
+    const sc = findScene(st.doc, scene.id)?.scene
     if (!sc) return
+    const n = sceneDroneCount(st.doc, scene.id)
+    const sub: ShowDoc = { ...st.doc, droneCount: n }
     const next: Scene = { ...sc, layers: sc.layers.map((l) => (l.id === layer.id ? { ...l, shape: { ...(l.shape as Extract<ShapeSpec, { kind: 'text' }>), text, font, mask: rasterizeText(text || ' ', font) } } : l)) }
-    const fitted = fitToAirspace(fitScene(next, st.doc.droneCount, target, 'grow'), st.doc)
-    st.update((d) => {
-      const i = d.scenes.findIndex((x) => x.id === scene.id)
-      if (i >= 0) d.scenes[i] = fitted as Draft<Scene>
-    }, 'Edit text', `text:${layer.id}`)
+    const fitted = fitToAirspace(fitScene(next, n, target, 'grow'), sub)
+    st.update((d) => { replaceSceneIn(d as ShowDoc, scene.id, fitted) }, 'Edit text', `text:${layer.id}`)
   }
 
   return (

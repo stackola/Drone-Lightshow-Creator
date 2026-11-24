@@ -191,3 +191,29 @@ describe('director with an original score', () => {
     expect(built.validation.issues).toEqual([])
   })
 })
+
+describe('director plans with splits', () => {
+  it('builds the groups with formations sized for each group, and stays safe', () => {
+    const plan: Plan = {
+      title: 'Split test', concept: 'Two hearts part ways.',
+      scenes: [
+        { name: 'Heart', shape: { kind: 'heart' }, light: { effect: 'solid', color: '#ff3366' }, hold_seconds: 4,
+          split: { mode: 'halves', groups: [
+            { name: 'Left', steps: [{ name: 'Ring', shape: { kind: 'circle', fill: 'outline' }, light: { effect: 'solid' }, hold_seconds: 4 }] },
+            { name: 'Right', delay_seconds: 1, steps: [{ name: 'Star', shape: { kind: 'star' }, light: { effect: 'twinkle' } }, { name: 'Dot', shape: { kind: 'circle' }, light: { effect: 'solid' } }] },
+          ] } },
+        { name: 'Together', shape: { kind: 'circle' }, light: { effect: 'rainbow' } },
+      ],
+      cues: [],
+    }
+    expect(ShowPlan.safeParse(plan).success).toBe(true)
+    const built = buildShowFromPlan(plan, newShow(80))
+    const groups = built.doc.scenes[0]!.groups!
+    expect(groups.map((g) => g.steps.length)).toEqual([1, 2])
+    const c = compile(built.doc)
+    const split = c.segments.find((s) => s.kind === 'split')
+    expect(split?.kind).toBe('split')
+    if (split?.kind === 'split') expect(split.tracks.map((t) => t.drones.length).sort()).toEqual([40, 40])
+    expect(built.validation.issues).toEqual([])
+  })
+})

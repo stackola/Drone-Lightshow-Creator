@@ -33,6 +33,7 @@ function StageOverlay() {
     if (at.phase === 'takeoff') return { verb: 'Taking off', name: null }
     if (at.phase === 'land') return { verb: 'Landing', name: null }
     if (at.phase === 'flight') return { verb: name ? 'Flying to' : 'Returning to pads', name }
+    if (at.phase === 'groups') return { verb: 'Groups of', name }
     return { verb: 'Showing', name }
   }))
   const computing = useStore((s) => s.computing)

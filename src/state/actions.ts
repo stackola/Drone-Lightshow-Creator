@@ -1,18 +1,42 @@
 import type { Draft } from 'immer'
-import type { Effect, LightCue, Scene, ShapeKind, ShapeSpec, ShowDoc, SpareRole } from '@/core/types'
+import type { Effect, Group, LightCue, Scene, ShapeKind, ShapeSpec, ShowDoc, SpareRole } from '@/core/types'
 import { SPARE_ROLES, addSpareLayer, applySpareRole, calmMotion } from '@/core/idle'
 import { fitScene, fitToAirspace, newId, newLayer, newLedSign, newScene, newShape } from '@/core/defaults'
 import { comfortableSpacing, type FixAction, type Issue } from '@/core/validate'
-import { applyFixToDoc, autoFix } from '@/core/fixes'
+import { applyFixToDoc, autoFix, tidySplit } from '@/core/fixes'
 import { defaultEffect } from '@/core/effects'
 import { getState } from './store'
 import { seek } from './playback'
 import { SHAPE_BY_KIND } from '@/core/shapes'
-import { allocate } from '@/core/compile'
+import { allocate, findCompiledScene, findSceneTime } from '@/core/compile'
+import { SPLIT_MODES, splitSceneDoc, type SplitMode } from '@/core/splits'
+import { findGroup, findScene, groupSizes, pruneGroups, replaceSceneIn, sceneDroneCount } from '@/core/groups'
+
+/**
+ * A scene or group step, and the document as it sees it: a group step has
+ * only its group's drones, so sizing and fitting use that count.
+ */
+function ctx(id: string): { scene: Scene | undefined; sub: ShowDoc } {
+  const doc = getState().doc
+  const ref = findScene(doc, id)
+  if (!ref) return { scene: undefined, sub: doc }
+  const n = sceneDroneCount(doc, id)
+  return { scene: ref.scene, sub: n === doc.droneCount ? doc : { ...doc, droneCount: n } }
+}
+
+/** Replace a scene or group step as one undo step. */
+function put(id: string, next: Scene, label: string, key?: string) {
+  getState().update((d) => { replaceSceneIn(d as ShowDoc, id, next) }, label, key)
+}
 
 export function addScene(kind: ShapeKind, opts: { shape?: ShapeSpec; name?: string } = {}) {
   const s = getState()
   const sel = s.selection
+  // With a group step selected, the new formation becomes the group's next step.
+  if ((sel.kind === 'scene' || sel.kind === 'flight') && findScene(s.doc, sel.id)?.group) {
+    const ref = findScene(s.doc, sel.id)!
+    return addGroupStep(ref.group!.id, kind, { shape: opts.shape, name: opts.name, after: ref.index })
+  }
   const idx = sel.kind === 'scene' || sel.kind === 'flight' ? s.doc.scenes.findIndex((x) => x.id === sel.id) : -1
   const after = idx >= 0 ? s.doc.scenes[idx] : s.doc.scenes[s.doc.scenes.length - 1]
   const scene = newScene(s.doc, kind, { shape: opts.shape, name: opts.name, position: after ? [...after.position] : undefined })
@@ -41,10 +65,10 @@ export function addLedSign(text = 'WELCOME') {
  */
 export function resizeLedPanel(sceneId: string, layerId: string, cols: number, rows: number) {
   const s = getState()
-  const scene = s.doc.scenes.find((x) => x.id === sceneId)
+  const { scene, sub } = ctx(sceneId)
   const layer = scene?.layers.find((l) => l.id === layerId)
   if (!scene || !layer || layer.shape.kind !== 'grid') return
-  const n = s.doc.droneCount
+  const n = sub.droneCount
   const others = scene.layers.filter((l) => l.id !== layerId && !(l.role === 'park'))
   const counts = allocate(n, scene.layers.map((l) => l.weight))
   const otherCount = scene.layers.reduce((a, l, i) => (others.includes(l) ? a + counts[i]! : a), 0)
@@ -61,32 +85,50 @@ export function resizeLedPanel(sceneId: string, layerId: string, cols: number, r
     ...(rest > 0 ? [{ ...park, weight: rest }] : []),
   ]
   const next = fitScene({ ...scene, layers }, n, spacing, 'grow')
-  s.update((d) => {
-    const i = d.scenes.findIndex((x) => x.id === sceneId)
-    if (i >= 0) d.scenes[i] = next as Draft<Scene>
-  }, 'Resize LED panel', `led:${layerId}`)
+  put(sceneId, next, 'Resize LED panel', `led:${layerId}`)
+}
+
+/** A deep copy with fresh ids (layers, groups and their steps), keeping group membership. */
+function cloneScene(src: Scene): Scene {
+  const copy: Scene = JSON.parse(JSON.stringify(src))
+  copy.id = newId('scene')
+  const ids = new Map<string, string>()
+  copy.layers.forEach((l) => { const id = newId('layer'); ids.set(l.id, id); l.id = id })
+  copy.groups?.forEach((g) => {
+    g.id = newId('group')
+    g.layers = g.layers.map((x) => ids.get(x) ?? x)
+    g.steps = g.steps.map(cloneScene)
+  })
+  return copy
 }
 
 export function duplicateScene(id: string) {
   const s = getState()
-  const i = s.doc.scenes.findIndex((x) => x.id === id)
-  if (i < 0) return
-  const src = s.doc.scenes[i]!
-  const copy: Scene = JSON.parse(JSON.stringify(src))
-  copy.id = newId('scene')
-  copy.name = `${src.name} copy`
-  copy.layers.forEach((l) => (l.id = newId('layer')))
-  s.update((d) => { d.scenes.splice(i + 1, 0, copy as Draft<Scene>) }, 'Duplicate scene')
+  const ref = findScene(s.doc, id)
+  if (!ref) return
+  const copy = cloneScene(ref.scene)
+  copy.name = `${ref.scene.name} copy`
+  s.update((d) => {
+    const r = findScene(d as ShowDoc, id)
+    if (!r) return
+    if (r.group) r.group.steps.splice(r.index + 1, 0, copy)
+    else d.scenes.splice(r.index + 1, 0, copy as Draft<Scene>)
+  }, 'Duplicate scene')
   s.select({ kind: 'scene', id: copy.id })
 }
 
 export function deleteScene(id: string) {
   const s = getState()
-  const i = s.doc.scenes.findIndex((x) => x.id === id)
-  if (i < 0) return
-  const name = s.doc.scenes[i]!.name
-  s.update((d) => { d.scenes.splice(i, 1) }, `Delete ${name}`)
-  const next = s.doc.scenes[i + 1] ?? s.doc.scenes[i - 1]
+  const ref = findScene(s.doc, id)
+  if (!ref) return
+  const list = ref.group ? ref.group.steps : s.doc.scenes
+  const next = list[ref.index + 1] ?? list[ref.index - 1] ?? ref.parent
+  s.update((d) => {
+    const r = findScene(d as ShowDoc, id)
+    if (!r) return
+    if (r.group) r.group.steps.splice(r.index, 1)
+    else d.scenes.splice(r.index, 1)
+  }, `Delete ${ref.scene.name}`)
   s.select(next ? { kind: 'scene', id: next.id } : { kind: 'show' })
 }
 
@@ -102,43 +144,33 @@ export function moveScene(id: string, to: number) {
 
 export function updateScene(id: string, recipe: (s: Draft<Scene>) => void, label = 'Edit scene', key?: string) {
   getState().update((d) => {
-    const sc = d.scenes.find((x) => x.id === id)
-    if (sc) recipe(sc)
+    const ref = findScene(d as ShowDoc, id)
+    if (ref) recipe(ref.scene as Draft<Scene>)
   }, label, key)
 }
 
 /** Replace a layer's shape, keeping safe spacing and the floor clearance. */
 export function setLayerShape(sceneId: string, layerId: string, shape: ShapeSpec, label = 'Change shape') {
-  const s = getState()
-  const scene = s.doc.scenes.find((x) => x.id === sceneId)
+  const { scene, sub } = ctx(sceneId)
   if (!scene) return
   const draft: Scene = { ...scene, layers: scene.layers.map((l) => (l.id === layerId ? { ...l, shape } : l)) }
-  const fitted = fitToAirspace(fitScene(draft, s.doc.droneCount, comfortableSpacing(s.doc.limits.minSpacing), 'grow'), s.doc)
-  s.update((d) => {
-    const i = d.scenes.findIndex((x) => x.id === sceneId)
-    if (i >= 0) d.scenes[i] = fitted as Draft<Scene>
-  }, label)
+  const fitted = fitToAirspace(fitScene(draft, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'grow'), sub)
+  put(sceneId, fitted, label)
 }
 
 export function changeLayerKind(sceneId: string, layerId: string, kind: ShapeKind) {
-  const s = getState()
-  const scene = s.doc.scenes.find((x) => x.id === sceneId)
+  const { scene, sub } = ctx(sceneId)
   const layer = scene?.layers.find((l) => l.id === layerId)
   if (!scene || !layer || layer.shape.kind === kind) return
   const next = newShape(kind)
   const s2: Scene = { ...scene, layers: scene.layers.map((l) => (l.id === layerId ? { ...l, shape: next } : l)) }
-  const fitted = fitToAirspace(fitScene(s2, s.doc.droneCount, comfortableSpacing(s.doc.limits.minSpacing), 'exact'), s.doc)
-  s.update((d) => {
-    const i = d.scenes.findIndex((x) => x.id === sceneId)
-    if (i < 0) return
-    d.scenes[i] = fitted as Draft<Scene>
-    if (scene.layers.length === 1 && scene.name === SHAPE_BY_KIND[layer.shape.kind].label) d.scenes[i]!.name = SHAPE_BY_KIND[kind].label
-  }, `Change to ${SHAPE_BY_KIND[kind].label}`)
+  const fitted = fitToAirspace(fitScene(s2, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'exact'), sub)
+  const renamed = scene.layers.length === 1 && scene.name === SHAPE_BY_KIND[layer.shape.kind].label ? { ...fitted, name: SHAPE_BY_KIND[kind].label } : fitted
+  put(sceneId, renamed, `Change to ${SHAPE_BY_KIND[kind].label}`)
 }
 
 export function addLayer(sceneId: string, kind: ShapeKind | 'spare') {
-  const s = getState()
-  const scene = s.doc.scenes.find((x) => x.id === sceneId)
+  const { scene, sub } = ctx(sceneId)
   if (!scene) return
   const spare = kind === 'spare'
   const layer = newLayer(newShape(spare ? 'grid' : kind), spare ? defaultEffect('off') : defaultEffect('solid', '#ffffff'))
@@ -148,47 +180,35 @@ export function addLayer(sceneId: string, kind: ShapeKind | 'spare') {
     layer.weight = 0.3
   }
   const s2: Scene = { ...scene, layers: [...scene.layers, layer] }
-  const fitted = fitToAirspace(fitScene(s2, s.doc.droneCount, comfortableSpacing(s.doc.limits.minSpacing), 'grow'), s.doc)
-  s.update((d) => {
-    const i = d.scenes.findIndex((x) => x.id === sceneId)
-    if (i >= 0) d.scenes[i] = fitted as Draft<Scene>
-  }, spare ? 'Park spare drones' : 'Add shape')
+  const fitted = fitToAirspace(fitScene(s2, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'grow'), sub)
+  put(sceneId, fitted, spare ? 'Park spare drones' : 'Add shape')
 }
 
 /** Use some of a scene's drones as spares in a role (parked, starfield, halo, frame, base). */
 export function addSpare(sceneId: string, role: SpareRole) {
-  const s = getState()
-  const scene = s.doc.scenes.find((x) => x.id === sceneId)
+  const { scene, sub } = ctx(sceneId)
   if (!scene) return
   // A bigger layout can make the scene's idle motion too fast: keep it safe.
-  const next = calmMotion(addSpareLayer(scene, s.doc, role, 0.3), s.doc)
-  s.update((d) => {
-    const i = d.scenes.findIndex((x) => x.id === sceneId)
-    if (i >= 0) d.scenes[i] = next as Draft<Scene>
-  }, `Spare drones: ${SPARE_ROLES.find((r) => r.role === role)?.label ?? role}`)
+  const next = calmMotion(addSpareLayer(scene, sub, role, 0.3), sub)
+  put(sceneId, next, `Spare drones: ${SPARE_ROLES.find((r) => r.role === role)?.label ?? role}`)
 }
 
 export function setSpareRole(sceneId: string, layerId: string, role: SpareRole) {
-  const s = getState()
-  const scene = s.doc.scenes.find((x) => x.id === sceneId)
+  const { scene, sub } = ctx(sceneId)
   if (!scene) return
-  const next = calmMotion(applySpareRole(scene, s.doc, layerId, role), s.doc)
-  s.update((d) => {
-    const i = d.scenes.findIndex((x) => x.id === sceneId)
-    if (i >= 0) d.scenes[i] = next as Draft<Scene>
-  }, `Spare drones: ${SPARE_ROLES.find((r) => r.role === role)?.label ?? role}`)
+  const next = calmMotion(applySpareRole(scene, sub, layerId, role), sub)
+  put(sceneId, next, `Spare drones: ${SPARE_ROLES.find((r) => r.role === role)?.label ?? role}`)
 }
 
 export function removeLayer(sceneId: string, layerId: string) {
-  updateScene(sceneId, (sc) => {
-    if (sc.layers.length > 1) sc.layers = sc.layers.filter((l) => l.id !== layerId)
-  }, 'Remove shape')
+  const { scene } = ctx(sceneId)
+  if (!scene || scene.layers.length < 2) return
+  put(sceneId, pruneGroups({ ...scene, layers: scene.layers.filter((l) => l.id !== layerId) }), 'Remove shape')
 }
 
 /** Set one layer's drone count; the other layers share the remainder in proportion. */
 export function setLayerCount(sceneId: string, layerId: string, count: number, counts: number[]) {
-  const s = getState()
-  const n = s.doc.droneCount
+  const n = ctx(sceneId).sub.droneCount
   updateScene(sceneId, (sc) => {
     const i = sc.layers.findIndex((l) => l.id === layerId)
     if (i < 0) return
@@ -201,20 +221,16 @@ export function setLayerCount(sceneId: string, layerId: string, count: number, c
 }
 
 export function fitSceneToSpacing(sceneId: string, mode: 'exact' | 'grow' = 'exact', target?: number) {
-  const s = getState()
-  const scene = s.doc.scenes.find((x) => x.id === sceneId)
+  const { scene, sub } = ctx(sceneId)
   if (!scene) return
-  const t = target ?? comfortableSpacing(s.doc.limits.minSpacing)
-  const fitted = fitToAirspace(fitScene(scene, s.doc.droneCount, t, mode), s.doc)
-  s.update((d) => {
-    const i = d.scenes.findIndex((x) => x.id === sceneId)
-    if (i >= 0) d.scenes[i] = fitted as Draft<Scene>
-  }, 'Fit to safe spacing')
+  const t = target ?? comfortableSpacing(sub.limits.minSpacing)
+  const fitted = fitToAirspace(fitScene(scene, sub.droneCount, t, mode), sub)
+  put(sceneId, fitted, 'Fit to safe spacing')
 }
 
 export function applyFix(action: FixAction) {
   const s = getState()
-  const labels: Record<FixAction['kind'], string> = { 'fit-spacing': 'Fit to safe spacing', 'set-spin': 'Slow spin', move: 'Move scene', 'grid-spacing': 'Pad spacing', 'fit-airspace': 'Shrink to fit airspace', 'calm-hold': 'Calm hold motion', 'flight-style': 'Fly direct' }
+  const labels: Record<FixAction['kind'], string> = { 'fit-spacing': 'Fit to safe spacing', 'set-spin': 'Slow spin', move: 'Move scene', 'grid-spacing': 'Pad spacing', 'fit-airspace': 'Shrink to fit airspace', 'calm-hold': 'Calm hold motion', 'flight-style': 'Fly direct', 'separate-groups': 'Move groups apart' }
   s.replaceDoc(applyFixToDoc(s.doc, action), labels[action.kind])
   s.set({ focus: null })
 }
@@ -260,8 +276,7 @@ export function nudgeScene(id: string, delta: [number, number, number]) {
  * safe spacing.
  */
 export function transformScene(id: string, t: { position?: [number, number, number]; rotation?: [number, number, number]; scale?: number }, label: string) {
-  const s = getState()
-  const scene = s.doc.scenes.find((x) => x.id === id)
+  const { scene, sub } = ctx(id)
   if (!scene) return
   let next: Scene = { ...scene }
   if (t.position) next.position = t.position.map((v) => Math.round(v * 100) / 100) as [number, number, number]
@@ -269,18 +284,15 @@ export function transformScene(id: string, t: { position?: [number, number, numb
   if (t.scale && Math.abs(t.scale - 1) > 1e-4) {
     const k = t.scale
     next.layers = next.layers.map((l) => ({ ...l, shape: { ...l.shape, size: Math.round(l.shape.size * k * 10) / 10 } as ShapeSpec, offset: l.offset.map((v) => v * k) as [number, number, number] }))
-    next = fitScene(next, s.doc.droneCount, comfortableSpacing(s.doc.limits.minSpacing), 'grow')
+    next = fitScene(next, sub.droneCount, comfortableSpacing(sub.limits.minSpacing), 'grow')
   }
-  s.update((d) => {
-    const i = d.scenes.findIndex((x) => x.id === id)
-    if (i >= 0) d.scenes[i] = next as Draft<Scene>
-  }, label)
+  put(id, next, label)
 }
 
 /** Fly the camera to a formation (orbit view). */
 export function frameScene(id: string) {
   const s = getState()
-  const cs = s.compiled?.scenes.find((x) => x.id === id)
+  const cs = s.compiled ? findCompiledScene(s.compiled, id) : undefined
   if (!cs) return
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity]
   for (let i = 0; i < cs.points.length; i += 3) for (let a = 0; a < 3; a++) { lo[a] = Math.min(lo[a]!, cs.points[i + a]!); hi[a] = Math.max(hi[a]!, cs.points[i + a]!) }
@@ -293,7 +305,7 @@ export function frameScene(id: string) {
 
 export function seekToScene(id: string) {
   const c = getState().compiled
-  const t = c?.sceneTimes.find((x) => x.id === id)
+  const t = c ? findSceneTime(c, id) : undefined
   if (t) seek(t.holdStart + Math.min(0.5, (t.holdEnd - t.holdStart) / 2))
 }
 
@@ -311,6 +323,81 @@ export function stepScene(dir: 1 | -1) {
     seekToScene(target.id)
   } else if (dir < 0) seek(0)
   else seek(c.duration)
+}
+
+// --- Groups (splits and merges) -------------------------------------------------------
+
+
+/** A new formation for a group's drones, sized for them and kept inside the airspace. */
+function newStep(sub: ShowDoc, kind: ShapeKind, position: [number, number, number], opts: { shape?: ShapeSpec; name?: string } = {}): Scene {
+  const base = newScene(sub, kind, { shape: opts.shape, name: opts.name, position })
+  return { ...base, hold: 6 }
+}
+
+export { SPLIT_MODES, type SplitMode }
+
+/**
+ * Split a scene into groups that each fly their own formations after its
+ * hold: by shape (spare drones stay), or the formation's drones in halves or
+ * thirds. Each group starts with one formation of its own, fanned out from
+ * where its drones are.
+ */
+export function splitScene(sceneId: string, mode?: SplitMode) {
+  const s = getState()
+  const { doc, groups } = splitSceneDoc(s.doc, sceneId, mode)
+  if (!groups.length) return
+  s.replaceDoc(tidySplit(doc, sceneId), 'Split into groups')
+  const first = groups.find((x) => x.steps.length)?.steps[0]
+  if (first) s.select({ kind: 'scene', id: first.id })
+}
+
+/** Merge a scene's groups back: remove them (their steps are deleted). */
+export function unsplitScene(sceneId: string) {
+  const { scene } = ctx(sceneId)
+  if (!scene?.groups) return
+  const { groups: _drop, ...rest } = scene
+  void _drop
+  put(sceneId, rest, 'Remove groups')
+}
+
+/** Add a formation to a group's own sequence (after `after`, or at the end). */
+export function addGroupStep(groupId: string, kind: ShapeKind, opts: { shape?: ShapeSpec; name?: string; after?: number } = {}) {
+  const s = getState()
+  const f = findGroup(s.doc, groupId)
+  if (!f) return undefined
+  const n = groupSizes(f.parent, s.doc.droneCount)[f.index] ?? 0
+  if (!n) return undefined
+  const sub = { ...s.doc, droneCount: n }
+  const at = opts.after !== undefined ? opts.after + 1 : f.group.steps.length
+  const prev = f.group.steps[at - 1]
+  const pos = prev ? [...prev.position] as [number, number, number] : [...f.parent.position] as [number, number, number]
+  const step = newStep(sub, kind, pos, opts)
+  s.update((d) => {
+    const g = findGroup(d as ShowDoc, groupId)
+    if (g) g.group.steps.splice(at, 0, step)
+  }, `Add ${step.name} to ${f.group.name}`)
+  s.select({ kind: 'scene', id: step.id })
+  return step
+}
+
+export function updateGroup(groupId: string, recipe: (g: Draft<Group>) => void, label: string, key?: string) {
+  getState().update((d) => {
+    const f = findGroup(d as ShowDoc, groupId)
+    if (f) recipe(f.group as Draft<Group>)
+  }, label, key)
+}
+
+export function deleteGroup(groupId: string) {
+  const s = getState()
+  const f = findGroup(s.doc, groupId)
+  if (!f) return
+  s.update((d) => {
+    const g = findGroup(d as ShowDoc, groupId)
+    if (!g) return
+    g.parent.groups!.splice(g.index, 1)
+    if (!g.parent.groups!.length) delete g.parent.groups
+  }, `Remove ${f.group.name}`)
+  s.select({ kind: 'scene', id: f.parent.id })
 }
 
 // --- Light cues --------------------------------------------------------------------

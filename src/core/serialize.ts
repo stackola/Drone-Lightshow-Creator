@@ -1,7 +1,7 @@
 // Project files: versioned JSON. Loading is defensive — any missing or
 // malformed field falls back to a sane default instead of crashing the editor.
 
-import type { AudioMeta, CascadeOrder, Effect, FlightSpec, Layer, LightCue, Limits, ModelPart, Scene, ShapeSpec, ShowDoc, Site, TransitionKind, TransitionStyle, Vec3 } from './types'
+import type { AudioMeta, CascadeOrder, Effect, FlightSpec, Group, Layer, LightCue, Limits, ModelPart, Scene, ShapeSpec, ShowDoc, Site, TransitionKind, TransitionStyle, Vec3 } from './types'
 import { MAX_PARTS } from './model3d'
 import { DEFAULT_LIMITS, DEFAULT_SITE, newId } from './defaults'
 import { SHAPE_BY_KIND } from './shapes'
@@ -90,7 +90,7 @@ export function normalizeDoc(r: Obj): ShowDoc {
     droneCount: Math.round(num(r.droneCount, 100, 1, 2000)),
     limits,
     site,
-    scenes: (r.scenes as unknown[]).filter(isObj).map(scene),
+    scenes: (r.scenes as unknown[]).filter(isObj).map((x) => scene(x)),
     cues: Array.isArray(r.cues) ? r.cues.filter(isObj).map(cue) : [],
     audio: audioMeta(r.audio),
   }
@@ -115,8 +115,20 @@ function transitionStyle(v: unknown): TransitionStyle | undefined {
   return out
 }
 
-function scene(s: Obj): Scene {
+function scene(s: Obj, nested = false): Scene {
   const layers = Array.isArray(s.layers) ? s.layers.filter(isObj).map(layer).filter((l): l is Layer => !!l) : []
+  const ids = new Set(layers.map((l) => l.id))
+  // Groups (steps never have their own), each claiming existing layers.
+  const groups: Group[] = nested || !Array.isArray(s.groups) ? [] : s.groups.filter(isObj).slice(0, 12).map((g) => ({
+    id: str(g.id, newId('group')),
+    name: str(g.name, 'Group').slice(0, 80),
+    layers: Array.isArray(g.layers) ? g.layers.filter((x): x is string => typeof x === 'string' && ids.has(x)) : [],
+    delay: num(g.delay, 0, 0, 600),
+    ...(isObj(g.part) && (g.part.axis === 'x' || g.part.axis === 'y')
+      ? { part: { axis: g.part.axis as 'x' | 'y', of: Math.round(num(g.part.of, 2, 1, 8)), index: Math.min(Math.round(num(g.part.of, 2, 1, 8)) - 1, Math.round(num(g.part.index, 0, 0, 7))) } }
+      : {}),
+    steps: Array.isArray(g.steps) ? g.steps.filter(isObj).slice(0, 40).map((st) => scene(st, true)) : [],
+  })).filter((g) => g.layers.length > 0)
   return {
     id: str(s.id, newId('scene')),
     name: str(s.name, 'Scene').slice(0, 120),
@@ -129,6 +141,7 @@ function scene(s: Obj): Scene {
       ? { motion: { kind: s.motion.kind as 'breathe' | 'bob' | 'sway', amount: num(s.motion.amount, 0, 0, s.motion.kind === 'breathe' ? 1 : s.motion.kind === 'bob' ? 50 : 90), period: num(s.motion.period, 4, 0.5, 120) } }
       : {}),
     layers: layers.length ? layers : [{ id: newId('layer'), shape: { kind: 'circle', size: 30, fill: 'filled' }, weight: 1, offset: [0, 0, 0], rotation: [0, 0, 0], effect: defaultEffect('solid') }],
+    ...(groups.length ? { groups } : {}),
   }
 }
 

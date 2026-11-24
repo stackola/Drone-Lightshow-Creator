@@ -67,11 +67,13 @@ export function alignScenesToBars(doc: ShowDoc, opts: { holdBars?: boolean } = {
     aligned = 0
     const scenes = doc.scenes.map((scene, i) => {
       const st = c.sceneTimes[i]!
+      // Groups flying their own sequences after the hold keep their own timing.
+      const split = st.splitEnd - st.holdEnd
       // Re-derive from the automatic (safe, comfortable) duration so re-aligning tightens timing again.
       const safe = autoFlightDuration(st.minFlight)
       const arrival = nextBarAtOrAfter(bars, t + safe)
       if (arrival === null) {
-        t += safe + scene.hold
+        t += safe + scene.hold + split
         return scene
       }
       aligned++
@@ -83,7 +85,7 @@ export function alignScenesToBars(doc: ShowDoc, opts: { holdBars?: boolean } = {
         hold = end !== undefined ? end - arrival : n * barLen
       }
       const flight = Math.round((arrival - t) * 1000) / 1000
-      t = arrival + hold
+      t = arrival + hold + split
       return { ...scene, hold: Math.round(hold * 1000) / 1000, flight: { ...scene.flight, duration: flight } }
     })
     doc = { ...doc, scenes }
