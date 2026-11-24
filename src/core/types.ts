@@ -23,6 +23,8 @@ export interface Limits {
   maxSpeedDown: number
   /** Maximum acceleration magnitude (m/s²). */
   maxAccel: number
+  /** Maximum jerk — how fast acceleration may change (m/s³). */
+  maxJerk: number
   /** Formations must stay at or above this altitude (m). */
   minAltitude: number
   /** Nothing may fly above this altitude (m). */
@@ -144,8 +146,13 @@ export type ModelPart =
 
 export type ModelPartType = ModelPart['type']
 
+/** What a secondary layer of otherwise idle drones is doing. */
+export type SpareRole = 'park' | 'starfield' | 'halo' | 'frame' | 'base'
+
 export interface Layer {
   id: string
+  /** Set on layers that hold the scene's spare drones. */
+  role?: SpareRole
   shape: ShapeSpec
   /** Relative share of the drones (counts use largest-remainder allocation). */
   weight: number
@@ -168,7 +175,21 @@ export interface Scene {
   rotation: Vec3
   /** Degrees per second about the vertical axis while held (eases in and out). */
   spin: number
+  /** Gentle motion while held; always eases in and out and returns to rest. */
+  motion?: HoldMotion
   layers: Layer[]
+}
+
+/**
+ * Hold motions are chosen so they can never bring drones closer together:
+ * breathe only ever expands the formation; bob and sway move it as one rigid body.
+ */
+export interface HoldMotion {
+  kind: 'none' | 'breathe' | 'bob' | 'sway'
+  /** breathe: extra size as a fraction (0.15 = up to 15% larger); bob: metres up/down; sway: degrees either way. */
+  amount: number
+  /** Seconds per cycle. */
+  period: number
 }
 
 export interface AudioMeta {

@@ -1,18 +1,21 @@
-// Exact safety validation — no sampling, no fudge factors.
+// Exact safety validation — no fudge factors.
 //
-// • Flights are synchronised straight-line moves sharing one time-scaling s(t),
-//   so the distance between drones i and j is |A + s·B| for fixed vectors A, B.
-//   Its minimum over s ∈ [0,1] has a closed form, so every pair is checked
-//   exactly.
-// • Holds are rigid (static or spinning about a vertical axis), so spacing is
-//   constant and altitude is constant.
-// • Straight segments reach their altitude/radius extremes at the endpoints,
-//   which are formation or pad positions — so those are checked there.
-// • Speeds and accelerations follow from the min-jerk peaks (motion.ts).
+// • Every flight leg is a synchronised straight-line move sharing one
+//   time-scaling s(t), so the distance between drones i and j is |A + s·B| for
+//   fixed vectors A, B. Its minimum over s ∈ [0,1] has a closed form, so every
+//   pair is checked exactly, on every leg (detours have up to three).
+// • Holds are spin plus breathe (uniform scale ≥ 1 about the centre), bob
+//   (vertical shift) or sway (turn back and forth). None of these brings two
+//   drones closer than in the base formation, so held spacing is the base
+//   spacing. Altitude and radius extremes are bounded over the whole pose range.
+// • Straight legs reach their altitude/radius extremes at their endpoints, so
+//   formation, pad and detour waypoints are checked there.
+// • Flight speed, acceleration and jerk come from the exact S-curve peaks;
+//   hold motion peaks are measured on the closed-form trajectory.
 
-import type { Compiled, CompiledScene } from './compile'
-import { moveExtents, profileInverse, profilePeaks, spinAngle, spinPeaks } from './motion'
-import type { ShowDoc } from './types'
+import type { Compiled, CompiledScene, Segment } from './compile'
+import { NO_MOTION, holdPeaks, holdRange, isMoving, moveExtents, profileInverse, profilePeaks, type HoldRange, type MotionPeaks } from './motion'
+import type { HoldMotion, Limits, ShowDoc } from './types'
 import { DEG } from './math'
 
 export type FixAction =
@@ -22,6 +25,8 @@ export type FixAction =
   | { kind: 'grid-spacing'; value: number }
   /** The formation is bigger than the airspace: use fewer drones (park the rest) or a filled style. */
   | { kind: 'fit-airspace'; sceneId: string }
+  /** Scale down spin and hold motion together. */
+  | { kind: 'calm-hold'; sceneId: string; factor: number }
 
 export interface Issue {
   id: string
@@ -44,6 +49,7 @@ export interface SafetyStats {
   peakClimb: number
   peakDescent: number
   peakAccel: number
+  peakJerk: number
   maxAltitude: number
   maxRadius: number
   duration: number
@@ -56,60 +62,8 @@ export interface Validation {
 
 const EPS = 1e-6
 
-/** The spacing that guarantees collision-free optimal transitions (√2·min, rounded up). */
-export function comfortableSpacing(minSpacing: number): number {
-  return Math.ceil(minSpacing * Math.SQRT2 * 1.03 * 10) / 10
-}
-
-export function closestPair(pts: Float32Array): { i: number; j: number; d: number; below: (limit: number) => number } {
-  const n = pts.length / 3
-  let bi = -1, bj = -1, best = Infinity
-  for (let i = 0; i < n; i++) {
-    const x = pts[i * 3]!, y = pts[i * 3 + 1]!, z = pts[i * 3 + 2]!
-    for (let j = i + 1; j < n; j++) {
-      const dx = x - pts[j * 3]!, dy = y - pts[j * 3 + 1]!, dz = z - pts[j * 3 + 2]!
-      const d = dx * dx + dy * dy + dz * dz
-      if (d < best) { best = d; bi = i; bj = j }
-    }
-  }
-  return {
-    i: bi, j: bj, d: Math.sqrt(best),
-    below(limit: number) {
-      const l2 = limit * limit
-      let count = 0
-      for (let i = 0; i < n; i++)
-        for (let j = i + 1; j < n; j++) {
-          const dx = pts[i * 3]! - pts[j * 3]!, dy = pts[i * 3 + 1]! - pts[j * 3 + 1]!, dz = pts[i * 3 + 2]! - pts[j * 3 + 2]!
-          if (dx * dx + dy * dy + dz * dz < l2 - EPS) count++
-        }
-      return count
-    },
-  }
-}
-
-/** Exact closest approach of all pairs during a synchronised straight-line move. */
-export function flightClosestApproach(from: Float32Array, to: Float32Array, limit: number): { d: number; s: number; i: number; j: number; pairsBelow: number } {
-  const n = from.length / 3
-  let best = Infinity, bs = 0, bi = -1, bj = -1, below = 0
-  const l2 = limit * limit
-  for (let i = 0; i < n; i++) {
-    const ax = from[i * 3]!, ay = from[i * 3 + 1]!, az = from[i * 3 + 2]!
-    const ex = to[i * 3]! - ax, ey = to[i * 3 + 1]! - ay, ez = to[i * 3 + 2]! - az
-    for (let j = i + 1; j < n; j++) {
-      const Ax = ax - from[j * 3]!, Ay = ay - from[j * 3 + 1]!, Az = az - from[j * 3 + 2]!
-      const Bx = ex - (to[j * 3]! - from[j * 3]!), By = ey - (to[j * 3 + 1]! - from[j * 3 + 1]!), Bz = ez - (to[j * 3 + 2]! - from[j * 3 + 2]!)
-      const bb = Bx * Bx + By * By + Bz * Bz
-      let s = bb > 1e-12 ? -(Ax * Bx + Ay * By + Az * Bz) / bb : 0
-      if (s < 0) s = 0
-      else if (s > 1) s = 1
-      const x = Ax + s * Bx, y = Ay + s * By, z = Az + s * Bz
-      const d = x * x + y * y + z * z
-      if (d < l2 - EPS) below++
-      if (d < best) { best = d; bs = s; bi = i; bj = j }
-    }
-  }
-  return { d: Math.sqrt(best), s: bs, i: bi, j: bj, pairsBelow: below }
-}
+export { comfortableSpacing, closestPair, flightClosestApproach } from './separation'
+import { comfortableSpacing, closestPair, flightClosestApproach } from './separation'
 
 function fmt(v: number, digits = 1): string {
   return v.toFixed(digits)
@@ -121,24 +75,66 @@ export function formatTime(t: number): string {
   return `${m}:${s.toFixed(1).padStart(4, '0')}`
 }
 
-/** Largest spin rate (deg/s, same sign) that respects speed and acceleration limits. */
-export function maxSafeSpin(spinDeg: number, hold: number, radius: number, maxSpeed: number, maxAccel: number): number {
-  const sign = Math.sign(spinDeg) || 1
-  let lo = 0, hi = Math.abs(spinDeg)
-  for (let k = 0; k < 40; k++) {
+type Rel = [number, number, number]
+
+function withinLimits(p: MotionPeaks, L: Limits): boolean {
+  return p.speedH <= L.maxSpeedH && p.up <= L.maxSpeedUp && p.down <= L.maxSpeedDown && p.accel <= L.maxAccel && p.jerk <= L.maxJerk
+}
+
+/** Largest factor f ∈ [0, 1] such that spin × f and motion amount × f respect every limit. */
+export function safeHoldFactor(rels: Rel[], omega: number, hold: number, motion: HoldMotion | undefined, L: Limits): number {
+  const at = (f: number) => holdPeaks(rels, omega * f, hold, motion ? { ...motion, amount: motion.amount * f } : NO_MOTION)
+  if (withinLimits(at(1), L)) return 1
+  let lo = 0, hi = 1
+  for (let k = 0; k < 22; k++) {
     const mid = (lo + hi) / 2
-    const p = spinPeaks(mid * DEG, hold, radius)
-    if (p.speed <= maxSpeed && p.accel <= maxAccel) lo = mid
+    if (withinLimits(at(mid), L)) lo = mid
+    else hi = mid
+  }
+  return Math.floor(lo * 100) / 100
+}
+
+/** Largest spin rate (deg/s, same sign) for a drone `radius` from the axis that respects every limit. */
+export function maxSafeSpin(spinDeg: number, hold: number, radius: number, L: Limits, motion?: HoldMotion): number {
+  const sign = Math.sign(spinDeg) || 1
+  const rels: Rel[] = [[radius, 0, 0]]
+  let lo = 0, hi = Math.abs(spinDeg)
+  for (let k = 0; k < 30; k++) {
+    const mid = (lo + hi) / 2
+    if (withinLimits(holdPeaks(rels, sign * mid * DEG, hold, motion), L)) lo = mid
     else hi = mid
   }
   return sign * Math.floor(lo * 10) / 10
+}
+
+/**
+ * The points of a formation that move fastest under spin, breathe, bob and
+ * sway: farthest from the centre, farthest from the vertical axis, highest
+ * and lowest (relative to the centre).
+ */
+export function extremeRels(cs: CompiledScene): Rel[] {
+  const [cx, cy, cz] = cs.center
+  const n = cs.points.length / 3
+  const best = [-1, -1, -1, -1], val = [-Infinity, -Infinity, -Infinity, -Infinity]
+  for (let k = 0; k < n; k++) {
+    const x = cs.points[k * 3]! - cx, y = cs.points[k * 3 + 1]! - cy, z = cs.points[k * 3 + 2]! - cz
+    const v = [x * x + y * y + z * z, x * x + z * z, y, -y]
+    for (let m = 0; m < 4; m++) if (v[m]! > val[m]!) { val[m] = v[m]!; best[m] = k }
+  }
+  const ks = [...new Set(best.filter((k) => k >= 0))]
+  return ks.map((k) => [cs.points[k * 3]! - cx, cs.points[k * 3 + 1]! - cy, cs.points[k * 3 + 2]! - cz])
+}
+
+function segmentLabel(seg: Segment, sceneName: (i: number) => string): string {
+  if (seg.kind === 'flight') return seg.into >= 0 ? `Flight into “${sceneName(seg.into)}”` : 'Return flight'
+  return seg.kind === 'takeoff' ? 'Takeoff' : seg.kind === 'land' ? 'Landing' : 'Hold'
 }
 
 export function validate(doc: ShowDoc, c: Compiled): Validation {
   const L = doc.limits
   const issues: Issue[] = []
   const stats: SafetyStats = {
-    minDistance: Infinity, minDistanceTime: 0, peakSpeedH: 0, peakClimb: 0, peakDescent: 0, peakAccel: 0,
+    minDistance: Infinity, minDistanceTime: 0, peakSpeedH: 0, peakClimb: 0, peakDescent: 0, peakAccel: 0, peakJerk: 0,
     maxAltitude: 0, maxRadius: 0, duration: c.duration,
   }
   const sceneName = (i: number) => doc.scenes[i]?.name ?? `Scene ${i + 1}`
@@ -181,12 +177,16 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
       }
     }
 
-    // Altitude (spin keeps altitude constant).
+    // Altitude: spin and sway keep it; breathe scales heights about the centre, bob shifts them.
+    const range = holdRange(cs.omega, cs.hold, cs.motion)
+    const cy = cs.center[1]
     let minY = Infinity, maxY = -Infinity, lowK = 0, highK = 0
     for (let k = 0; k < c.n; k++) {
-      const y = cs.points[k * 3 + 1]!
-      if (y < minY) { minY = y; lowK = k }
-      if (y > maxY) { maxY = y; highK = k }
+      const rel = cs.points[k * 3 + 1]! - cy
+      const lowY = cy + rel * (rel < 0 ? range.scaleMax : 1) + range.dyMin
+      const highY = cy + rel * (rel > 0 ? range.scaleMax : 1) + range.dyMax
+      if (lowY < minY) { minY = lowY; lowK = k }
+      if (highY > maxY) { maxY = highY; highK = k }
     }
     stats.maxAltitude = Math.max(stats.maxAltitude, maxY)
     // Moving can't help a formation taller than the airspace — it needs fewer drones.
@@ -213,14 +213,14 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
       })
     }
 
-    // Geofence radius, exact over the whole spin.
-    const { r, k: farK } = maxRadius(cs)
+    // Geofence radius, exact over the whole range of turn and scale.
+    const { r, k: farK } = maxRadius(cs, range)
     stats.maxRadius = Math.max(stats.maxRadius, r)
     if (r - EPS > L.maxRadius) {
       // If the formation itself fits inside the circle, move it toward the centre; otherwise shrink it.
       const ch = Math.hypot(cs.center[0], cs.center[2])
       const excess = Math.ceil((r - L.maxRadius + 1) * 2) / 2
-      const canMove = cs.spinRadius < L.maxRadius - 2 && ch > excess
+      const canMove = cs.spinRadius * range.scaleMax < L.maxRadius - 2 && ch > excess
       issues.push({
         id: `fence:${cs.id}`, severity: 'error', kind: 'geofence', sceneId: cs.id,
         title: `“${scene.name}” leaves the flight area`,
@@ -232,20 +232,36 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
       })
     }
 
-    // Spin dynamics.
-    if (cs.omega !== 0) {
-      const p = spinPeaks(cs.omega, cs.hold, cs.spinRadius)
-      stats.peakSpeedH = Math.max(stats.peakSpeedH, p.speed)
+    // Spin and hold-motion dynamics, measured on the fastest-moving points.
+    if (cs.omega !== 0 || isMoving(cs.motion)) {
+      const rels = extremeRels(cs)
+      const p = holdPeaks(rels, cs.omega, cs.hold, cs.motion)
+      stats.peakSpeedH = Math.max(stats.peakSpeedH, p.speedH)
+      stats.peakClimb = Math.max(stats.peakClimb, p.up)
+      stats.peakDescent = Math.max(stats.peakDescent, p.down)
       stats.peakAccel = Math.max(stats.peakAccel, p.accel)
-      if (p.speed - EPS > L.maxSpeedH || p.accel - EPS > L.maxAccel) {
-        const safe = maxSafeSpin(scene.spin, cs.hold, cs.spinRadius, L.maxSpeedH, L.maxAccel)
-        const what = p.speed - EPS > L.maxSpeedH ? `outer drones reach ${fmt(p.speed)} m/s (limit ${fmt(L.maxSpeedH)})` : `outer drones accelerate at ${fmt(p.accel)} m/s² (limit ${fmt(L.maxAccel)})`
+      stats.peakJerk = Math.max(stats.peakJerk, p.jerk)
+      const over = (v: number, lim: number) => v - 1e-3 * Math.max(1, lim) > lim
+      const what =
+        over(p.speedH, L.maxSpeedH) ? `drones reach ${fmt(p.speedH)} m/s (limit ${fmt(L.maxSpeedH)})`
+          : over(p.up, L.maxSpeedUp) ? `drones climb at ${fmt(p.up)} m/s (limit ${fmt(L.maxSpeedUp)})`
+            : over(p.down, L.maxSpeedDown) ? `drones descend at ${fmt(p.down)} m/s (limit ${fmt(L.maxSpeedDown)})`
+              : over(p.accel, L.maxAccel) ? `drones accelerate at ${fmt(p.accel)} m/s² (limit ${fmt(L.maxAccel)})`
+                : over(p.jerk, L.maxJerk) ? `acceleration changes at ${fmt(p.jerk)} m/s³ (jerk limit ${fmt(L.maxJerk)})`
+                  : null
+      if (what) {
+        const moving = isMoving(cs.motion)
+        const factor = safeHoldFactor(rels, cs.omega, cs.hold, cs.motion, L)
+        const motionName = moving ? cs.motion.kind === 'breathe' ? 'breathing' : cs.motion.kind === 'bob' ? 'bobbing' : 'swaying' : ''
+        const fix: Issue['fix'] = moving
+          ? { label: `Calm ${scene.spin ? 'spin and motion' : 'motion'} to ${Math.round(factor * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor } }
+          : { label: `Slow to ${fmt(Math.trunc(scene.spin * factor * 10) / 10)}°/s`, action: { kind: 'set-spin', sceneId: cs.id, value: Math.trunc(scene.spin * factor * 10) / 10 } }
         issues.push({
           id: `spin:${cs.id}`, severity: 'error', kind: 'spin', sceneId: cs.id,
-          title: `“${scene.name}” spins too fast`,
-          detail: `At ${fmt(scene.spin)}°/s ${what}.`,
+          title: moving ? `“${scene.name}” moves too fast while held` : `“${scene.name}” spins too fast`,
+          detail: moving ? `While ${scene.spin ? `spinning at ${fmt(scene.spin)}°/s and ` : ''}${motionName}, ${what}.` : `At ${fmt(scene.spin)}°/s ${what}.`,
           time: ts.holdStart + Math.min(cs.hold / 2, 3), drones: [],
-          fix: { label: `Slow to ${fmt(safe)}°/s`, action: { kind: 'set-spin', sceneId: cs.id, value: safe } },
+          fix,
         })
       }
     }
@@ -254,60 +270,105 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
   // --- Flights, takeoff, landing ---
   for (const seg of c.segments) {
     if (seg.kind === 'hold') continue
-    const T = seg.t1 - seg.t0
     const n = c.n
-    // Dynamics: exact peaks of the shared S-curve.
-    const ext = moveExtents(seg.from, seg.to)
-    const wi = Math.max(0, ext.drone)
-    if (T > 0) {
-      const pk = profilePeaks(ext, seg.profile)
-      const vh = pk.h, vu = pk.up, vd = pk.down, a = pk.acc
-      stats.peakSpeedH = Math.max(stats.peakSpeedH, vh)
-      stats.peakClimb = Math.max(stats.peakClimb, vu)
-      stats.peakDescent = Math.max(stats.peakDescent, vd)
-      stats.peakAccel = Math.max(stats.peakAccel, a)
-      const label = seg.kind === 'flight' ? (seg.into >= 0 ? `Flight into “${sceneName(seg.into)}”` : 'Return flight') : seg.kind === 'takeoff' ? 'Takeoff' : 'Landing'
-      const over = (v: number, lim: number) => v - 1e-3 > lim
-      if (over(vh, L.maxSpeedH) || over(vu, L.maxSpeedUp) || over(vd, L.maxSpeedDown)) {
-        issues.push({
-          id: `speed:${seg.t0}`, severity: 'error', kind: 'speed', sceneId: seg.kind === 'flight' && seg.into >= 0 ? doc.scenes[seg.into]!.id : undefined,
-          title: `${label} is too fast`,
-          detail: `Peak speeds ${fmt(vh)} m/s horizontal, ${fmt(vu)} up, ${fmt(vd)} down.`,
-          time: seg.t0 + T / 2, drones: [wi],
-        })
+    const label = segmentLabel(seg, sceneName)
+    const into = seg.kind === 'flight' && seg.into >= 0 ? c.scenes[seg.into]! : null
+    const fromIdx = seg.kind === 'flight' ? (seg.into >= 0 ? seg.into - 1 : c.scenes.length - 1) : -1
+    const from = fromIdx >= 0 ? c.scenes[fromIdx]! : null
+    const sceneId = into?.id
+    // Suggest enlarging whichever end is densest below the guarantee threshold.
+    const denser = [from, into].filter((x): x is CompiledScene => !!x && x.spacing + EPS < comfy).sort((a, b) => a.spacing - b.spacing)[0]
+    const enlarge = denser ? { label: `Enlarge “${doc.scenes[denser.index]!.name}”`, action: { kind: 'fit-spacing' as const, sceneId: denser.id, target: comfy } } : undefined
+
+    // Dynamics: exact peaks of each leg's S-curve.
+    const worst = { vh: 0, vu: 0, vd: 0, a: 0, j: 0, aAt: seg.t0, jAt: seg.t0, drone: 0 }
+    for (const leg of seg.legs) {
+      const ext = moveExtents(leg.from, leg.to)
+      const T = leg.t1 - leg.t0
+      if (T > 0) {
+        const pk = profilePeaks(ext, leg.profile)
+        if (pk.h + pk.up + pk.down > worst.vh + worst.vu + worst.vd) worst.drone = Math.max(0, ext.drone)
+        worst.vh = Math.max(worst.vh, pk.h)
+        worst.vu = Math.max(worst.vu, pk.up)
+        worst.vd = Math.max(worst.vd, pk.down)
+        if (pk.acc > worst.a) { worst.a = pk.acc; worst.aAt = leg.t0 + leg.profile.r / 2 }
+        if (pk.jerk > worst.j) { worst.j = pk.jerk; worst.jAt = leg.t0 }
+      } else if (ext.d > 1e-6) {
+        issues.push({ id: `teleport:${leg.t0}`, severity: 'error', kind: 'speed', sceneId, title: 'Instant move', detail: `${label} has a zero-duration move.`, time: leg.t0, drones: [Math.max(0, ext.drone)] })
       }
-      if (over(a, L.maxAccel)) {
-        issues.push({
-          id: `accel:${seg.t0}`, severity: 'error', kind: 'accel',
-          title: `${label} accelerates too hard`,
-          detail: `Peak ${fmt(a)} m/s² (limit ${fmt(L.maxAccel)}).`,
-          time: seg.t0 + seg.profile.r / 2, drones: [wi],
-        })
+    }
+    stats.peakSpeedH = Math.max(stats.peakSpeedH, worst.vh)
+    stats.peakClimb = Math.max(stats.peakClimb, worst.vu)
+    stats.peakDescent = Math.max(stats.peakDescent, worst.vd)
+    stats.peakAccel = Math.max(stats.peakAccel, worst.a)
+    stats.peakJerk = Math.max(stats.peakJerk, worst.j)
+    const over = (v: number, lim: number) => v - 1e-3 > lim
+    const mid = (seg.t0 + seg.t1) / 2
+    if (over(worst.vh, L.maxSpeedH) || over(worst.vu, L.maxSpeedUp) || over(worst.vd, L.maxSpeedDown)) {
+      issues.push({
+        id: `speed:${seg.t0}`, severity: 'error', kind: 'speed', sceneId,
+        title: `${label} is too fast`,
+        detail: `Peak speeds ${fmt(worst.vh)} m/s horizontal, ${fmt(worst.vu)} up, ${fmt(worst.vd)} down.`,
+        time: mid, drones: [worst.drone],
+      })
+    }
+    if (over(worst.a, L.maxAccel)) {
+      issues.push({
+        id: `accel:${seg.t0}`, severity: 'error', kind: 'accel', sceneId,
+        title: `${label} accelerates too hard`,
+        detail: `Peak ${fmt(worst.a)} m/s² (limit ${fmt(L.maxAccel)}).`,
+        time: worst.aAt, drones: [worst.drone],
+      })
+    }
+    if (over(worst.j, L.maxJerk)) {
+      issues.push({
+        id: `jerk:${seg.t0}`, severity: 'error', kind: 'accel', sceneId,
+        title: `${label} changes speed too abruptly`,
+        detail: `Peak jerk ${fmt(worst.j)} m/s³ (limit ${fmt(L.maxJerk)}).`,
+        time: worst.jAt, drones: [worst.drone],
+      })
+    }
+
+    // Detour waypoints: legs are straight, so their extremes are at the endpoints.
+    for (let li = 0; li + 1 < seg.legs.length; li++) {
+      const leg = seg.legs[li]!
+      const p = leg.to
+      let lo = Infinity, hi = -Infinity, far = 0, farI = 0, loI = 0, hiI = 0
+      for (let i = 0; i < n; i++) {
+        const y = p[i * 3 + 1]!, r = Math.hypot(p[i * 3]!, p[i * 3 + 2]!)
+        if (y < lo) { lo = y; loI = i }
+        if (y > hi) { hi = y; hiI = i }
+        if (r > far) { far = r; farI = i }
       }
-    } else if (ext.d > 1e-6) {
-      issues.push({ id: `teleport:${seg.t0}`, severity: 'error', kind: 'speed', title: 'Instant move', detail: 'A move has zero duration.', time: seg.t0, drones: [wi] })
+      stats.maxAltitude = Math.max(stats.maxAltitude, hi)
+      stats.maxRadius = Math.max(stats.maxRadius, far)
+      const where = leg.kind === 'spread' ? 'while spreading out' : 'while closing in'
+      if (lo + EPS < L.minAltitude && seg.kind === 'flight' && fromIdx >= 0 && into) {
+        issues.push({ id: `detour-low:${seg.t0}`, severity: 'error', kind: 'altitude', sceneId, title: `${label} dips too low ${where}`, detail: `A drone reaches ${fmt(lo)} m (floor ${fmt(L.minAltitude)} m) on the collision-avoiding detour.`, time: leg.t1, drones: [loI], fix: enlarge })
+      }
+      if (hi - EPS > L.maxAltitude) {
+        issues.push({ id: `detour-high:${seg.t0}`, severity: 'error', kind: 'altitude', sceneId, title: `${label} climbs too high ${where}`, detail: `A drone reaches ${fmt(hi)} m (ceiling ${fmt(L.maxAltitude)} m) on the collision-avoiding detour.`, time: leg.t1, drones: [hiI], fix: enlarge })
+      }
+      if (far - EPS > L.maxRadius) {
+        issues.push({ id: `detour-fence:${seg.t0}`, severity: 'error', kind: 'geofence', sceneId, title: `${label} leaves the flight area ${where}`, detail: `A drone reaches ${fmt(far)} m from the centre (limit ${fmt(L.maxRadius)} m) on the collision-avoiding detour.`, time: leg.t1, drones: [farI], fix: enlarge })
+      }
     }
 
     // Spacing: takeoff/landing are vertical and synchronised, so spacing equals pad spacing.
     if (seg.kind !== 'flight' || n < 2) continue
-    const ca = flightClosestApproach(seg.from, seg.to, L.minSpacing)
-    const at = seg.t0 + profileInverse(seg.profile, ca.s)
+    let ca = { d: Infinity, s: 0, i: 0, j: 0, pairsBelow: 0 }, at = seg.t0
+    for (const leg of seg.legs) {
+      const r = flightClosestApproach(leg.from, leg.to, L.minSpacing)
+      if (r.d < ca.d) { ca = r; at = leg.t0 + profileInverse(leg.profile, r.s) }
+    }
     if (ca.d < stats.minDistance) { stats.minDistance = ca.d; stats.minDistanceTime = at }
     if (ca.d + EPS < L.minSpacing) {
-      const into = seg.into >= 0 ? c.scenes[seg.into]! : null
-      const fromIdx = seg.into >= 0 ? seg.into - 1 : c.scenes.length - 1
-      const from = fromIdx >= 0 ? c.scenes[fromIdx]! : null
-      // Suggest enlarging whichever end is densest below the guarantee threshold.
-      const candidates = [from, into].filter((s): s is CompiledScene => !!s && s.spacing + EPS < comfy)
-      candidates.sort((a, b) => a.spacing - b.spacing)
-      const target = candidates[0]
-      const label = seg.into >= 0 ? `Flight into “${sceneName(seg.into)}”` : 'Return flight'
       issues.push({
         id: `miss:${seg.t0}`, severity: 'error', kind: 'near-miss', sceneId: into?.id ?? from?.id,
         title: `${label}: drones pass too close`,
         detail: `${ca.pairsBelow} pair${ca.pairsBelow === 1 ? '' : 's'} come closer than ${fmt(L.minSpacing)} m (closest ${fmt(ca.d, 2)} m at ${formatTime(at)}). Formations spaced ≥ ${fmt(comfy)} m always fly clear.`,
         time: at, drones: [ca.i, ca.j],
-        fix: target ? { label: `Enlarge “${doc.scenes[target.index]!.name}”`, action: { kind: 'fit-spacing', sceneId: target.id, target: comfy } } : undefined,
+        fix: enlarge,
       })
     }
   }
@@ -328,30 +389,32 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
 }
 
 /**
- * Exact maximum horizontal distance from the origin reached by any drone of a
- * hold. A point p (relative to the spin centre c) rotated by θ has
- * |c + R(θ)p|² = |c|² + |p|² + 2(P·cosθ + Q·sinθ), maximised in closed form
- * over the swept interval [0, Θ].
+ * Maximum horizontal distance from the origin reached by any drone of a hold.
+ * A point p (relative to the centre c) turned by θ and scaled by σ has
+ * |c + σR(θ)p|² = |c|² + σ²|p|² + 2σ(P·cosθ + Q·sinθ). The bracket is
+ * maximised in closed form over the turned interval [θlo, θhi], and the whole
+ * expression is convex in σ, so its maximum is at σ = 1 or σ = σmax.
  */
-function maxRadius(cs: CompiledScene): { r: number; k: number } {
+function maxRadius(cs: CompiledScene, range: HoldRange): { r: number; k: number } {
   const n = cs.points.length / 3
   const [cx, , cz] = cs.center
-  const total = cs.omega === 0 ? 0 : spinAngle(cs.omega, cs.hold, cs.hold)
-  const lo = Math.min(0, total), hi = Math.max(0, total)
+  const lo = range.angleLo, hi = range.angleHi
   const c2 = cx * cx + cz * cz
   let best = 0, bk = 0
   for (let k = 0; k < n; k++) {
     const x = cs.points[k * 3]! - cx, z = cs.points[k * 3 + 2]! - cz
     const P = cx * x + cz * z, Q = cx * z - cz * x
     const M = Math.hypot(P, Q)
-    let m = Math.max(P, P * Math.cos(total) + Q * Math.sin(total))
+    let m = Math.max(P * Math.cos(lo) + Q * Math.sin(lo), P * Math.cos(hi) + Q * Math.sin(hi))
     if (M > 0 && hi > lo) {
       const phi = Math.atan2(Q, P)
       // Is phi + 2πj inside [lo, hi] for some integer j?
       const j = Math.ceil((lo - phi) / (Math.PI * 2))
       if (phi + j * Math.PI * 2 <= hi) m = M
     }
-    const r = Math.sqrt(Math.max(0, c2 + x * x + z * z + 2 * m))
+    const p2 = x * x + z * z
+    const at = (sg: number) => Math.sqrt(Math.max(0, c2 + sg * sg * p2 + 2 * sg * m))
+    const r = Math.max(at(1), at(range.scaleMax))
     if (r > best) { best = r; bk = k }
   }
   return { r: best, k: bk }

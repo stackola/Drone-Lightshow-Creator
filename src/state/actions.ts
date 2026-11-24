@@ -142,7 +142,7 @@ export function fitSceneToSpacing(sceneId: string, mode: 'exact' | 'grow' = 'exa
 
 export function applyFix(action: FixAction) {
   const s = getState()
-  const labels: Record<FixAction['kind'], string> = { 'fit-spacing': 'Fit to safe spacing', 'set-spin': 'Slow spin', move: 'Move scene', 'grid-spacing': 'Pad spacing', 'fit-airspace': 'Shrink to fit airspace' }
+  const labels: Record<FixAction['kind'], string> = { 'fit-spacing': 'Fit to safe spacing', 'set-spin': 'Slow spin', move: 'Move scene', 'grid-spacing': 'Pad spacing', 'fit-airspace': 'Shrink to fit airspace', 'calm-hold': 'Calm hold motion' }
   s.replaceDoc(applyFixToDoc(s.doc, action), labels[action.kind])
   s.set({ focus: null })
 }

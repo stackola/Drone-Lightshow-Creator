@@ -289,6 +289,9 @@ input, textarea { user-select: text; }
 .blk.hold.sel { box-shadow: 0 0 0 2px var(--accent); }
 .blk.flight { top: 16px; bottom: 16px; background: repeating-linear-gradient(135deg, #232b3b 0 6px, #1b2230 6px 12px); border: 1px solid #2d3647; color: var(--muted); justify-content: center; padding: 0 4px; font-size: 10.5px; }
 .blk.flight.ext { border-color: rgba(255,176,32,0.6); color: var(--warn); }
+/* Detour flights: a small "spread → cross → gather" glyph along the bottom edge. */
+.blk.flight.detour { border-bottom: 2px dotted var(--accent-2); }
+.detour-note { color: var(--accent-2); }
 .blk.flight.sel { box-shadow: 0 0 0 2px var(--accent); }
 .blk.ground { background: #161b25; border: 1px solid var(--line-2); color: var(--faint); justify-content: center; }
 .blk.ground.sel { box-shadow: 0 0 0 2px var(--accent); }

@@ -7,11 +7,12 @@
 // `evaluate()` turns it into positions and colours at any time, and the same
 // function feeds the preview, the validator and the exporters.
 
-import type { Blend, Effect, Limits, Scene, ShowDoc, Vec3 } from './types'
+import type { Blend, Effect, HoldMotion, Limits, Scene, ShowDoc, Vec3 } from './types'
 import { assignMinSquared } from './assign'
 import { generateShape } from './shapes'
-import { DEG, ceilTo, hash01, hashArray, isIdentityRotation, minPairDistance, rotationMatrix, transformPoints } from './math'
-import { fastestProfile, moveExtents, spinAngle, stretchProfile, type Profile } from './motion'
+import { DEG, ceilTo, centroid, hash01, hashArray, isIdentityRotation, minPairDistance, rotationMatrix, transformPoints } from './math'
+import { NO_MOTION, ZERO_PROFILE, fastestProfile, moveExtents, spinAngle, stretchProfile, type Profile } from './motion'
+import { comfortableSpacing, flightClosestApproach } from './separation'
 import { effectColor, type BeatPhase, type DroneLook } from './effects'
 import type { RGB } from './color'
 
@@ -48,15 +49,36 @@ export interface CompiledScene {
   spacing: number
   /** Largest horizontal distance of any drone from the spin axis. */
   spinRadius: number
+  /** Motion while held (breathe / bob / sway), on top of spin. */
+  motion: HoldMotion
+}
+
+/**
+ * One synchronised straight-line move of every drone. A flight is one
+ * 'direct' leg, or — when a straight flight would bring drones too close — a
+ * collision-avoiding detour: 'spread' (the formation expands: distances only
+ * grow), 'cross' (between two well-spaced formations, provably collision-free
+ * with optimal assignment) and 'gather' (the target contracts: distances only
+ * shrink to its own safe spacing).
+ */
+export interface Leg {
+  t0: number
+  t1: number
+  from: Float32Array
+  to: Float32Array
+  profile: Profile
+  kind: 'direct' | 'spread' | 'cross' | 'gather'
 }
 
 export type Segment =
-  | { kind: 'takeoff'; t0: number; t1: number; from: Float32Array; to: Float32Array; profile: Profile }
+  | { kind: 'takeoff'; t0: number; t1: number; from: Float32Array; to: Float32Array; legs: Leg[] }
   | {
       kind: 'flight'
       t0: number
       t1: number
-      profile: Profile
+      legs: Leg[]
+      /** True when the flight takes the collision-avoiding detour. */
+      detour: boolean
       from: Float32Array
       to: Float32Array
       c0: Float32Array
@@ -70,7 +92,7 @@ export type Segment =
       extended: boolean
     }
   | { kind: 'hold'; t0: number; t1: number; scene: number }
-  | { kind: 'land'; t0: number; t1: number; from: Float32Array; to: Float32Array; profile: Profile }
+  | { kind: 'land'; t0: number; t1: number; from: Float32Array; to: Float32Array; legs: Leg[] }
 
 export interface Compiled {
   n: number
@@ -93,8 +115,8 @@ export interface Compiled {
   /** Times for UI. */
   takeoff: { t0: number; t1: number }
   landing: { t0: number; t1: number }
-  returnFlight: { t0: number; t1: number; minDuration: number; auto: boolean; extended: boolean }
-  sceneTimes: { id: string; flightStart: number; holdStart: number; holdEnd: number; minFlight: number; auto: boolean; extended: boolean }[]
+  returnFlight: { t0: number; t1: number; minDuration: number; auto: boolean; extended: boolean; detour: boolean }
+  sceneTimes: { id: string; flightStart: number; holdStart: number; holdEnd: number; minFlight: number; auto: boolean; extended: boolean; detour: boolean }[]
 }
 
 export interface CompiledCue {
@@ -229,30 +251,118 @@ export function beatPhaseFn(beats: number[], downbeat = 0): BeatPhase {
 
 // --- Compile -------------------------------------------------------------------------
 
-interface Timed { profile: Profile; min: number; auto: boolean; extended: boolean }
-
 /** Automatic flight duration: the fastest safe time plus a comfort margin, rounded up to 0.5 s. */
 export function autoFlightDuration(min: number): number {
   return min <= 1e-9 ? 0 : Math.max(MIN_AUTO_FLIGHT, ceilTo(min * AUTO_FLIGHT_MARGIN, 0.5))
 }
 
-/** Pick the flight profile: automatic (fastest × comfort margin) or the requested duration, never faster than safe. */
-function planMove(from: Float32Array, to: Float32Array, limits: Limits, requested: number | null): Timed {
-  const fastest = fastestProfile(moveExtents(from, to), limits)
-  const min = fastest.T
-  if (requested === null) {
-    const T = autoFlightDuration(min)
-    return { profile: stretchProfile(fastest, T), min, auto: true, extended: false }
+interface Move { from: Float32Array; to: Float32Array; kind: Leg['kind'] }
+
+/**
+ * Scale a formation about its centroid by k (distances between drones grow by
+ * exactly k), then shift it so it stays inside the airspace where possible.
+ */
+export function expandSet(set: Float32Array, k: number, limits: Limits): Float32Array {
+  if (k <= 1.0001) return set
+  const c = centroid(set)
+  const out = new Float32Array(set.length)
+  let minY = Infinity, maxY = -Infinity
+  for (let i = 0; i < set.length; i += 3) {
+    out[i] = c[0] + k * (set[i]! - c[0])
+    out[i + 1] = c[1] + k * (set[i + 1]! - c[1])
+    out[i + 2] = c[2] + k * (set[i + 2]! - c[2])
+    minY = Math.min(minY, out[i + 1]!)
+    maxY = Math.max(maxY, out[i + 1]!)
   }
-  const floor = ceilTo(min, 0.1)
-  if (requested + 1e-9 < floor) return { profile: stretchProfile(fastest, floor), min, auto: false, extended: true }
-  return { profile: stretchProfile(fastest, Math.max(0, requested)), min, auto: false, extended: false }
+  // Translation never changes distances, so shifting into the airspace keeps the guarantee.
+  const lo = limits.minAltitude + 1 - minY, hi = limits.maxAltitude - 1 - maxY
+  const dy = lo <= hi ? Math.min(Math.max(0, lo), hi) : (lo + hi) / 2
+  let maxR = 0
+  for (let i = 0; i < out.length; i += 3) {
+    out[i + 1]! += dy
+    maxR = Math.max(maxR, Math.hypot(out[i]!, out[i + 2]!))
+  }
+  const ch = Math.hypot(c[0], c[2])
+  const excess = maxR - (limits.maxRadius - 1)
+  if (excess > 0 && ch > 1e-6) {
+    const shift = Math.min(excess, ch)
+    for (let i = 0; i < out.length; i += 3) {
+      out[i]! -= (c[0] / ch) * shift
+      out[i + 2]! -= (c[2] / ch) * shift
+    }
+  }
+  return out
+}
+
+/**
+ * Plan how drones get from one formation to the next. Straight synchronised
+ * flight with optimal assignment when that keeps every pair apart; otherwise
+ * the spread-cross-gather detour, whose crossing leg runs between formations
+ * spaced at least √2 × the minimum — which optimal assignment makes
+ * collision-free (Turpin, Michael & Kumar, 2014). Every leg is still checked
+ * exactly by the validator.
+ */
+function planRoute(
+  prevSet: Float32Array, prevSpacing: number, curSlot: Int32Array,
+  targetSet: Float32Array, targetSpacing: number, limits: Limits, fixedSlot: Int32Array | null,
+): { slot: Int32Array; moves: Move[]; detour: boolean } {
+  const n = curSlot.length
+  const compose = (m: Int32Array) => {
+    const out = new Int32Array(n)
+    for (let i = 0; i < n; i++) out[i] = m[curSlot[i]!]!
+    return out
+  }
+  const slot0 = fixedSlot ?? compose(cachedMatch(prevSet, targetSet))
+  const from = permute(prevSet, curSlot)
+  const direct = { slot: slot0, moves: [{ from, to: permute(targetSet, slot0), kind: 'direct' as const }], detour: false }
+  if (n < 2) return direct
+  const d0 = flightClosestApproach(from, direct.moves[0]!.to, limits.minSpacing).d
+  if (d0 + 1e-6 >= limits.minSpacing) return direct
+  const need = comfortableSpacing(limits.minSpacing)
+  const kA = prevSpacing > 1e-6 ? Math.min(2.5, Math.max(1, need / prevSpacing)) : 1
+  const kB = targetSpacing > 1e-6 ? Math.min(2.5, Math.max(1, need / targetSpacing)) : 1
+  const A2 = expandSet(prevSet, kA, limits)
+  const B2 = expandSet(targetSet, kB, limits)
+  const slot1 = fixedSlot ?? compose(cachedMatch(A2, B2))
+  const a2 = permute(A2, curSlot), b2 = permute(B2, slot1)
+  const moves: Move[] = []
+  if (A2 !== prevSet) moves.push({ from, to: a2, kind: 'spread' })
+  moves.push({ from: a2, to: b2, kind: 'cross' })
+  if (B2 !== targetSet) moves.push({ from: b2, to: permute(targetSet, slot1), kind: 'gather' })
+  // Keep the detour only if it really flies wider than the straight route.
+  const d1 = Math.min(...moves.map((m) => flightClosestApproach(m.from, m.to, limits.minSpacing).d))
+  return d1 > d0 + 1e-6 ? { slot: slot1, moves, detour: true } : direct
+}
+
+/** Time a route: automatic, or the requested duration (never faster than safe). Legs share the stretch. */
+function timeRoute(moves: Move[], limits: Limits, requested: number | null, t0: number): { legs: Leg[]; min: number; auto: boolean; extended: boolean; T: number } {
+  const fast = moves.map((m) => fastestProfile(moveExtents(m.from, m.to), limits))
+  const min = fast.reduce((a, p) => a + p.T, 0)
+  let T: number, auto = false, extended = false
+  if (requested === null) {
+    T = autoFlightDuration(min)
+    auto = true
+  } else {
+    const floor = ceilTo(min, 0.1)
+    if (requested + 1e-9 < floor) { T = floor; extended = true } else T = Math.max(0, requested)
+  }
+  const k = min > 1e-9 ? T / min : 0
+  let t = t0
+  const legs = moves.map((m, i) => {
+    const dur = min > 1e-9 ? fast[i]!.T * k : i === 0 ? T : 0
+    const profile = dur > 0 ? stretchProfile(fast[i]!.T > 0 ? fast[i]! : ZERO_PROFILE, dur) : ZERO_PROFILE
+    const leg: Leg = { t0: t, t1: t + dur, from: m.from, to: m.to, profile, kind: m.kind }
+    t += dur
+    return leg
+  })
+  return { legs, min, auto, extended, T }
 }
 
 /** Vertical takeoff/landing: fastest safe time rounded up to half a second. */
-function planVertical(from: Float32Array, to: Float32Array, limits: Limits): Profile {
+function planVertical(from: Float32Array, to: Float32Array, limits: Limits, t0: number): Leg {
   const fastest = fastestProfile(moveExtents(from, to), limits)
-  return stretchProfile(fastest, ceilTo(Math.max(fastest.T, 1), 0.5))
+  const profile = stretchProfile(fastest, ceilTo(Math.max(fastest.T, 1), 0.5))
+  return { t0, t1: t0 + profile.T, from, to, profile, kind: 'direct' }
 }
 
 function permute(points: Float32Array, slot: Int32Array): Float32Array {
@@ -283,7 +393,7 @@ export function compile(doc: ShowDoc): Compiled {
       id: scene.id, index, points: g.points, endPoints, center, omega, hold: Math.max(0, scene.hold),
       slot: new Int32Array(n), layerOf: g.layerOf, layerCounts: g.layerCounts,
       effects: scene.layers.map((l) => l.effect), look: g.look, image: g.image,
-      spacing: minPairDistance(g.points), spinRadius,
+      spacing: minPairDistance(g.points), spinRadius, motion: scene.motion ?? NO_MOTION,
     }
   })
 
@@ -294,9 +404,9 @@ export function compile(doc: ShowDoc): Compiled {
   let t = 0
 
   // Takeoff: vertical climb.
-  const takeoffProfile = planVertical(pads, padsHigh, limits)
-  const takeoffDur = takeoffProfile.T
-  segments.push({ kind: 'takeoff', t0: 0, t1: takeoffDur, from: pads, to: padsHigh, profile: takeoffProfile })
+  const takeoffLeg = planVertical(pads, padsHigh, limits, 0)
+  const takeoffDur = takeoffLeg.t1
+  segments.push({ kind: 'takeoff', t0: 0, t1: takeoffDur, from: pads, to: padsHigh, legs: [takeoffLeg] })
   t = takeoffDur
 
   // Drone positions/colours at the end of the previous segment (drone order).
@@ -304,54 +414,49 @@ export function compile(doc: ShowDoc): Compiled {
   let curPointsSet = padsHigh // the same set in "point order" of the previous stage
   let curSlot = identity(n) // drone → index in curPointsSet
   let curColors = constColors(n, GROUND_COLOR)
+  let curSpacing = n > 1 ? site.gridSpacing : Infinity
 
   for (const cs of scenes) {
     const scene = doc.scenes[cs.index]!
-    // Match the previous point set to this scene's points.
-    const match = cachedMatch(curPointsSet, cs.points)
-    const slot = new Int32Array(n)
-    for (let i = 0; i < n; i++) slot[i] = match[curSlot[i]!]!
+    // Match the previous point set to this scene's points (detouring if needed).
+    const route = planRoute(curPointsSet, curSpacing, curSlot, cs.points, cs.spacing, limits, null)
+    const slot = route.slot
     cs.slot = slot
     const target = permute(cs.points, slot)
-    const fd = planMove(curPos, target, limits, scene.flight.duration)
-    const dur = fd.profile.T
+    const fd = timeRoute(route.moves, limits, scene.flight.duration, t)
+    const dur = fd.T
     const startColors = sceneColors(cs, 0, t + dur, beat)
     segments.push({
-      kind: 'flight', t0: t, t1: t + dur, profile: fd.profile, from: curPos, to: target, c0: curColors, c1: startColors,
+      kind: 'flight', t0: t, t1: t + dur, legs: fd.legs, detour: route.detour, from: curPos, to: target, c0: curColors, c1: startColors,
       dim: scene.flight.dim, into: cs.index, minDuration: fd.min, auto: fd.auto, extended: fd.extended,
     })
     const flightStart = t
     t += dur
     segments.push({ kind: 'hold', t0: t, t1: t + cs.hold, scene: cs.index })
-    sceneTimes.push({ id: cs.id, flightStart, holdStart: t, holdEnd: t + cs.hold, minFlight: fd.min, auto: fd.auto, extended: fd.extended })
+    sceneTimes.push({ id: cs.id, flightStart, holdStart: t, holdEnd: t + cs.hold, minFlight: fd.min, auto: fd.auto, extended: fd.extended, detour: route.detour })
     curColors = sceneColors(cs, cs.hold, t + cs.hold, beat)
     t += cs.hold
     curPos = permute(cs.endPoints, slot)
     curPointsSet = cs.endPoints
     curSlot = slot
+    curSpacing = cs.spacing
   }
 
   // Return flight to the pads (at altitude), then descend.
-  let landSlot: Int32Array
-  if (site.landing === 'home') {
-    landSlot = identity(n)
-  } else {
-    const match = cachedMatch(curPointsSet, padsHigh)
-    landSlot = new Int32Array(n)
-    for (let i = 0; i < n; i++) landSlot[i] = match[curSlot[i]!]!
-  }
+  const back = planRoute(curPointsSet, curSpacing, curSlot, padsHigh, n > 1 ? site.gridSpacing : Infinity, limits, site.landing === 'home' ? identity(n) : null)
+  const landSlot = back.slot
   const above = permute(padsHigh, landSlot)
-  const rf = planMove(curPos, above, limits, site.returnFlight.duration)
+  const rf = timeRoute(back.moves, limits, site.returnFlight.duration, t)
   segments.push({
-    kind: 'flight', t0: t, t1: t + rf.profile.T, profile: rf.profile, from: curPos, to: above, c0: curColors, c1: constColors(n, GROUND_COLOR),
+    kind: 'flight', t0: t, t1: t + rf.T, legs: rf.legs, detour: back.detour, from: curPos, to: above, c0: curColors, c1: constColors(n, GROUND_COLOR),
     dim: site.returnFlight.dim, into: -1, minDuration: rf.min, auto: rf.auto, extended: rf.extended,
   })
-  const returnFlight = { t0: t, t1: t + rf.profile.T, minDuration: rf.min, auto: rf.auto, extended: rf.extended }
-  t += rf.profile.T
+  const returnFlight = { t0: t, t1: t + rf.T, minDuration: rf.min, auto: rf.auto, extended: rf.extended, detour: back.detour }
+  t += rf.T
   const landPads = permute(pads, landSlot)
-  const landProfile = planVertical(above, landPads, limits)
-  const landDur = landProfile.T
-  segments.push({ kind: 'land', t0: t, t1: t + landDur, from: above, to: landPads, profile: landProfile })
+  const landLeg = planVertical(above, landPads, limits, t)
+  const landDur = landLeg.t1 - t
+  segments.push({ kind: 'land', t0: t, t1: t + landDur, from: above, to: landPads, legs: [landLeg] })
   const landing = { t0: t, t1: t + landDur }
   t += landDur
 

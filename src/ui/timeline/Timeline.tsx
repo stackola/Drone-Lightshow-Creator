@@ -170,9 +170,9 @@ export function Timeline() {
       blocks.push(
         <div
           key={`f-${scene.id}`}
-          className={`blk flight${t.extended ? ' ext' : ''}${selF ? ' sel' : ''}`}
+          className={`blk flight${t.extended ? ' ext' : ''}${t.detour ? ' detour' : ''}${selF ? ' sel' : ''}`}
           style={{ left: toX(t.flightStart) + 1, width: Math.max(2, fw - 3) }}
-          title={`Flight into ${scene.name}: ${(t.holdStart - t.flightStart).toFixed(1)} s${t.auto ? ' (auto)' : ''} · fastest safe ${t.minFlight.toFixed(1)} s${t.extended ? ' — extended for safety' : ''}`}
+          title={`Flight into ${scene.name}: ${(t.holdStart - t.flightStart).toFixed(1)} s${t.auto ? ' (auto)' : ''} · fastest safe ${t.minFlight.toFixed(1)} s${t.extended ? ' — extended for safety' : ''}${t.detour ? ' · collision-free detour (spread, cross, close in)' : ''}`}
           onClick={() => getState().select({ kind: 'flight', id: scene.id })}
         >
           {fw > 44 ? `${(t.holdStart - t.flightStart).toFixed(1)}s` : ''}
@@ -217,9 +217,9 @@ export function Timeline() {
     blocks.push(
       <div
         key="rf"
-        className={`blk flight${rf.extended ? ' ext' : ''}${selection.kind === 'landing' ? ' sel' : ''}`}
+        className={`blk flight${rf.extended ? ' ext' : ''}${rf.detour ? ' detour' : ''}${selection.kind === 'landing' ? ' sel' : ''}`}
         style={{ left: toX(rf.t0) + 1, width: Math.max(2, rw - 3) }}
-        title={`Return flight: ${(rf.t1 - rf.t0).toFixed(1)} s`}
+        title={`Return flight: ${(rf.t1 - rf.t0).toFixed(1)} s${rf.detour ? ' · collision-free detour' : ''}`}
         onClick={() => getState().select({ kind: 'landing' })}
       >
         {rw > 44 ? `${(rf.t1 - rf.t0).toFixed(1)}s` : ''}

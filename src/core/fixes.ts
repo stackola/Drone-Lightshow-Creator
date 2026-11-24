@@ -24,7 +24,18 @@ export function applyFixToDoc(doc: ShowDoc, action: FixAction): ShowDoc {
       return { ...doc, site: { ...doc.site, gridSpacing: action.value } }
     case 'fit-airspace':
       return replaceScene(doc, action.sceneId, (s) => fitToAirspace(s, doc))
+    case 'calm-hold':
+      return replaceScene(doc, action.sceneId, (s) => calmHold(s, action.factor))
   }
+}
+
+/** Scale spin and hold motion down together (rounded toward calmer). */
+export function calmHold(s: Scene, factor: number): Scene {
+  const f = Math.max(0, Math.min(1, factor))
+  const spin = Math.trunc(s.spin * f * 10) / 10
+  if (!s.motion || s.motion.kind === 'none') return { ...s, spin }
+  const step = s.motion.kind === 'breathe' ? 100 : 10
+  return { ...s, spin, motion: { ...s.motion, amount: Math.floor(s.motion.amount * f * step) / step } }
 }
 
 /**

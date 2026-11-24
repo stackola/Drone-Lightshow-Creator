@@ -1,9 +1,9 @@
 // Positions and colours of every drone at any show time.
 // One function for preview, validation and export — no separate "bake" path.
 
-import type { Compiled, Segment } from './compile'
+import type { Compiled, Leg, Segment } from './compile'
 import { GROUND_COLOR, beatPhaseFn, pointColor } from './compile'
-import { profileS, spinAngle } from './motion'
+import { holdPose, profileS } from './motion'
 import type { RGB } from './color'
 import { effectColor, type BeatPhase, type DroneLook } from './effects'
 import { hash01 } from './math'
@@ -43,32 +43,37 @@ export function evaluate(c: Compiled, t: number, pos: Float32Array, col: Float32
   switch (seg.kind) {
     case 'takeoff':
     case 'land': {
-      lerpInto(seg.from, seg.to, profileS(seg.profile, t - seg.t0), pos)
+      const leg = seg.legs[0]!
+      lerpInto(leg.from, leg.to, profileS(leg.profile, t - leg.t0), pos)
       if (col) fill(col, n, GROUND_COLOR)
       break
     }
     case 'flight': {
       const len = seg.t1 - seg.t0
       const tau = len > 0 ? (t - seg.t0) / len : 1
-      const s = profileS(seg.profile, t - seg.t0)
-      lerpInto(seg.from, seg.to, s, pos)
+      const leg = legAt(seg.legs, t)
+      const s = profileS(leg.profile, t - leg.t0)
+      lerpInto(leg.from, leg.to, s, pos)
       if (col) {
+        // Colours cross-fade over the whole flight, however many legs it has.
+        const m = seg.legs.length === 1 ? s : tau * tau * (3 - 2 * tau)
         const k = seg.dim ? dimFactor(tau) : 1
-        for (let i = 0; i < n * 3; i++) col[i] = (seg.c0[i]! + (seg.c1[i]! - seg.c0[i]!) * s) * k
+        for (let i = 0; i < n * 3; i++) col[i] = (seg.c0[i]! + (seg.c1[i]! - seg.c0[i]!) * m) * k
       }
       break
     }
     case 'hold': {
       const cs = c.scenes[seg.scene]!
       const tau = t - seg.t0
-      const angle = cs.omega === 0 ? 0 : spinAngle(cs.omega, cs.hold, tau)
-      const ca = Math.cos(angle), sa = Math.sin(angle)
-      const [cx, , cz] = cs.center
+      const pose = holdPose(cs.omega, cs.hold, cs.motion, tau)
+      const ca = Math.cos(pose.angle) * pose.scale, sa = Math.sin(pose.angle) * pose.scale
+      const [cx, cy, cz] = cs.center
+      const ys = pose.scale, oy = cy + pose.dy
       for (let i = 0; i < n; i++) {
         const k = cs.slot[i]!
-        const x = cs.points[k * 3]! - cx, y = cs.points[k * 3 + 1]!, z = cs.points[k * 3 + 2]! - cz
+        const x = cs.points[k * 3]! - cx, y = cs.points[k * 3 + 1]! - cy, z = cs.points[k * 3 + 2]! - cz
         pos[i * 3] = cx + ca * x + sa * z
-        pos[i * 3 + 1] = y
+        pos[i * 3 + 1] = oy + ys * y
         pos[i * 3 + 2] = cz - sa * x + ca * z
         if (col) {
           pointColor(cs, k, tau, t, beat, tmp)
@@ -127,6 +132,11 @@ function applyCues(c: Compiled, t: number, pos: Float32Array, col: Float32Array,
       }
     }
   }
+}
+
+function legAt(legs: Leg[], t: number): Leg {
+  for (let i = legs.length - 1; i > 0; i--) if (t >= legs[i]!.t0) return legs[i]!
+  return legs[0]!
 }
 
 function lerpInto(a: Float32Array, b: Float32Array, s: number, out: Float32Array): void {

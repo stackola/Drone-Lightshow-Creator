@@ -91,7 +91,7 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
   const up = (recipe: (s: Draft<Scene>) => void, label: string, key?: string) => updateScene(id, recipe, label, key)
   const manual = scene.flight.duration !== null
   const flightDur = times ? times.holdStart - times.flightStart : 0
-  const safeSpin = cs ? maxSafeSpin(scene.spin || 1, scene.hold, cs.spinRadius, limits.maxSpeedH, limits.maxAccel) : 0
+  const safeSpin = cs ? maxSafeSpin(scene.spin || 1, scene.hold, cs.spinRadius, limits) : 0
 
   return (
     <>
@@ -127,6 +127,11 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
         {times && (
           <div className="hint" style={{ margin: '4px 0 6px 100px', color: times.extended ? 'var(--warn)' : focusFlight ? 'var(--accent-2)' : undefined }}>
             {times.extended ? `Extended to ${flightDur.toFixed(1)} s — faster would break speed limits.` : `Fastest safe flight: ${times.minFlight.toFixed(1)} s`}
+          </div>
+        )}
+        {times?.detour && (
+          <div className="hint detour-note" style={{ margin: '0 0 6px 100px' }}>
+            Collision-free detour: a straight flight would bring drones too close, so they spread out, cross, then close in.
           </div>
         )}
         <Row label="">
@@ -405,6 +410,7 @@ function ShowInspector() {
             <div>Peak speed</div><div>{validation.stats.peakSpeedH.toFixed(1)} m/s</div>
             <div>Peak climb / descent</div><div>{validation.stats.peakClimb.toFixed(1)} / {validation.stats.peakDescent.toFixed(1)} m/s</div>
             <div>Peak acceleration</div><div>{validation.stats.peakAccel.toFixed(1)} m/s²</div>
+            <div>Peak jerk</div><div>{validation.stats.peakJerk.toFixed(1)} m/s³</div>
             <div>Highest drone</div><div>{validation.stats.maxAltitude.toFixed(0)} m</div>
             <div>Furthest from centre</div><div>{validation.stats.maxRadius.toFixed(0)} m</div>
             <div>Flight time</div><div className={validation.stats.duration > L.maxFlightTime ? 'bad' : ''}>{formatTime(validation.stats.duration)}</div>
@@ -421,6 +427,7 @@ function ShowInspector() {
         {lim('maxSpeedUp', 'Max climb', 0.5, 'm/s', 0.5)}
         {lim('maxSpeedDown', 'Max descent', 0.5, 'm/s', 0.5)}
         {lim('maxAccel', 'Max accel', 0.5, 'm/s²', 0.5)}
+        {lim('maxJerk', 'Max jerk', 0.5, 'm/s³', 0.5)}
         {lim('maxFlightTime', 'Battery', 0.5, 'min', 1, 60)}
       </Section>
       <Section title="Airspace">

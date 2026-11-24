@@ -13,6 +13,7 @@ export const DEFAULT_LIMITS: Limits = {
   maxSpeedUp: 3,
   maxSpeedDown: 2,
   maxAccel: 3,
+  maxJerk: 6,
   minAltitude: 10,
   maxAltitude: 120,
   maxRadius: 150,

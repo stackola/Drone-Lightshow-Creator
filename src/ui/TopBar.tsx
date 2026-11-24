@@ -102,9 +102,10 @@ function SafetyStatus() {
             <div>Closest approach</div><div>{validation.stats.minDistance.toFixed(2)} m</div>
             <div>Peak speed</div><div>{validation.stats.peakSpeedH.toFixed(1)} m/s</div>
             <div>Peak acceleration</div><div>{validation.stats.peakAccel.toFixed(1)} m/s²</div>
+            <div>Peak jerk</div><div>{validation.stats.peakJerk.toFixed(1)} m/s³</div>
             <div>Highest drone</div><div>{validation.stats.maxAltitude.toFixed(0)} m</div>
           </div>
-          <div className="hint" style={{ marginTop: 8 }}>Checks are exact, not sampled: every pair of drones in every flight, peak speeds and accelerations from the motion curves.</div>
+          <div className="hint" style={{ marginTop: 8 }}>Checks are exact, not sampled: every pair of drones in every flight, peak speeds, accelerations and jerk from the motion curves. Flights that would pass too close take a collision-free detour automatically.</div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
             <button className="btn sm ghost" onClick={() => { close(); getState().select({ kind: 'show' }) }}>Edit limits</button>
           </div>

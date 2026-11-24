@@ -41,7 +41,7 @@ export function summarizeShow(doc: ShowDoc, compiled: Compiled = compile(doc), v
   const L = doc.limits
   const lines: string[] = []
   lines.push(`Show "${doc.name}" — ${doc.droneCount} drones, total ${formatTime(compiled.duration)} (battery limit ${formatTime(L.maxFlightTime)}).`)
-  lines.push(`Limits: min spacing ${L.minSpacing} m, speed ${L.maxSpeedH} m/s, climb ${L.maxSpeedUp} m/s, descent ${L.maxSpeedDown} m/s, accel ${L.maxAccel} m/s², airspace ${L.minAltitude}–${L.maxAltitude} m high, radius ${L.maxRadius} m. Audience ${doc.site.audienceDistance} m away facing the formations.`)
+  lines.push(`Limits: min spacing ${L.minSpacing} m, speed ${L.maxSpeedH} m/s, climb ${L.maxSpeedUp} m/s, descent ${L.maxSpeedDown} m/s, accel ${L.maxAccel} m/s², jerk ${L.maxJerk} m/s³, airspace ${L.minAltitude}–${L.maxAltitude} m high, radius ${L.maxRadius} m. Audience ${doc.site.audienceDistance} m away facing the formations.`)
   if (doc.audio) {
     const end = doc.audio.offset + doc.audio.duration
     lines.push(`Music: "${doc.audio.name}", ${Math.round(doc.audio.bpm)} BPM, plays ${formatTime(doc.audio.offset)}–${formatTime(end)} (call get_music for bars and loudness).`)

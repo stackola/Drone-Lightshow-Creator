@@ -70,6 +70,7 @@ export function normalizeDoc(r: Obj): ShowDoc {
     maxSpeedUp: num(L.maxSpeedUp, DEFAULT_LIMITS.maxSpeedUp, 0.1, 50),
     maxSpeedDown: num(L.maxSpeedDown, DEFAULT_LIMITS.maxSpeedDown, 0.1, 50),
     maxAccel: num(L.maxAccel, DEFAULT_LIMITS.maxAccel, 0.1, 50),
+    maxJerk: num(L.maxJerk, DEFAULT_LIMITS.maxJerk, 0.1, 500),
     minAltitude: num(L.minAltitude, DEFAULT_LIMITS.minAltitude, 0, 1000),
     maxAltitude: num(L.maxAltitude, DEFAULT_LIMITS.maxAltitude, 1, 5000),
     maxRadius: num(L.maxRadius, DEFAULT_LIMITS.maxRadius, 1, 10000),
@@ -110,6 +111,9 @@ function scene(s: Obj): Scene {
     position: vec(s.position, [0, 55, 0]),
     rotation: vec(s.rotation, [0, 0, 0]),
     spin: num(s.spin, 0, -720, 720),
+    ...(isObj(s.motion) && ['breathe', 'bob', 'sway'].includes(s.motion.kind as string)
+      ? { motion: { kind: s.motion.kind as 'breathe' | 'bob' | 'sway', amount: num(s.motion.amount, 0, 0, s.motion.kind === 'breathe' ? 1 : s.motion.kind === 'bob' ? 50 : 90), period: num(s.motion.period, 4, 0.5, 120) } }
+      : {}),
     layers: layers.length ? layers : [{ id: newId('layer'), shape: { kind: 'circle', size: 30, fill: 'filled' }, weight: 1, offset: [0, 0, 0], rotation: [0, 0, 0], effect: defaultEffect('solid') }],
   }
 }
@@ -117,8 +121,10 @@ function scene(s: Obj): Scene {
 function layer(l: Obj): Layer | null {
   const shape = shapeSpec(l.shape)
   if (!shape) return null
+  const roles = ['park', 'starfield', 'halo', 'frame', 'base']
   return {
     id: str(l.id, newId('layer')),
+    ...(typeof l.role === 'string' && roles.includes(l.role) ? { role: l.role as Layer['role'] } : {}),
     shape,
     weight: num(l.weight, 1, 0, 1e6),
     offset: vec(l.offset, [0, 0, 0]),
