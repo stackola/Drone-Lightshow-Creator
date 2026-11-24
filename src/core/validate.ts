@@ -94,11 +94,28 @@ export function safeHoldFactor(rels: Rel[], omega: number, hold: number, motion:
   return Math.floor(lo * 100) / 100
 }
 
-/** Largest spin rate (deg/s, same sign) for a drone `radius` from the axis that respects every limit. */
-export function maxSafeSpin(spinDeg: number, hold: number, radius: number, L: Limits, motion?: HoldMotion): number {
+/** Largest motion amount in [0, cap] that respects every limit with the given spin (0 if the spin alone is too fast). */
+export function maxSafeMotionAmount(rels: Rel[], omega: number, hold: number, motion: HoldMotion, L: Limits, cap: number): number {
+  const ok = (a: number) => withinLimits(holdPeaks(rels, omega, hold, { ...motion, amount: a }), L)
+  if (!ok(0)) return 0
+  if (ok(cap)) return cap
+  let lo = 0, hi = cap
+  for (let k = 0; k < 22; k++) {
+    const mid = (lo + hi) / 2
+    if (ok(mid)) lo = mid
+    else hi = mid
+  }
+  return lo
+}
+
+/**
+ * Largest spin rate (deg/s, same sign, at most `cap`) for a drone `radius` from
+ * the axis that respects every limit.
+ */
+export function maxSafeSpin(spinDeg: number, hold: number, radius: number, L: Limits, motion?: HoldMotion, cap = Math.abs(spinDeg)): number {
   const sign = Math.sign(spinDeg) || 1
   const rels: Rel[] = [[radius, 0, 0]]
-  let lo = 0, hi = Math.abs(spinDeg)
+  let lo = 0, hi = cap
   for (let k = 0; k < 30; k++) {
     const mid = (lo + hi) / 2
     if (withinLimits(holdPeaks(rels, sign * mid * DEG, hold, motion), L)) lo = mid
@@ -112,7 +129,7 @@ export function maxSafeSpin(spinDeg: number, hold: number, radius: number, L: Li
  * sway: farthest from the centre, farthest from the vertical axis, highest
  * and lowest (relative to the centre).
  */
-export function extremeRels(cs: CompiledScene): Rel[] {
+export function extremeRels(cs: Pick<CompiledScene, 'points' | 'center'>): Rel[] {
   const [cx, cy, cz] = cs.center
   const n = cs.points.length / 3
   const best = [-1, -1, -1, -1], val = [-Infinity, -Infinity, -Infinity, -Infinity]
@@ -123,6 +140,37 @@ export function extremeRels(cs: CompiledScene): Rel[] {
   }
   const ks = [...new Set(best.filter((k) => k >= 0))]
   return ks.map((k) => [cs.points[k * 3]! - cx, cs.points[k * 3 + 1]! - cy, cs.points[k * 3 + 2]! - cz])
+}
+
+const NO_RANGE: HoldRange = { scaleMax: 1, dyMin: 0, dyMax: 0, angleLo: 0, angleHi: 0 }
+
+function scaleMotion(m: HoldMotion, k: number): HoldMotion {
+  return { ...m, amount: m.amount * k }
+}
+
+/** Largest factor in [0, 1] (to 1%) for which `ok` holds; ok(0) is assumed. */
+function calmFactor(ok: (k: number) => boolean): number {
+  let lo = 0, hi = 1
+  for (let i = 0; i < 16; i++) {
+    const mid = (lo + hi) / 2
+    if (ok(mid)) lo = mid
+    else hi = mid
+  }
+  return Math.floor(lo * 100) / 100
+}
+
+/** Lowest and highest altitude any drone of a hold reaches over the pose range. */
+function verticalExtent(cs: CompiledScene, range: HoldRange): { minY: number; maxY: number; lowK: number; highK: number } {
+  const cy = cs.center[1]
+  let minY = Infinity, maxY = -Infinity, lowK = 0, highK = 0
+  for (let k = 0; k < cs.points.length / 3; k++) {
+    const rel = cs.points[k * 3 + 1]! - cy
+    const lowY = cy + rel * (rel < 0 ? range.scaleMax : 1) + range.dyMin
+    const highY = cy + rel * (rel > 0 ? range.scaleMax : 1) + range.dyMax
+    if (lowY < minY) { minY = lowY; lowK = k }
+    if (highY > maxY) { maxY = highY; highK = k }
+  }
+  return { minY, maxY, lowK, highK }
 }
 
 function segmentLabel(seg: Segment, sceneName: (i: number) => string): string {
@@ -179,19 +227,20 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
 
     // Altitude: spin and sway keep it; breathe scales heights about the centre, bob shifts them.
     const range = holdRange(cs.omega, cs.hold, cs.motion)
-    const cy = cs.center[1]
-    let minY = Infinity, maxY = -Infinity, lowK = 0, highK = 0
-    for (let k = 0; k < c.n; k++) {
-      const rel = cs.points[k * 3 + 1]! - cy
-      const lowY = cy + rel * (rel < 0 ? range.scaleMax : 1) + range.dyMin
-      const highY = cy + rel * (rel > 0 ? range.scaleMax : 1) + range.dyMax
-      if (lowY < minY) { minY = lowY; lowK = k }
-      if (highY > maxY) { maxY = highY; highK = k }
-    }
+    const { minY, maxY, lowK, highK } = verticalExtent(cs, range)
     stats.maxAltitude = Math.max(stats.maxAltitude, maxY)
-    // Moving can't help a formation taller than the airspace — it needs fewer drones.
-    const tooTall = maxY - minY > L.maxAltitude - L.minAltitude - 2
-    const shrink = { label: 'Shrink to fit (park spare drones)', action: { kind: 'fit-airspace' as const, sceneId: cs.id } }
+    const room = L.maxAltitude - L.minAltitude - 2
+    // Moving can't help a formation taller than the airspace. If the formation
+    // itself is too tall it needs fewer drones; if only its motion makes it too
+    // tall, the motion needs calming.
+    const base = verticalExtent(cs, NO_RANGE)
+    const baseTooTall = base.maxY - base.minY > room
+    const tooTall = maxY - minY > room
+    let shrink: Issue['fix'] = { label: 'Shrink to fit (park spare drones)', action: { kind: 'fit-airspace' as const, sceneId: cs.id } }
+    if (tooTall && !baseTooTall && cs.motion.kind !== 'none') {
+      const f = calmFactor((k) => { const e = verticalExtent(cs, holdRange(cs.omega, cs.hold, scaleMotion(cs.motion, k))); return e.maxY - e.minY <= room })
+      shrink = { label: `Calm motion to ${Math.round(f * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor: f } }
+    }
     if (minY + EPS < L.minAltitude) {
       const dy = Math.ceil((L.minAltitude - minY) * 2) / 2
       issues.push({

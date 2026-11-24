@@ -53,6 +53,17 @@ export const ShapeInput = z.object({
 })
 export type ShapeInput = z.infer<typeof ShapeInput>
 
+export const SpareRoleInput = z.enum(['park', 'starfield', 'halo', 'frame', 'base']).describe(
+  'park: lights off, out of sight behind. starfield: a dim twinkling sky behind the formation. halo: a glowing ring around it. frame: a square frame around it. base: a band of light beneath it.',
+)
+
+export const IdleMotionInput = z.object({
+  kind: z.enum(['none', 'breathe', 'bob', 'sway']).describe('breathe: grows and settles back. bob: rises and falls. sway: turns back and forth. none: still.'),
+  amount: z.number().optional().describe('breathe: growth in percent (3–10). bob: metres (0.5–3). sway: degrees (3–15). Large formations need less; unsafe amounts are calmed automatically.'),
+  period_seconds: z.number().optional().describe('Seconds per cycle (4–12 looks calm; match a multiple of the beat if there is music)'),
+})
+export type IdleMotionInput = z.infer<typeof IdleMotionInput>
+
 export const SceneInput = z.object({
   name: z.string().describe('Short scene name shown in the editor'),
   shape: ShapeInput,
@@ -63,7 +74,9 @@ export const SceneInput = z.object({
   turn: z.number().optional().describe('Turn in degrees about the vertical axis'),
   altitude: z.number().optional().describe('Centre altitude in metres (default 55; raised automatically to clear the floor)'),
   dim_flight: z.boolean().optional().describe('Dim the lights while flying into this formation (hides the transition)'),
-  spare_fraction: z.number().optional().describe('0–0.7: fraction of drones parked dark behind the formation. Use 0.3–0.6 for digits or short text so it stays compact.'),
+  spare_fraction: z.number().optional().describe('0–0.7: fraction of drones taken out of the main formation as spares. Use 0.3–0.6 for digits or short text so it stays compact.'),
+  spare_role: SpareRoleInput.optional().describe('What the spare drones do (default park).'),
+  idle_motion: IdleMotionInput.optional().describe('Gentle motion while held, to keep a long hold alive. Optional; spacing never shrinks.'),
 })
 export type SceneInput = z.infer<typeof SceneInput>
 

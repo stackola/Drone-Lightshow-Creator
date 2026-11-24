@@ -108,3 +108,18 @@ test('light cues: add from the timeline, edit, undo', async ({ page }) => {
   await page.keyboard.press('Control+z')
   await expect(page.locator('.blk.cue')).toHaveCount(before)
 })
+
+test('idle drones: spare drones become a halo, and the formation breathes safely', async ({ page }) => {
+  await fresh(page)
+  await page.locator('.slist .srow', { hasText: 'Heart' }).click()
+  await page.getByRole('button', { name: /Shape$/ }).first().click()
+  await page.getByRole('button', { name: 'Halo' }).click()
+  await expect(page.getByRole('radio', { name: 'Halo' })).toHaveAttribute('aria-checked', 'true')
+  await page.getByRole('radio', { name: 'Breathe', exact: true }).click()
+  await expect(page.getByText(/Safe up to \d+%/)).toBeVisible()
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 20000 })
+  // Switching the role rebuilds the spare layer in place.
+  await page.getByRole('radio', { name: 'Starfield' }).click()
+  await expect(page.getByRole('radio', { name: 'Starfield' })).toHaveAttribute('aria-checked', 'true')
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 20000 })
+})

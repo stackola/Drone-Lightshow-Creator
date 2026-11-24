@@ -112,7 +112,7 @@ export type ShapeSpec =
   | { kind: 'polygon'; size: number; sides: number; fill: Fill }
   | { kind: 'star'; size: number; points: number; inner: number; fill: Fill }
   | { kind: 'heart'; size: number; fill: Fill }
-  | { kind: 'grid'; size: number; aspect: number }
+  | { kind: 'grid'; size: number; aspect: number; scatter?: number; fill?: Fill }
   | { kind: 'spiral'; size: number; turns: number }
   | { kind: 'wave'; size: number; cycles: number; amplitude: number }
   | { kind: 'sphere'; size: number }

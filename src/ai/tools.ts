@@ -14,8 +14,9 @@ import { alignScenesToBars } from '@/core/music'
 import { autoFix } from '@/core/fixes'
 import { ceilTo } from '@/core/math'
 import { defaultEffect } from '@/core/effects'
-import { CueTiming, LightInput, SceneInput, ShapeInput } from './schemas'
-import { cueFromInput, effectFromInput, sceneFromInput, shapeFromInput } from './convert'
+import { CueTiming, IdleMotionInput, LightInput, SceneInput, ShapeInput, SpareRoleInput } from './schemas'
+import { cueFromInput, effectFromInput, motionFromInput, sceneFromInput, shapeFromInput, withSpareRole } from './convert'
+import { calmMotion } from '@/core/idle'
 import { describeMusic, summarizeShow } from './context'
 import { contactSheet, fourViews } from './render'
 import { createModel, lookAndFix, modelShape } from './model3d'
@@ -157,7 +158,7 @@ export const TOOLS = [
   }),
   tool({
     name: 'edit_scene',
-    description: 'Change a scene’s name, timing, placement, rotation, spin or overall size. Sizes can only grow beyond the safe minimum; flights can be set longer than their fastest safe time but never shorter.',
+    description: 'Change a scene’s name, timing, placement, rotation, spin, idle motion, spare drones or overall size. Sizes can only grow beyond the safe minimum; flights can be set longer than their fastest safe time but never shorter.',
     schema: z.object({
       scene_id: sceneRef,
       name: z.string().optional(),
@@ -172,6 +173,8 @@ export const TOOLS = [
       altitude: z.number().optional().describe('Centre altitude (m)'),
       z: z.number().optional().describe('Centre depth (m, positive = toward the audience)'),
       size_scale: z.number().optional().describe('Multiply the formation size, e.g. 1.2 = 20% larger, 0.8 = smaller (never below safe spacing)'),
+      idle_motion: IdleMotionInput.optional(),
+      spare_role: SpareRoleInput.optional().describe('Give the scene’s spare drones a role (adds 25% spares if it has none)'),
     }),
     label: () => 'Editing a scene',
     run: (i) => {
@@ -199,6 +202,18 @@ export const TOOLS = [
       }
       if (i.size_scale !== undefined || i.tilt !== undefined || i.turn !== undefined || i.roll !== undefined) {
         out = fitScene(out, doc().droneCount, comfortableSpacing(doc().limits.minSpacing), 'grow')
+      }
+      if (i.idle_motion) {
+        const m = motionFromInput(i.idle_motion)
+        out = { ...out }
+        if (m) out.motion = m
+        else delete out.motion
+        out = calmMotion(out, doc())
+        changes.push(out.motion ? `idle motion ${out.motion.kind} ${out.motion.amount}${m && out.motion.amount < m.amount ? ' (calmed to the safe limit)' : ''}` : m ? 'idle motion removed: too fast for this formation even when calmed' : 'still while held')
+      }
+      if (i.spare_role) {
+        out = withSpareRole(out, doc(), i.spare_role)
+        changes.push(`spare drones: ${i.spare_role}`)
       }
       replaceScene(index, out, `Edit ${out.name}`)
       return ok(`Edited “${out.name}”: ${changes.join(', ') || 'no change'}`)

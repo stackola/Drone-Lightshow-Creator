@@ -210,7 +210,8 @@ input, textarea { user-select: text; }
 .seg button:hover { color: var(--text); }
 .seg button.on { background: var(--panel-3); color: var(--text); box-shadow: 0 0 0 1px var(--line-2) inset; }
 .seg.full { display: flex; width: 100%; }
-.seg.full button { flex: 1; }
+.seg.full button { flex: 1 1 0; min-width: 0; padding: 0 4px; justify-content: center; overflow: hidden; text-overflow: ellipsis; }
+.seg.full { min-width: 0; }
 
 .toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; color: var(--muted); }
 .toggle input { display: none; }
@@ -425,3 +426,11 @@ input, textarea { user-select: text; }
 .m3d-busy { display: flex; gap: 8px; align-items: center; color: var(--muted); padding: 10px; border: 1px dashed var(--line-2); border-radius: 10px; }
 .m3d-side { display: flex; flex-direction: column; }
 .m3d-empty { width: 260px; height: 260px; display: grid; place-items: center; background: #04060b; border-radius: 10px; color: var(--muted); }
+
+/* Spare-drone roles */
+.menu-item .menu-hint { margin-left: auto; color: var(--faint); font-size: 11px; padding-left: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; }
+.role-chip { width: 14px; height: 14px; border-radius: 4px; flex: none; border: 1px solid rgba(255,255,255,0.15); background: #05070d; }
+.role-chip.role-starfield { background: radial-gradient(circle at 30% 35%, #e8eeff 0 1px, transparent 1.5px), radial-gradient(circle at 70% 60%, #e8eeff 0 1px, transparent 1.5px), radial-gradient(circle at 45% 80%, #9aa7c7 0 1px, transparent 1.5px), #0b1020; }
+.role-chip.role-halo { background: radial-gradient(circle, transparent 0 3px, var(--accent) 3.5px 5px, transparent 5.5px), #0b1020; }
+.role-chip.role-frame { background: #0b1020; box-shadow: inset 0 0 0 2px var(--accent); }
+.role-chip.role-base { background: linear-gradient(to top, var(--accent) 0 3px, #0b1020 3px); }

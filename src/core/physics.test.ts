@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { compile, expandSet } from './compile'
+import { allocate, compile, expandSet } from './compile'
+import { addSpareLayer, applySpareRole } from './idle'
 import { evaluate } from './evaluate'
 import { validate, flightClosestApproach } from './validate'
 import { fitScene, newScene, newShow } from './defaults'
 import { applyFixToDoc } from './fixes'
-import { fastestProfile, holdPeaks, holdPose, holdRange, moveExtents, profilePeaks } from './motion'
+import { fastestProfile, holdPeaks, holdPose, holdRange, motionCycles, moveExtents, profilePeaks } from './motion'
 import { minPairDistance, rng } from './math'
 import { normalizeDoc } from './serialize'
 import type { HoldMotion, ShapeKind, ShowDoc } from './types'
@@ -115,8 +116,8 @@ describe('jerk limits', () => {
 describe('hold motions', () => {
   const motions: HoldMotion[] = [
     { kind: 'breathe', amount: 0.06, period: 8 },
-    { kind: 'bob', amount: 1.5, period: 6 },
-    { kind: 'sway', amount: 6, period: 10 },
+    { kind: 'bob', amount: 1, period: 8 },
+    { kind: 'sway', amount: 4, period: 12 },
   ]
 
   function heldShow(motion: HoldMotion, spin = 0): ShowDoc {
@@ -162,10 +163,16 @@ describe('hold motions', () => {
   })
 
   it('peaks match the analytic bob speed', () => {
-    // Away from the envelope ramps, bob speed peaks at A·2π/P.
+    // dy = A·sinθ(1 − cosθ)/2 / (3√3/8): fastest on the way down (θ = π), at A·ω/(3√3/8).
+    const w = (2 * Math.PI) / 10
     const pk = holdPeaks([[0, 0, 0]], 0, 60, { kind: 'bob', amount: 1, period: 10 })
-    expect(pk.up).toBeGreaterThan((2 * Math.PI) / 10 * 0.98)
-    expect(pk.up).toBeLessThan((2 * Math.PI) / 10 * 1.3)
+    expect(pk.down).toBeCloseTo(w / ((3 * Math.sqrt(3)) / 8), 3)
+    expect(pk.up).toBeCloseTo((w * 0.5625) / ((3 * Math.sqrt(3)) / 8), 3)
+  })
+
+  it('fits whole cycles into the hold', () => {
+    expect(motionCycles(20, 6)).toEqual({ cycles: 3, period: 20 / 3 })
+    expect(motionCycles(5, 6)).toEqual({ cycles: 1, period: 5 })
   })
 
   it('flags violent motion, and the calm fix makes it safe', () => {
@@ -199,5 +206,54 @@ describe('hold motions', () => {
     expect(back.limits.maxJerk).toBe(4.5)
     const old = normalizeDoc(JSON.parse(JSON.stringify({ ...doc, limits: { ...doc.limits, maxJerk: undefined } })))
     expect(old.limits.maxJerk).toBe(6)
+  })
+})
+
+describe('spare-drone roles', () => {
+  const roles = ['park', 'starfield', 'halo', 'frame', 'base'] as const
+
+  it('every role keeps the drone split, stays safe, and sits where it should', () => {
+    for (const kind of ['heart', 'star', 'sphere'] as const) {
+      for (const role of roles) {
+        const doc = newShow(200)
+        const base = newScene(doc, kind)
+        const scene = addSpareLayer(base, doc, role, 0.3)
+        doc.scenes.push(scene)
+        const c = compile(doc)
+        const v = validate(doc, c)
+        expect(v.issues, `${kind}/${role}`).toEqual([])
+        const g = c.scenes[0]!
+        const counts = allocate(200, scene.layers.map((l) => l.weight))
+        expect(counts[1]).toBeGreaterThanOrEqual(55)
+        expect(counts[1]).toBeLessThanOrEqual(65)
+        expect(scene.layers[1]!.role).toBe(role)
+        // Split the points: main layer first, spares after.
+        const main = g.points.subarray(0, counts[0]! * 3), spare = g.points.subarray(counts[0]! * 3)
+        const box = (p: Float32Array) => {
+          const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity]
+          for (let i = 0; i < p.length; i += 3) for (let a = 0; a < 3; a++) { lo[a] = Math.min(lo[a]!, p[i + a]!); hi[a] = Math.max(hi[a]!, p[i + a]!) }
+          return { lo, hi }
+        }
+        const m = box(main), s = box(spare)
+        if (role === 'park' || role === 'starfield') expect(s.hi[2]!, `${kind}/${role} behind`).toBeLessThan(m.lo[2]!)
+        if (role === 'base') expect(s.hi[1]!, `${kind}/${role} below`).toBeLessThan(m.lo[1]!)
+        if (role === 'halo' || role === 'frame') {
+          expect(s.lo[0]!).toBeLessThan(m.lo[0]!); expect(s.hi[0]!).toBeGreaterThan(m.hi[0]!)
+          expect(s.lo[1]!).toBeLessThan(m.lo[1]!); expect(s.hi[1]!).toBeGreaterThan(m.hi[1]!)
+        }
+      }
+    }
+  })
+
+  it('switching role rebuilds the layer in place', () => {
+    const doc = newShow(150)
+    const scene = addSpareLayer(newScene(doc, 'star'), doc, 'park', 0.25)
+    const halo = applySpareRole(scene, doc, scene.layers[1]!.id, 'halo')
+    expect(halo.layers[1]!.id).toBe(scene.layers[1]!.id)
+    expect(halo.layers[1]!.shape.kind).toBe('circle')
+    expect(halo.layers[1]!.effect.kind).toBe('chase')
+    expect(halo.layers[1]!.weight).toBeCloseTo(scene.layers[1]!.weight, 9)
+    const frame = applySpareRole(halo, doc, scene.layers[1]!.id, 'frame')
+    expect(frame.layers[1]!.shape).toMatchObject({ kind: 'grid', fill: 'outline' })
   })
 })

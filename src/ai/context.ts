@@ -29,7 +29,7 @@ export function describeEffect(e: Effect): string {
 function describeShape(shape: ShowDoc['scenes'][number]['layers'][number]['shape']): string {
   const def = SHAPE_BY_KIND[shape.kind]
   const extras = def.params.map((p) => `${p.key} ${(shape as unknown as Record<string, number>)[p.key]}`)
-  if ('fill' in shape) extras.unshift(shape.fill)
+  if ('fill' in shape) extras.unshift(shape.fill ?? 'filled')
   if (shape.kind === 'text') extras.unshift(`"${shape.text.replace(/\n/g, '\\n')}"`, shape.font)
   if (shape.kind === 'image') extras.unshift(`image "${shape.name}"`)
   if (shape.kind === 'model') extras.unshift(`3D model "${shape.name}", ${shape.parts.length} parts`)
@@ -37,6 +37,13 @@ function describeShape(shape: ShowDoc['scenes'][number]['layers'][number]['shape
 }
 
 /** Compact, complete description of the current show for the model. */
+function describeMotion(s: ShowDoc['scenes'][number]): string {
+  const m = s.motion
+  if (!m || m.kind === 'none' || !m.amount) return ''
+  const amt = m.kind === 'breathe' ? `${Math.round(m.amount * 100)}%` : m.kind === 'bob' ? `${m.amount} m` : `${m.amount}°`
+  return `, idle motion ${m.kind} ${amt} every ${m.period} s`
+}
+
 export function summarizeShow(doc: ShowDoc, compiled: Compiled = compile(doc), validation: Validation = validate(doc, compiled)): string {
   const L = doc.limits
   const lines: string[] = []
@@ -54,9 +61,9 @@ export function summarizeShow(doc: ShowDoc, compiled: Compiled = compile(doc), v
     const timing = t
       ? `flies in ${formatTime(t.flightStart)}–${formatTime(t.holdStart)} (${f1(t.holdStart - t.flightStart)} s, ${s.flight.duration === null ? 'auto' : 'set'}; fastest safe ${f1(t.minFlight)} s${s.flight.dim ? ', dimmed' : ''}), holds ${formatTime(t.holdStart)}–${formatTime(t.holdEnd)}`
       : ''
-    lines.push(`${i + 1}. [${s.id}] "${s.name}" — ${timing}. Centre (${s.position.map(f1).join(', ')}) m, rotation tilt ${s.rotation[0]}° turn ${s.rotation[1]}° roll ${s.rotation[2]}°, spin ${s.spin}°/s.`)
+    lines.push(`${i + 1}. [${s.id}] "${s.name}" — ${timing}. Centre (${s.position.map(f1).join(', ')}) m, rotation tilt ${s.rotation[0]}° turn ${s.rotation[1]}° roll ${s.rotation[2]}°, spin ${s.spin}°/s${describeMotion(s)}.${t?.detour ? ' Flight in takes a collision-free detour (spread, cross, close in).' : ''}`)
     s.layers.forEach((l, li) => {
-      lines.push(`   layer ${li}: ${counts[li]} drones, ${describeShape(l.shape)}; light: ${describeEffect(l.effect)}${l.offset.some((v) => v !== 0) ? `; offset (${l.offset.map(f1).join(', ')})` : ''}`)
+      lines.push(`   layer ${li}${l.role ? ` (spare drones: ${l.role})` : ''}: ${counts[li]} drones, ${describeShape(l.shape)}; light: ${describeEffect(l.effect)}${l.offset.some((v) => v !== 0) ? `; offset (${l.offset.map(f1).join(', ')})` : ''}`)
     })
   })
   lines.push(`Return & land ${formatTime(compiled.returnFlight.t0)}–${formatTime(compiled.duration)}.`)

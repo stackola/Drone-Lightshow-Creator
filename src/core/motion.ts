@@ -205,27 +205,35 @@ export function spinPeaks(omega: number, hold: number, radius: number): { speed:
 
 // --- Hold motions -----------------------------------------------------------------
 // A held formation can spin, breathe (scale up and back), bob (rise and fall)
-// and sway (turn back and forth). All motions ease in and out with an envelope
-// that is zero, with zero slope and curvature, at both ends of the hold, so the
-// formation arrives and leaves at rest in its base pose (only spin leaves it
-// turned) and acceleration stays continuous across the hand-over to a flight.
+// and sway (turn back and forth). Each motion runs a whole number of cycles in
+// the hold (the period is adjusted to fit), and each cycle starts and ends at
+// rest with zero velocity and acceleration — so the formation arrives and
+// leaves in its base pose (only spin leaves it turned) and acceleration stays
+// continuous across the hand-over to a flight. No extra easing is needed.
+//
+//   breathe: scale = 1 + A·sin⁴(θ/2)              (only ever grows: spacing never shrinks)
+//   bob:     dy    = A·w(θ)        sway: angle += A·w(θ)
+//   w(θ) = sin θ·(1 − cos θ)/2 / 0.6495…          (swings to +1 and −1 once per cycle)
 
 export const NO_MOTION: HoldMotion = { kind: 'none', amount: 0, period: 4 }
 
-/** Smootherstep: zero slope and zero curvature at both ends, so motion starts and stops without a jolt. */
-function smooth(x: number): number {
-  return x <= 0 ? 0 : x >= 1 ? 1 : x * x * x * (x * (6 * x - 15) + 10)
+const SWING_PEAK = (Math.sqrt(3) / 2) * 0.75
+
+function swing(th: number): number {
+  return (Math.sin(th) * (1 - Math.cos(th))) / 2 / SWING_PEAK
 }
 
-/**
- * 0 at both ends of the hold, 1 in the middle; velocity and acceleration are
- * zero at both ends. The ramp lasts at least one period (so easing in adds
- * little speed on top of the motion itself), at most a quarter of the hold.
- */
-export function holdEnvelope(hold: number, t: number, period = 2): number {
-  const R = Math.min(Math.max(2, period), hold / 4)
-  if (R <= 0) return 0
-  return smooth(t / R) * smooth((hold - t) / R)
+function swell(th: number): number {
+  const s = (1 - Math.cos(th)) / 2
+  return s * s
+}
+
+/** How many whole cycles fit in the hold, and their actual period. */
+export function motionCycles(hold: number, period: number): { cycles: number; period: number } {
+  const P = Math.max(0.5, period)
+  if (hold <= 0) return { cycles: 0, period: P }
+  const cycles = Math.max(1, Math.round(hold / P))
+  return { cycles, period: hold / cycles }
 }
 
 export interface HoldPose {
@@ -241,12 +249,10 @@ export function holdPose(omega: number, hold: number, motion: HoldMotion | undef
   let angle = spinAngle(omega, hold, t)
   let scale = 1, dy = 0
   if (motion && motion.kind !== 'none' && motion.amount > 0 && hold > 0) {
-    const P = Math.max(0.5, motion.period)
-    const env = holdEnvelope(hold, t, P)
-    const w = (2 * Math.PI) / P
-    if (motion.kind === 'breathe') scale = 1 + motion.amount * env * (1 - Math.cos(w * t)) / 2
-    else if (motion.kind === 'bob') dy = motion.amount * env * Math.sin(w * t)
-    else if (motion.kind === 'sway') angle += (motion.amount * Math.PI / 180) * env * Math.sin(w * t)
+    const th = (2 * Math.PI * motionCycles(hold, motion.period).cycles * Math.max(0, Math.min(hold, t))) / hold
+    if (motion.kind === 'breathe') scale = 1 + motion.amount * swell(th)
+    else if (motion.kind === 'bob') dy = motion.amount * swing(th)
+    else if (motion.kind === 'sway') angle += (motion.amount * Math.PI / 180) * swing(th)
   }
   return { angle, scale, dy }
 }

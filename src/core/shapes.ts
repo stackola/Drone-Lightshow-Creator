@@ -4,6 +4,7 @@
 
 import type { Fill, ModelPart, ShapeKind, ShapeSpec } from './types'
 import { sampleModel } from './model3d'
+import { hash01 } from './math'
 import {
   base64ToBytes, gather, maskCandidates, polygonCandidates, readingOrder, sampleCurve,
   samplePolygonOutline, spreadPick,
@@ -57,9 +58,12 @@ export const SHAPES: ShapeDef[] = [
     create: () => ({ kind: 'polygon', size: 1, sides: 6, fill: 'filled' }),
   },
   {
-    kind: 'grid', label: 'Grid', group: '2D', hasFill: false,
-    params: [{ key: 'aspect', label: 'Aspect (w/h)', min: 0.25, max: 4, step: 0.05 }],
-    create: () => ({ kind: 'grid', size: 1, aspect: 1.6 }),
+    kind: 'grid', label: 'Grid', group: '2D', hasFill: true,
+    params: [
+      { key: 'aspect', label: 'Aspect (w/h)', min: 0.25, max: 4, step: 0.05 },
+      { key: 'scatter', label: 'Scatter', min: 0, max: 0.45, step: 0.05 },
+    ],
+    create: () => ({ kind: 'grid', size: 1, aspect: 1.6, scatter: 0, fill: 'filled' }),
   },
   {
     kind: 'spiral', label: 'Spiral', group: '2D', hasFill: false,
@@ -216,7 +220,12 @@ function generateUnit(spec: ShapeSpec, n: number): ShapePoints {
     case 'polygon':
       return plain(polyShape(regularPolygon(Math.round(spec.sides)), spec.fill, n))
     case 'grid':
-      return plain(grid(n, spec.aspect))
+      if (spec.fill === 'outline') {
+        // A rectangular frame, width 1 and height 1/aspect.
+        const h = 0.5 / Math.max(0.05, spec.aspect)
+        return plain(samplePolygonOutline(n, [[-0.5, -h], [0.5, -h], [0.5, h], [-0.5, h]]))
+      }
+      return plain(grid(n, spec.aspect, spec.scatter ?? 0))
     case 'spiral':
       return plain(sampleCurve(n, false, (t) => {
         const r = 0.5 * (0.08 + 0.92 * t)
@@ -263,17 +272,19 @@ function sunflower(n: number): Float32Array {
 }
 
 /** Rows × cols lattice with width 1; the last row is centred. */
-function grid(n: number, aspect: number): Float32Array {
+/** A grid; `scatter` (0–0.45) jitters each point within its cell for a natural, starry look. */
+function grid(n: number, aspect: number, scatter = 0): Float32Array {
   const cols = Math.max(1, Math.round(Math.sqrt(n * aspect)))
   const rows = Math.ceil(n / cols)
   const step = cols > 1 ? 1 / (cols - 1) : 1
+  const j = Math.max(0, Math.min(0.45, scatter)) * step
   const out = new Float32Array(n * 3)
   for (let k = 0; k < n; k++) {
     const r = Math.floor(k / cols)
     const inRow = r === rows - 1 ? n - r * cols : cols
     const c = k - r * cols
-    out[k * 3] = (c - (inRow - 1) / 2) * step
-    out[k * 3 + 1] = ((rows - 1) / 2 - r) * step
+    out[k * 3] = (c - (inRow - 1) / 2) * step + (j ? (hash01(k, 101) - 0.5) * j : 0)
+    out[k * 3 + 1] = ((rows - 1) / 2 - r) * step + (j ? (hash01(k, 202) - 0.5) * j : 0)
   }
   return out
 }

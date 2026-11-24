@@ -1,5 +1,6 @@
 import type { Draft } from 'immer'
-import type { Effect, LightCue, Scene, ShapeKind, ShapeSpec, ShowDoc } from '@/core/types'
+import type { Effect, LightCue, Scene, ShapeKind, ShapeSpec, ShowDoc, SpareRole } from '@/core/types'
+import { SPARE_ROLES, addSpareLayer, applySpareRole, calmMotion } from '@/core/idle'
 import { fitScene, fitToAirspace, newId, newLayer, newScene, newShape } from '@/core/defaults'
 import { comfortableSpacing, type FixAction, type Issue } from '@/core/validate'
 import { applyFixToDoc, autoFix } from '@/core/fixes'
@@ -96,6 +97,7 @@ export function addLayer(sceneId: string, kind: ShapeKind | 'spare') {
   const spare = kind === 'spare'
   const layer = newLayer(newShape(spare ? 'grid' : kind), spare ? defaultEffect('off') : defaultEffect('solid', '#ffffff'))
   if (spare) {
+    layer.role = 'park'
     layer.offset = [0, 0, -25]
     layer.weight = 0.3
   }
@@ -105,6 +107,30 @@ export function addLayer(sceneId: string, kind: ShapeKind | 'spare') {
     const i = d.scenes.findIndex((x) => x.id === sceneId)
     if (i >= 0) d.scenes[i] = fitted as Draft<Scene>
   }, spare ? 'Park spare drones' : 'Add shape')
+}
+
+/** Use some of a scene's drones as spares in a role (parked, starfield, halo, frame, base). */
+export function addSpare(sceneId: string, role: SpareRole) {
+  const s = getState()
+  const scene = s.doc.scenes.find((x) => x.id === sceneId)
+  if (!scene) return
+  // A bigger layout can make the scene's idle motion too fast: keep it safe.
+  const next = calmMotion(addSpareLayer(scene, s.doc, role, 0.3), s.doc)
+  s.update((d) => {
+    const i = d.scenes.findIndex((x) => x.id === sceneId)
+    if (i >= 0) d.scenes[i] = next as Draft<Scene>
+  }, `Spare drones: ${SPARE_ROLES.find((r) => r.role === role)?.label ?? role}`)
+}
+
+export function setSpareRole(sceneId: string, layerId: string, role: SpareRole) {
+  const s = getState()
+  const scene = s.doc.scenes.find((x) => x.id === sceneId)
+  if (!scene) return
+  const next = calmMotion(applySpareRole(scene, s.doc, layerId, role), s.doc)
+  s.update((d) => {
+    const i = d.scenes.findIndex((x) => x.id === sceneId)
+    if (i >= 0) d.scenes[i] = next as Draft<Scene>
+  }, `Spare drones: ${SPARE_ROLES.find((r) => r.role === role)?.label ?? role}`)
 }
 
 export function removeLayer(sceneId: string, layerId: string) {

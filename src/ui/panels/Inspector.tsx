@@ -4,14 +4,16 @@ import type { Draft } from 'immer'
 import { getState, useStore } from '@/state/store'
 import { useShallow } from 'zustand/react/shallow'
 import {
-  addLayer, applyFix, changeLayerKind, deleteCue, deleteScene, duplicateCue, duplicateScene, fitSceneToSpacing, fixAll,
-  focusIssue, removeLayer, setDroneCount, setLayerCount, setLayerShape, updateCue, updateScene,
+  addLayer, addSpare, applyFix, changeLayerKind, deleteCue, deleteScene, duplicateCue, duplicateScene, fitSceneToSpacing, fixAll,
+  focusIssue, removeLayer, setDroneCount, setLayerCount, setLayerShape, setSpareRole, updateCue, updateScene,
 } from '@/state/actions'
 import { SHAPES, SHAPE_BY_KIND, sizeLabel } from '@/core/shapes'
 import { allocate } from '@/core/compile'
-import { comfortableSpacing, maxSafeSpin, formatTime, type Issue } from '@/core/validate'
+import { comfortableSpacing, extremeRels, maxSafeMotionAmount, maxSafeSpin, formatTime, type Issue } from '@/core/validate'
+import { MOTION_KINDS, SPARE_ROLES, defaultMotion, motionAmountUnit } from '@/core/idle'
+import { motionCycles } from '@/core/motion'
 import { fitScene, fitToAirspace, rasterizeText, unitSpacing } from '@/core/defaults'
-import type { Layer, LightCue, Scene, ShapeKind, ShapeSpec, TextFont, Vec3 } from '@/core/types'
+import type { HoldMotion, Layer, LightCue, Scene, ShapeKind, ShapeSpec, TextFont, Vec3 } from '@/core/types'
 import { NumberField, Row, Segmented, Toggle, MenuButton } from '@/ui/components/controls'
 import { EffectEditor } from './EffectEditor'
 import { ShapePicker } from './ScenesPanel'
@@ -91,7 +93,7 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
   const up = (recipe: (s: Draft<Scene>) => void, label: string, key?: string) => updateScene(id, recipe, label, key)
   const manual = scene.flight.duration !== null
   const flightDur = times ? times.holdStart - times.flightStart : 0
-  const safeSpin = cs ? maxSafeSpin(scene.spin || 1, scene.hold, cs.spinRadius, limits) : 0
+  const safeSpin = cs ? maxSafeSpin(scene.spin || 1, scene.hold, cs.spinRadius, limits, undefined, 720) : 0
 
   return (
     <>
@@ -145,9 +147,12 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
           <MenuButton className="btn ghost sm" title="Add another shape to this scene" width={300} align="right" button={<><Plus size={12} /> Shape</>}>
             {(close) => (
               <>
-                <button className="menu-item" onClick={() => { close(); addLayer(id, 'spare') }}>
-                  <span className="effect-chip" style={{ background: '#05070d' }} /> Park spare drones (lights off)
-                </button>
+                <div className="menu-label">Use spare drones</div>
+                {SPARE_ROLES.map((r) => (
+                  <button key={r.role} className="menu-item" title={r.hint} onClick={() => { close(); addSpare(id, r.role) }}>
+                    <span className={`role-chip role-${r.role}`} /> {r.label}
+                  </button>
+                ))}
                 <div className="menu-sep" />
                 <ShapePicker onPick={(k) => { close(); if (k === 'describe') getState().set({ dialog: 'describe' }); else if (k !== 'image') addLayer(id, k) }} />
               </>
@@ -167,13 +172,69 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
         <Row stack label="Rotation (°)">
           <Vec3Field value={scene.rotation} labels={['Tilt', 'Turn', 'Roll']} step={5} onChange={(v) => up((s) => { s.rotation = v }, 'Rotate scene', `rot:${id}`)} />
         </Row>
+      </Section>
+
+      <Section title="Motion while held">
         <Row label="Spin" title="Turns the formation about its vertical axis while it is held. Eases in and out.">
           <NumberField value={scene.spin} step={1} unit="°/s" min={-720} max={720} onChange={(v) => up((s) => { s.spin = v }, 'Spin', `spin:${id}`)} />
         </Row>
         {cs && cs.spinRadius > 0 && (
-          <div className="hint" style={{ margin: '4px 0 0 100px' }}>Safe up to {Math.abs(safeSpin).toFixed(1)}°/s for this size</div>
+          <div className="hint" style={{ margin: '4px 0 6px 100px' }}>Safe up to {Math.abs(safeSpin).toFixed(1)}°/s for this size</div>
         )}
+        <HoldMotionEditor scene={scene} />
       </Section>
+    </>
+  )
+}
+
+/** Idle motion of a held formation: breathe, bob or sway, with a safe default amount. */
+function HoldMotionEditor({ scene }: { scene: Scene }) {
+  const cs = useStore((s) => s.compiled?.scenes.find((x) => x.id === scene.id))
+  const limits = useStore((s) => s.doc.limits)
+  const motion = scene.motion ?? defaultMotion('none')
+  const u = motionAmountUnit(motion.kind)
+  const rels = useMemo(() => (cs ? extremeRels(cs) : []), [cs])
+  const safe = useMemo(
+    () => (cs && motion.kind !== 'none' ? maxSafeMotionAmount(rels, cs.omega, scene.hold, motion, limits, u.max / u.scale) : Infinity),
+    [cs, rels, motion.kind, motion.period, scene.hold, limits], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+  const up = (recipe: (s: Draft<Scene>) => void, label: string, key?: string) => updateScene(scene.id, recipe, label, key)
+  const pick = (kind: HoldMotion['kind']) => {
+    if (kind === 'none') return up((s) => { delete s.motion }, 'Still while held')
+    const d = defaultMotion(kind)
+    // Start gentle: at most 70% of what this formation can safely do.
+    const u2 = motionAmountUnit(kind)
+    const room = cs ? maxSafeMotionAmount(rels, cs.omega, scene.hold, d, limits, u2.max / u2.scale) : d.amount
+    const step = kind === 'breathe' ? 0.01 : kind === 'bob' ? 0.5 : 1
+    const amount = Math.max(step, Math.floor(Math.min(d.amount, room * 0.7) / step) * step)
+    up((s) => { s.motion = { ...d, amount } }, `${MOTION_KINDS.find((m) => m.kind === kind)!.label} while held`)
+  }
+  return (
+    <>
+      <Row label="Idle motion" title={MOTION_KINDS.find((m) => m.kind === motion.kind)?.hint}>
+        <Segmented full value={motion.kind} options={MOTION_KINDS.map((m) => ({ value: m.kind, label: m.label, title: m.hint }))} onChange={pick} />
+      </Row>
+      {motion.kind !== 'none' && (
+        <>
+          <Row label={motion.kind === 'breathe' ? 'Grows by' : motion.kind === 'bob' ? 'Height' : 'Angle'}>
+            <NumberField
+              value={Math.round(motion.amount * u.scale * 100) / 100} step={u.step} unit={u.unit} min={0} max={u.max}
+              onChange={(v) => up((s) => { if (s.motion) s.motion.amount = v / u.scale }, 'Motion amount', `mamt:${scene.id}`)}
+            />
+          </Row>
+          <Row label="Period" title="Seconds for one full cycle">
+            <NumberField value={motion.period} step={0.5} unit="s" min={0.5} max={120} onChange={(v) => up((s) => { if (s.motion) s.motion.period = v }, 'Motion period', `mper:${scene.id}`)} />
+          </Row>
+          <div className="hint" style={{ margin: '2px 0 2px 100px' }}>
+            {(() => { const c = motionCycles(scene.hold, motion.period); return `${c.cycles} cycle${c.cycles === 1 ? '' : 's'} of ${c.period.toFixed(1)} s in this hold` })()}
+          </div>
+          {Number.isFinite(safe) && (
+            <div className={`hint ${motion.amount > safe + 1e-9 ? 'err' : ''}`} style={{ margin: '2px 0 4px 100px' }}>
+              Safe up to {(Math.floor(safe * u.scale * 10) / 10).toFixed(motion.kind === 'breathe' ? 0 : 1)}{u.unit} at this period{scene.spin ? ' and spin' : ''}
+            </div>
+          )}
+        </>
+      )}
     </>
   )
 }
@@ -221,6 +282,12 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
         {multi && <button className="btn ghost icon sm danger" aria-label="Remove shape" title="Remove shape" onClick={() => removeLayer(scene.id, layer.id)}><Trash2 size={13} /></button>}
       </div>
       <div className="layer-body">
+        {layer.role && (
+          <div style={{ margin: '0 0 6px' }}>
+            <div className="hint" style={{ marginBottom: 4 }}>Spare drones · {SPARE_ROLES.find((r) => r.role === layer.role)?.hint}</div>
+            <Segmented full value={layer.role} options={SPARE_ROLES.map((r) => ({ value: r.role, label: r.label, title: r.hint }))} onChange={(r) => setSpareRole(scene.id, layer.id, r)} />
+          </div>
+        )}
         {shape.kind === 'text' && (
           <>
             <textarea className="textarea" rows={Math.min(4, shape.text.split('\n').length + 1)} value={shape.text} aria-label="Text" onChange={(e) => setText(e.target.value, shape.font)} />
@@ -261,7 +328,7 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
         )}
         {def.hasFill && 'fill' in shape && (
           <Row label="Style">
-            <Segmented full value={shape.fill} options={[{ value: 'filled', label: 'Filled' }, { value: 'outline', label: 'Outline' }]} onChange={(v) => { setLayerShape(scene.id, layer.id, { ...shape, fill: v } as ShapeSpec, 'Change style') }} />
+            <Segmented full value={shape.fill ?? 'filled'} options={[{ value: 'filled', label: 'Filled' }, { value: 'outline', label: 'Outline' }]} onChange={(v) => { setLayerShape(scene.id, layer.id, { ...shape, fill: v } as ShapeSpec, 'Change style') }} />
           </Row>
         )}
         {def.params.map((p) => (

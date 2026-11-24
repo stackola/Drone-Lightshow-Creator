@@ -141,6 +141,7 @@ export function withSpareDrones(scene: Scene, doc: ShowDoc, fraction: number): S
   const main = scene.layers[0]!
   if (f < 0.01) return scene
   const spare = newLayer(newShape('grid'), defaultEffect('off'))
+  spare.role = 'park'
   spare.offset = [0, 0, -25]
   const layers = [{ ...main, weight: 1 - f }, { ...spare, weight: f }]
   const fitted = fitScene({ ...scene, layers }, doc.droneCount, comfortableSpacing(doc.limits.minSpacing), 'exact')

@@ -55,6 +55,24 @@ describe('AI input conversion', () => {
     expect(scene.rotation[0]).toBe(80)
   })
 
+  it('applies idle motion and spare roles, and calms unsafe motion with the automatic fixes', () => {
+    const doc = newShow(160)
+    const scene = sceneFromInput(doc, {
+      name: 'Logo', shape: { kind: 'heart' }, light: { effect: 'solid', color: '#ff3366' }, hold_seconds: 20,
+      spare_fraction: 0.3, spare_role: 'halo', idle_motion: { kind: 'breathe', amount: 25, period_seconds: 2 },
+    })
+    // 25% breathing every 2 s is far too fast for a big formation: it is calmed on the way in.
+    expect(scene.motion?.kind ?? 'none').not.toBe('bob')
+    expect(scene.motion?.amount ?? 0).toBeLessThan(0.25)
+    expect(scene.layers.map((l) => l.role)).toEqual([undefined, 'halo'])
+    const fixed = autoFix({ ...doc, scenes: [scene] })
+    expect(fixed.validation.issues).toEqual([])
+    const gentle = sceneFromInput(doc, { name: 'Calm', shape: { kind: 'circle' }, light: { effect: 'solid' }, hold_seconds: 20, idle_motion: { kind: 'bob', amount: 1, period_seconds: 8 } })
+    expect(gentle.motion).toEqual({ kind: 'bob', amount: 1, period: 8 })
+    const still = sceneFromInput(doc, { name: 'x', shape: { kind: 'circle' }, light: { effect: 'solid' }, idle_motion: { kind: 'none' } })
+    expect(still.motion).toBeUndefined()
+  })
+
   it('turns a plan into a show that passes every check', () => {
     const built = buildShowFromPlan(PLAN, newShow(160))
     expect(built.doc.name).toBe('Launch night')

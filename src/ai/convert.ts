@@ -3,7 +3,9 @@
 // suggests, the engine decides what is physically safe.
 
 import type { Effect, LightCue, Scene, ShapeSpec, ShowDoc, Vec3 } from '@/core/types'
-import type { LightInput, SceneInput, ShapeInput, ShowPlan } from './schemas'
+import type { IdleMotionInput, LightInput, SceneInput, ShapeInput, ShowPlan } from './schemas'
+import type { HoldMotion, SpareRole } from '@/core/types'
+import { applySpareRole, addSpareLayer, calmMotion, defaultMotion } from '@/core/idle'
 import { defaultEffect } from '@/core/effects'
 import { DEFAULT_CENTER, fitScene, fitToAirspace, newId, newScene, newShape, rasterizeText, withSpareDrones } from '@/core/defaults'
 import { SHAPE_BY_KIND } from '@/core/shapes'
@@ -88,6 +90,7 @@ export function sceneFromInput(doc: ShowDoc, input: SceneInput, opts: { custom?:
     rotation: [clamp(input.tilt, -90, 90, 0), clamp(input.turn, -180, 180, 0), 0],
     flight: { duration: null, dim: input.dim_flight ?? false },
   }
+  if (input.idle_motion) scene = { ...scene, motion: motionFromInput(input.idle_motion) }
   if (input.spare_fraction && input.spare_fraction > 0.02) scene = withSpareDrones(scene, doc, clamp(input.spare_fraction, 0, 0.7, 0))
   const scale = clamp(shapeIn.scale, 1, 4, 1)
   if (scale > 1.001) {
@@ -96,7 +99,26 @@ export function sceneFromInput(doc: ShowDoc, input: SceneInput, opts: { custom?:
   }
   // Rotation changes the extent, so re-check spacing between layers, then make it fit the airspace.
   scene = fitScene(scene, doc.droneCount, comfortableSpacing(doc.limits.minSpacing), 'grow')
-  return fitToAirspace(scene, doc)
+  scene = fitToAirspace(scene, doc)
+  if (input.spare_role && input.spare_role !== 'park') scene = withSpareRole(scene, doc, input.spare_role, input.spare_fraction)
+  return calmMotion(scene, doc)
+}
+
+/** Give the scene's spare drones a role, creating a spare layer (25% of drones) if it has none. */
+export function withSpareRole(scene: Scene, doc: ShowDoc, role: SpareRole, fraction?: number): Scene {
+  const spare = [...scene.layers].reverse().find((l) => l.role || l.effect.kind === 'off')
+  if (spare) return applySpareRole(scene, doc, spare.id, role)
+  return addSpareLayer(scene, doc, role, clamp(fraction, 0.05, 0.6, 0.25))
+}
+
+export function motionFromInput(m: IdleMotionInput): HoldMotion | undefined {
+  if (m.kind === 'none') return undefined
+  const d = defaultMotion(m.kind)
+  const amount =
+    m.kind === 'breathe' ? clamp(m.amount, 0, 30, d.amount * 100) / 100
+      : m.kind === 'bob' ? clamp(m.amount, 0, 10, d.amount)
+        : clamp(m.amount, 0, 45, d.amount)
+  return { kind: m.kind, amount, period: clamp(m.period_seconds, 1, 60, d.period) }
 }
 
 export function cueFromInput(start: number, light: LightInput, t: { duration_seconds: number; blend: LightCue['blend']; fade_in?: number; fade_out?: number }): LightCue {
