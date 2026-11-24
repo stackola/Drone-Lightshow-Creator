@@ -96,6 +96,7 @@ export function describeMusic(doc: ShowDoc): string {
   const onScreen = (s: { start: number; end: number }) =>
     doc.scenes.filter((_, i) => { const t = c.sceneTimes[i]; return t && t.holdStart < s.end && t.holdEnd > s.start }).map((sc) => `"${sc.name}"`).join(', ')
   const lines = [
+    ...(doc.audio?.generated ? [`“${doc.audio.name}” is an original score composed to this show (drops where hero formations arrive). After changing scenes or timing, call compose_score again so the music follows the show.`] : []),
     `${Math.round(m.bpm)} BPM, bar length ${m.barLength.toFixed(2)} s. The song plays ${formatTime(m.offset)}–${formatTime(songEnd)} in show time (${formatTime(m.duration)} long); the last formation currently ends at ${formatTime(showEnd)}${Math.abs(showEnd - songEnd) > m.barLength ? (showEnd < songEnd ? ` — ${Math.round(songEnd - showEnd)} s before the song ends` : ` — ${Math.round(showEnd - songEnd)} s after the song ends`) : ' (with the song)'}.`,
     'Sections (1-based index · label · show time · bars · loudness · formations held during it):',
     ...m.sections.map((s, i) => `${i + 1}. ${s.label} · ${formatTime(s.start)}–${formatTime(s.end)} · ${s.bars} bars · ${Math.round(s.energy * 100)}% · ${onScreen(s) || '—'}`),

@@ -4,11 +4,11 @@ Design drone light shows in the browser: arrange formations on a timeline, sync 
 
 Built for small agencies and operators who need to go from an idea to a convincing client preview quickly, without giving up a show that can actually fly.
 
-![Editor: scene list, audience view, inspector, and a timeline with scenes, light cues and music](docs/screenshot.png)
+![Editor: scene list, audience view, inspector, and a timeline with scenes, light cues, and the music with its sections and hits](docs/screenshot.png)
 
 ## The flagship show
 
-**Odyssey** (File → New show) is a 15-minute, 400-drone show in four acts, built entirely through the editor's own model API and required by the tests to pass every safety check. It plans in the background in a few seconds.
+**Odyssey** (File → New show) is a 15-minute, 400-drone show in four acts, built entirely through the editor's own model API and required by the tests to pass every safety check. It plans in the background in a few seconds. It comes with its own **original score**, composed to the show like a film score. Every formation arrives on a bar line, and each act builds into a drop that hits exactly as its hero formation lands: the tree, the Earth, the LED sign, Saturn and the ring of fire. THANK YOU gets a quiet break, and the landing gets an outro. The lights follow the score.
 - **Dawn:** a breathing sunrise that ripples up from the pads, and WELCOME written on over a starfield.
 - **Earth:** a swaying 3D tree, a bloom, a beating heart, and a swirling Earth. Then an ant-walk column marches over an arch into an LED sign scrolling "TOGETHER WE SHINE".
 - **Sky:** a bobbing hot-air balloon, a rocket that launches on a strobe, Saturn swirling in, a galaxy with a halo and starfield, and a cascading helix.
@@ -38,15 +38,26 @@ A show is a sequence: **takeoff → scene → scene → … → return & land**.
 
   **LED signs** are grids where each drone is one dot of a dot-matrix font, scrolling text column by column like a marquee. Two fonts: 5×7, or 3×5 for small fleets (a 5×12 panel of 60 drones shows three letters at a time). Set the panel to any size, such as 8 × 10; text stays on exact rows and is centred when the panel is taller than the font. These are light effects, so they also work as cues.
 - **Lights are first-class.** Each shape has a base look: solid, gradient, rainbow, pulse, twinkle, chase, wave, image colours, or lights off. On top of that, **light cues** sit on their own timeline track: flashes, strobes, washes, sweeps and blackouts. They can span scenes and flights, blend over the base look (replace, tint, add), and fade in and out.
-- **Music sync.** Drop in a song and beats are detected (spectral-flux onsets, tempo by autocorrelation, and a dynamic-programming beat tracker). Timeline edits snap to beats, and pulse and flash effects can fire on the beat or bar.
+- **Music is the backbone.** Drop in a song and the editor works out its structure:
+  - **beats** (spectral-flux onsets, tempo by autocorrelation, a dynamic-programming beat tracker);
+  - **loudness, bass and brightness** for every beat;
+  - **accents**: the stand-out hits, such as crashes and drops;
+  - **sections**, labelled intro, verse, build, drop, break or outro. Sections are found from bar-level changes in loudness, bass and brightness, and snapped to 4-bar phrases.
+
+  The music lane shows the sections as coloured bands, accents as markers, and the loudness curve. Timeline edits snap to beats. From the music menu:
+  - **Light the music** (bold or subtle) adds cues that follow the song's structure: breathing with the loudness in quiet parts, a sweep and beat flashes building into each drop, a flash on every accent in drops, sparkle in breaks, and a fade in the outro. Running it again replaces only its own cues.
+  - **Fit show to song** lands every arrival on a bar line. It then stretches or tightens holds, bar by bar, so the finale ends with the music. Flights never get faster than safe.
+
+  Lights can react to the music directly. *Breathe* brightness follows the loudness, a *level meter* fills with it, and flashes can fire on accents instead of every beat.
+- **No song? Compose one.** *Compose a score for this show* (music menu) writes an original soundtrack to your show. Arrivals move onto a bar grid, and the music builds and drops exactly as the hero formations arrive. It's synthesised in the browser (pads, arpeggio, bass, drums, risers, crashes, lead), so the editor knows the score exactly: beats, sections and hits. The project saves only the recipe, and the music is regenerated when you open it. Use it as a temp track for client previews, or as the show's music. Undo brings your previous song back.
 - **Client preview.** *Present* plays the show fullscreen from the audience position, with music.
 
 ## AI features
 
 Optional, powered by Claude Opus 5.5. Open **AI** in the top bar or press **Ctrl K**.
 
-- **Generate a show from a brief.** Describe the occasion, story, colours and words. Claude writes a structured plan (scenes, lights and cues). The engine builds it, lands every formation on a downbeat of your music, and applies automatic safety fixes. You preview the result before it replaces your show, and it's one undo step.
-- **Copilot.** Edit by conversation: "make the heart pink and slow the globe", "add flashes on the drop", "review my show". It works through 17 tools that edit the show the same way the UI does. Each tool reports the safety status back, so the model sees the consequences of its own edits. It can *look* at rendered formations (vision) to judge readability and colour. Everything it does for one request is a single undo step.
+- **Generate a show from a brief.** Describe the occasion, story, colours and words. Claude writes a structured plan (scenes, lights and cues). With music, the song is the backbone: Claude reads its sections and accents and puts the hero formation exactly on the biggest drop. The engine lands every other formation on a bar, fits the finale to the end of the song, lights the music, and applies automatic safety fixes. With no song, Claude picks the hero formations and a tempo, and an original score is composed with its drops on them. You preview the result before it replaces your show, and it's one undo step.
+- **Copilot.** Edit by conversation: "make the heart pink and slow the globe", "add flashes on the drop", "review my show". It works through 21 tools that edit the show the same way the UI does, including the music tools: read the song's structure, land a formation on a section or bar, fit to the song, light the music, and compose a score. Each tool reports the safety status back, so the model sees the consequences of its own edits. It can *look* at rendered formations (vision) to judge readability and colour. Everything it does for one request is a single undo step.
 - **Describe a formation.** Words become a bold SVG drawing, which becomes drones in the drawing's colours. "Refine" shows Claude how its drawing actually came out as drones, so it can fix what doesn't read.
 - **Create a 3D model — with look and fix.** Describe an object ("a hot-air balloon with a basket"). Claude builds it from solid parts (spheres, ellipsoids, boxes, cylinders, cones, capsules, tori, each with its own colour), and the engine spreads the drones evenly over the outer surface. Then Claude *looks* at the actual drones from the front, side, top and a three-quarter angle, says what doesn't read (a part that's too thin, a missing feature, wrong proportions), and fixes the model. It repeats until it's satisfied or the round limit (1–3) is reached. You can add your own feedback for more rounds, and reopen any 3D model from the inspector with **Improve**. The copilot and the show generator can create 3D models too, and the copilot can look at any scene from all four angles.
 - **Write a client pitch.** A proposal written from the real show: its formations (as images), timeline, music and exact safety figures. Unknowns like dates and prices become `[placeholders]`.
@@ -90,7 +101,7 @@ It reports the real closest approach next to the planned one, the largest and ty
 
 ## Export
 
-- **Project** (`.droneshow.json`): the full show, with the music embedded.
+- **Project** (`.droneshow.json`): the full show, with the music embedded (a composed score is saved as its recipe).
 - **Trajectories** (ZIP): one CSV per drone with columns `time_s, east_m, north_m, up_m, red, green, blue`, sampled at 5–20 Hz. Coordinates are ENU metres from the centre of the takeoff grid; the audience stands to the south.
 
 Formats for specific flight controllers and show systems are planned.
@@ -131,9 +142,10 @@ pnpm typecheck && pnpm lint && pnpm build
 src/
   core/      Pure, deterministic engine: model, shapes, assignment, motion profiles,
              compile → flight plan (with collision-free detours and spectacle transitions),
-             evaluate(t), exact validator, idle drones, text pen order, wind simulation, beats,
-             export, file format
-  engine/    Web Workers: compile + validate off the main thread; wind simulation
+             evaluate(t), exact validator, idle drones, text pen order, wind simulation,
+             music (beats, sections, accents, music tools, score synthesiser), export, file format
+  engine/    Web Workers: compile + validate, beat analysis and score rendering off the main
+             thread; wind simulation
   state/     Zustand store (document + undo history), playback clock, actions, autosave & files
   ui/        React: scene list, 3D viewport (react-three-fiber), timeline, inspector, present mode
   ai/        Claude features: client, copilot agent loop + tools, director, formation drawing,

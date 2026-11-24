@@ -1,7 +1,7 @@
 // Keeps the compiled show in sync with the document. Latest edit wins: while
 // one compile is running, only the newest pending document is queued.
 
-import type { ShowDoc } from '@/core/types'
+import type { AudioMeta, ShowDoc } from '@/core/types'
 import type { BeatResult } from '@/core/beats'
 import { getState, useStore } from '@/state/store'
 
@@ -11,6 +11,7 @@ let pending: ShowDoc | null = null
 let nextId = 1
 const beatWaiters = new Map<number, (r: BeatResult) => void>()
 const demoWaiters = new Map<number, { resolve: (d: ShowDoc) => void; reject: (e: Error) => void }>()
+const musicWaiters = new Map<number, { resolve: (r: { pcm: Float32Array; sampleRate: number }) => void; reject: (e: Error) => void }>()
 
 function ensureWorker(): Worker {
   if (worker) return worker
@@ -29,8 +30,14 @@ function ensureWorker(): Worker {
     } else if (m.type === 'demo') {
       demoWaiters.get(m.id)?.resolve(m.doc)
       demoWaiters.delete(m.id)
+    } else if (m.type === 'music') {
+      musicWaiters.get(m.id)?.resolve({ pcm: m.pcm, sampleRate: m.sampleRate })
+      musicWaiters.delete(m.id)
     } else if (m.type === 'error') {
-      if (demoWaiters.has(m.id)) {
+      if (musicWaiters.has(m.id)) {
+        musicWaiters.get(m.id)!.reject(new Error(m.message))
+        musicWaiters.delete(m.id)
+      } else if (demoWaiters.has(m.id)) {
         demoWaiters.get(m.id)!.reject(new Error(m.message))
         demoWaiters.delete(m.id)
       } else if (beatWaiters.has(m.id)) {
@@ -69,6 +76,15 @@ function send(doc: ShowDoc) {
 export function requestCompile(doc: ShowDoc) {
   if (busy) pending = doc
   else send(doc)
+}
+
+/** Render generated music (from its stored recipe) in the engine worker. */
+export function renderMusicAsync(meta: AudioMeta, sampleRate = 22050): Promise<{ pcm: Float32Array; sampleRate: number }> {
+  const id = nextId++
+  return new Promise((resolve, reject) => {
+    musicWaiters.set(id, { resolve, reject })
+    ensureWorker().postMessage({ type: 'render-music', id, meta, sampleRate })
+  })
 }
 
 /** Build a (heavy) demo show in the engine worker. */

@@ -174,3 +174,20 @@ describe('music-first plans', () => {
     expect(text).toMatch(/Accents.*32\.1/)
   })
 })
+
+describe('director with an original score', () => {
+  it('composes a score with the drops on the chosen hero formations', () => {
+    const plan: Plan = { ...PLAN, original_score: { bpm: 110, drops_at: [2], breaks_at: [1] } }
+    const built = buildShowFromPlan(plan, newShow(60), new Map(), { composeScore: true })
+    expect(built.composed).toBe(true)
+    const audio = built.doc.audio!
+    expect(audio.generated).toMatch(/^soundtrack-v1/)
+    expect(audio.bpm).toBe(110)
+    const c = compile(built.doc)
+    const drop = audio.sections!.find((s) => s.label === 'drop')!
+    expect(drop.start).toBeCloseTo(c.sceneTimes[2]!.holdStart, 2)
+    expect(audio.sections!.some((s) => s.label === 'break')).toBe(true)
+    expect(built.doc.cues.some((q) => q.tag === 'music')).toBe(true)
+    expect(built.validation.issues).toEqual([])
+  })
+})

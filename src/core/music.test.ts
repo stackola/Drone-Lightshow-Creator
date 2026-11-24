@@ -6,7 +6,7 @@ import { compile } from './compile'
 import { evaluate } from './evaluate'
 import { validate } from './validate'
 import { barTimes } from './music'
-import { MUSIC_TAG, arriveAt, fitToSong, lightTheMusic, musicMoment } from './musicTools'
+import { MUSIC_TAG, arriveAt, composeScore, defaultHeroes, fitToSong, lightTheMusic, musicMoment } from './musicTools'
 import type { LightCue, ShowDoc } from './types'
 
 /**
@@ -132,5 +132,48 @@ describe('music tools', () => {
     const c = compile(fit.doc)
     for (const st of c.sceneTimes) expect(bars.some((b) => Math.abs(b - st.holdStart) < 1e-3)).toBe(true)
     expect(validate(fit.doc, c).issues).toEqual([])
+  })
+})
+
+describe('composing a score to the show', () => {
+  const show = () => {
+    const doc = newShow(60)
+    for (const k of ['circle', 'heart', 'star', 'grid', 'circle'] as const) doc.scenes.push({ ...newScene(doc, k), hold: 6 })
+    return doc
+  }
+
+  it('picks every other formation as a hero by default', () => {
+    expect(defaultHeroes(1)).toEqual([0])
+    expect(defaultHeroes(2)).toEqual([1])
+    expect(defaultHeroes(5)).toEqual([1, 3])
+    expect(defaultHeroes(6)).toEqual([1, 3])
+  })
+
+  it('lands arrivals on bars and drops exactly as the hero formations arrive', () => {
+    const { doc, plan } = composeScore(show(), { heroes: [1, 3], breaks: [2], seed: 5, bpm: 128 })
+    expect(plan).not.toBeNull()
+    const c = compile(doc)
+    const bar = 240 / 128
+    for (const st of c.sceneTimes) expect(Math.abs(st.holdStart / bar - Math.round(st.holdStart / bar))).toBeLessThan(1e-3)
+    const at = (t: number) => plan!.sections.find((s) => t >= s.start - 1e-6 && t < s.end - 1e-6)!.label
+    expect(at(c.sceneTimes[1]!.holdStart)).toBe('drop')
+    expect(at(c.sceneTimes[3]!.holdStart)).toBe('drop')
+    expect(plan!.sections.some((s) => s.label === 'drop' && Math.abs(s.start - c.sceneTimes[3]!.holdStart) < 1e-3)).toBe(true)
+    expect(at(c.sceneTimes[4]!.holdStart)).toBe('outro')
+    expect(plan!.sections[0]!.label).toBe('intro')
+    expect(doc.audio!.generated).toBe('soundtrack-v1#5')
+    expect(doc.audio!.duration).toBeGreaterThanOrEqual(c.duration)
+    expect(validate(doc, c).issues).toEqual([])
+    // The lights can follow it like any song.
+    expect(lightTheMusic(doc, 'bold').added).toBeGreaterThan(3)
+  })
+
+  it('replaces a loaded song, and does nothing for an empty show', () => {
+    const doc = show()
+    doc.audio = { name: 'song.mp3', duration: 100, offset: 3, beats: [0, 0.5, 1], downbeat: 0, bpm: 120 }
+    const out = composeScore(doc, { seed: 1 }).doc
+    expect(out.audio!.generated).toBeTruthy()
+    expect(out.audio!.offset).toBe(0)
+    expect(composeScore(newShow(20)).plan).toBeNull()
   })
 })

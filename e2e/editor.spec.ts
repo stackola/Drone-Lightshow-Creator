@@ -56,6 +56,21 @@ test('music: beats are detected and shown on the timeline', async ({ page }) => 
   expect(await page.locator('.ruler .beat').count()).toBeGreaterThan(10)
 })
 
+test('music: compose an original score to the show, and undo back to the song', async ({ page }) => {
+  await fresh(page)
+  await chooseFile(page, () => page.getByRole('button', { name: 'Load music' }).click(), { name: 'click-120.wav', mimeType: 'audio/wav', buffer: clickWav(120, 20) })
+  await expect(page.locator('.music-clip .mname')).toHaveText('click-120.wav', { timeout: 20000 })
+  await page.getByRole('button', { name: 'Music', exact: true }).click()
+  await page.getByRole('button', { name: /Compose a score for this show/ }).click()
+  await expect(page.getByText(/Composed a .* score/)).toBeVisible()
+  await expect(page.locator('.music-clip .mname')).toHaveText(/original score$/, { timeout: 30000 })
+  await expect(page.locator('.sec-band', { hasText: /drop/i }).first()).toBeVisible()
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly')
+  // Undo brings the loaded song back, audio included.
+  await page.keyboard.press('Control+z')
+  await expect(page.locator('.music-clip .mname')).toHaveText('click-120.wav', { timeout: 20000 })
+})
+
 test('logo import becomes a safe formation with image colours', async ({ page }) => {
   await fresh(page)
   await page.locator('.panel-head .btn.primary').click()
@@ -210,4 +225,8 @@ test('the 15-minute flagship demo plans in the background and passes every check
   await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 180_000 })
   await expect(page.locator('.slist .srow', { hasText: 'Tree of life' })).toBeVisible()
   await expect(page.locator('.blk.flight.styled').first()).toBeVisible()
+  // Its own score: composed to the show, regenerated in the background, sections on the music lane.
+  await expect(page.locator('.music-clip')).toContainText('Odyssey', { timeout: 60_000 })
+  await expect(page.locator('.sec-band', { hasText: /drop/i }).first()).toBeVisible()
+  await expect(page.locator('.music-clip .mname')).not.toContainText(/composing|not loaded/, { timeout: 60_000 })
 })

@@ -40,6 +40,8 @@ export interface DirectorRequest {
   /** Desired show length in seconds, or null to fit the music (or a natural length). */
   targetSeconds: number | null
   useMusic: boolean
+  /** No song: compose an original score to the show (drops on the hero formations). */
+  composeScore?: boolean
 }
 
 export interface DirectorProgress {
@@ -74,6 +76,7 @@ function briefFor(req: DirectorRequest, base: ShowDoc): string {
   } else {
     lines.push('', 'Choose a natural length for the brief (typically 4–8 scenes).')
   }
+  if (req.composeScore) lines.push('', 'There is no song: an original score will be composed to your show, like a film score. In original_score, choose the 2–5 hero formations the music builds to and drops on (drops_at), any tender quiet moments (breaks_at), and a tempo for the mood. Every arrival lands on a bar; hold for whole bars at that tempo (one bar = 240 / bpm seconds). Keep music_lighting on so the lights follow the score.')
   return lines.join('\n')
 }
 
@@ -144,6 +147,6 @@ export async function directShow(req: DirectorRequest, onProgress: (p: DirectorP
     })
   }
   onProgress({ phase: 'building', scenes: plan.scenes.map((s) => s.name) })
-  const built = buildShowFromPlan(plan, base, custom, { alignToMusic: req.useMusic })
+  const built = buildShowFromPlan(plan, base, custom, { alignToMusic: req.useMusic, composeScore: req.composeScore })
   return { plan, built, customFailures }
 }

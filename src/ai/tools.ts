@@ -7,11 +7,11 @@ import type { BetaToolResultBlockParam, BetaToolUnion } from '@anthropic-ai/sdk/
 import type { LightCue, Scene, ShapeSpec, ShowDoc } from '@/core/types'
 import { getState } from '@/state/store'
 import { compile } from '@/core/compile'
-import { validate } from '@/core/validate'
+import { formatTime, validate } from '@/core/validate'
 import { comfortableSpacing } from '@/core/validate'
 import { fitScene, fitToAirspace, newId } from '@/core/defaults'
 import { alignScenesToBars } from '@/core/music'
-import { MUSIC_TAG, arriveAt, fitToSong, lightTheMusic, musicMoment } from '@/core/musicTools'
+import { MUSIC_TAG, arriveAt, composeScore, fitToSong, lightTheMusic, musicMoment } from '@/core/musicTools'
 import { autoFix } from '@/core/fixes'
 import { ceilTo } from '@/core/math'
 import { defaultEffect } from '@/core/effects'
@@ -438,6 +438,27 @@ export const TOOLS = [
       const { doc: next, endGap } = fitToSong(doc())
       getState().replaceDoc(next, 'Fit show to song')
       return ok(Math.abs(endGap) < 2.5 ? 'The show now ends with the song' : endGap > 0 ? `Fitted; the song continues ${Math.round(endGap)} s after the finale (add a scene or longer holds)` : `The show still runs ${Math.round(-endGap)} s past the song (remove a scene or shorten flights' extra time)`)
+    },
+  }),
+  tool({
+    name: 'compose_score',
+    description: 'Compose an original score to the show (when the client has no song, or for a preview): every arrival moves onto a bar line, and the music builds up and drops exactly as each hero formation arrives, goes quiet on breaks, and ends with the landing. Replaces any loaded music (the user can undo). Automatic music lighting is refreshed if present. Call again after changing scenes so the score follows the show.',
+    schema: z.object({
+      drops_at: z.array(sceneRef).optional().describe('Hero formations the music drops on (2–5; default every other formation)'),
+      breaks_at: z.array(sceneRef).optional().describe('Tender, quiet moments'),
+      bpm: z.number().optional().describe('Tempo 80–140 (default 120)'),
+    }),
+    label: () => 'Composing a score to the show',
+    run: (i) => {
+      if (!doc().scenes.length) throw new ToolError('The show has no formations yet.')
+      const before = doc()
+      const idx = (ids?: string[]) => ids?.map((id) => findScene(id).index)
+      const { doc: next, plan } = composeScore(before, { bpm: i.bpm, heroes: i.drops_at?.length ? idx(i.drops_at) : undefined, breaks: idx(i.breaks_at) })
+      if (!plan) throw new ToolError('Nothing to compose to.')
+      const relit = before.cues.some((q) => q.tag === MUSIC_TAG) ? lightTheMusic(next, 'subtle').doc : next
+      getState().replaceDoc(relit, 'Compose a score')
+      const drops = plan.sections.filter((s) => s.label === 'drop').length
+      return ok(`Composed ${formatTime(plan.duration)} at ${plan.bpm} BPM: ${plan.sections.map((s) => s.label).join(' → ')} (${drops} drop${drops === 1 ? '' : 's'}); every arrival is on a bar${before.audio && !before.audio.generated ? `; replaced “${before.audio.name}”` : ''}`)
     },
   }),
   tool({

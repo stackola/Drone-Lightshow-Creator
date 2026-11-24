@@ -13,7 +13,7 @@ import { comfortableSpacing, type Validation } from '@/core/validate'
 import { compile } from '@/core/compile'
 import { ceilTo } from '@/core/math'
 import { alignScenesToBars } from '@/core/music'
-import { arriveAt, fitToSong, lightTheMusic, musicMoment } from '@/core/musicTools'
+import { arriveAt, composeScore, fitToSong, lightTheMusic, musicMoment } from '@/core/musicTools'
 import { autoFix } from '@/core/fixes'
 
 const clamp = (v: number | undefined, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d)
@@ -158,6 +158,8 @@ export interface BuiltShow {
   validation: Validation
   alignedToMusic: number
   fixesApplied: number
+  /** An original score was composed to the show. */
+  composed: boolean
 }
 
 /**
@@ -165,17 +167,30 @@ export interface BuiltShow {
  * the music's bar lines (if there is music), anchor cues to arrivals, then
  * apply automatic safety fixes.
  */
-export function buildShowFromPlan(plan: ShowPlan, base: ShowDoc, custom: Map<number, ShapeSpec> = new Map(), opts: { alignToMusic?: boolean } = {}): BuiltShow {
+export function buildShowFromPlan(plan: ShowPlan, base: ShowDoc, custom: Map<number, ShapeSpec> = new Map(), opts: { alignToMusic?: boolean; composeScore?: boolean } = {}): BuiltShow {
   let doc: ShowDoc = { ...base, name: plan.title.slice(0, 120) || base.name, scenes: [], cues: [] }
   plan.scenes.slice(0, 30).forEach((s, i) => {
     doc = { ...doc, scenes: [...doc.scenes, sceneFromInput(doc, s, { custom: custom.get(i) })] }
   })
-  const music = opts.alignToMusic !== false && !!doc.audio
-  // With music: land every arrival on a bar, put the chosen formations on their sections
-  // (earliest first), then fit the rest of the show so the finale ends with the song.
-  const aligned = opts.alignToMusic === false ? { doc, aligned: 0 } : alignScenesToBars(doc)
-  doc = aligned.doc
-  if (music) {
+  const composing = !!opts.composeScore && doc.scenes.length > 0
+  const music = composing || (opts.alignToMusic !== false && !!doc.audio)
+  let aligned: { aligned: number }
+  if (composing) {
+    // No song: compose one to the show, with the drops on the chosen hero formations.
+    const sc = plan.original_score
+    const n = doc.scenes.length
+    const idx = (a?: number[]) => a?.map((x) => Math.round(x)).filter((x) => x >= 0 && x < n)
+    const heroes = idx(sc?.drops_at)
+    doc = composeScore({ ...doc, audio: null }, { bpm: sc?.bpm, heroes: heroes?.length ? heroes : undefined, breaks: idx(sc?.breaks_at) }).doc
+    aligned = { aligned: n }
+  } else {
+    // With music: land every arrival on a bar, put the chosen formations on their sections
+    // (earliest first), then fit the rest of the show so the finale ends with the song.
+    const a = opts.alignToMusic === false ? { doc, aligned: 0 } : alignScenesToBars(doc)
+    doc = a.doc
+    aligned = a
+  }
+  if (music && !composing) {
     const targets = plan.scenes.slice(0, 30).map((s, i) => ({ i, sec: s.arrive_at_section })).filter((x) => x.sec !== undefined)
     let lastLanded = -1
     for (const { i, sec } of targets) {
@@ -193,5 +208,5 @@ export function buildShowFromPlan(plan: ShowPlan, base: ShowDoc, custom: Map<num
   doc = { ...doc, cues }
   if (music && plan.music_lighting !== 'none') doc = lightTheMusic(doc, plan.music_lighting === 'subtle' ? 'subtle' : 'bold').doc
   const fixed = autoFix(doc)
-  return { doc: fixed.doc, validation: fixed.validation, alignedToMusic: aligned.aligned, fixesApplied: fixed.applied }
+  return { doc: fixed.doc, validation: fixed.validation, alignedToMusic: aligned.aligned, fixesApplied: fixed.applied, composed: composing }
 }

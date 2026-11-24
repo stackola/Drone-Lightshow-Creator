@@ -6,7 +6,8 @@ import type { Effect, LightCue, ShowDoc } from './types'
 import { compile } from './compile'
 import { alignScenesToBars, barTimes, songAccents, songSections } from './music'
 import { newId } from './defaults'
-import type { Section } from './sections'
+import type { Section, SectionLabel } from './sections'
+import { scorePlan, soundtrackMeta, type SoundtrackPlan } from './soundtrack'
 
 export const MUSIC_TAG = 'music'
 
@@ -168,4 +169,45 @@ function fitTail(doc: ShowDoc, from: number, barLen: number, songEnd: number): {
   const next = { ...doc, scenes }
   const c2 = compile(next)
   return { doc: next, endGap: songEnd - c2.sceneTimes[c2.sceneTimes.length - 1]!.holdEnd }
+}
+
+/** Scenes that get a drop by default: every other scene from the second, never the last of 3+. */
+export function defaultHeroes(n: number): number[] {
+  if (n <= 1) return n ? [0] : []
+  if (n === 2) return [1]
+  const out: number[] = []
+  for (let i = 1; i < n - 1; i += 2) out.push(i)
+  return out
+}
+
+/**
+ * Compose an original score to the show (like a film score): arrivals land
+ * on a bar grid, then each hero formation gets a build into a drop exactly as
+ * it arrives, other scenes a verse, the last of three or more an outro (and
+ * any `breaks` a quiet break). The music is stored as its recipe and
+ * rendered by the editor, so the lights and AI tools know it exactly.
+ */
+export function composeScore(doc: ShowDoc, opts: { bpm?: number; heroes?: number[]; breaks?: number[]; seed?: number; name?: string } = {}): { doc: ShowDoc; plan: SoundtrackPlan | null } {
+  const n = doc.scenes.length
+  if (!n) return { doc, plan: null }
+  const bpm = Math.max(70, Math.min(160, opts.bpm ?? 120)), bar = 240 / bpm
+  const heroes = new Set((opts.heroes ?? defaultHeroes(n)).filter((i) => i >= 0 && i < n))
+  const breaks = new Set((opts.breaks ?? []).filter((i) => i >= 0 && i < n && !heroes.has(i)))
+  const seed = opts.seed ?? 1 + Math.floor(Math.random() * 9999)
+  // A plain bar grid long enough for the show at its slowest, then land every arrival on it.
+  const grid = (len: number) => soundtrackMeta({ bpm, duration: len, seed, sections: [{ label: 'verse', start: 0, end: len, energy: 0 }] })
+  let d: ShowDoc = { ...doc, audio: grid(Math.ceil(compile(doc).duration * 1.5 + 120)) }
+  d = alignScenesToBars(d).doc
+  const c = compile(d)
+  const marks: [SectionLabel, number][] = [['intro', 0]]
+  c.sceneTimes.forEach((st, i) => {
+    const t = st.holdStart
+    if (heroes.has(i)) marks.push(['build', t - 8 * bar], ['drop', t])
+    else if (breaks.has(i)) marks.push(['break', t])
+    else if (i === n - 1 && n >= 3) marks.push(['outro', t])
+    else marks.push(['verse', t])
+  })
+  const end = Math.ceil((c.duration + bar) / bar) * bar
+  const plan = scorePlan(marks, bpm, end, seed)
+  return { doc: { ...d, audio: soundtrackMeta(plan, opts.name ?? `${doc.name} — original score`) }, plan }
 }

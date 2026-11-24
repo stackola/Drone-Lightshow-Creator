@@ -4,10 +4,10 @@ import { getState, useStore } from './store'
 import { parseProjectFile, toProjectFile } from '@/core/serialize'
 import { bytesToBase64, base64ToBytes } from '@/core/sample'
 import { exportCsvZip } from '@/core/export'
-import type { ShowDoc } from '@/core/types'
+import type { AudioMeta, ShowDoc } from '@/core/types'
 import { audioContext } from './playback'
 import { waveformPeaks } from '@/core/beats'
-import { detectBeatsAsync } from '@/engine/client'
+import { detectBeatsAsync, renderMusicAsync } from '@/engine/client'
 
 const DOC_KEY = 'dsd.doc.v1'
 
@@ -125,10 +125,64 @@ export async function removeMusic() {
   await idbDelete('audio').catch(() => {})
 }
 
+/** What generated music sounds like is fully given by its recipe. */
+const recipeKey = (m: AudioMeta) => `${m.generated}|${m.bpm}|${m.duration}|${(m.sections ?? []).map((x) => `${x.label}@${x.start}`).join(',')}`
+let renderedKey = ''
+let inflightKey = ''
+
+/**
+ * Generated music (a score composed by the editor) is stored as its recipe,
+ * not as audio: render it in the worker and attach it.
+ */
+export async function attachGeneratedMusic(): Promise<boolean> {
+  const meta = getState().doc.audio
+  if (!meta?.generated) return false
+  const key = recipeKey(meta)
+  if (key === inflightKey || (key === renderedKey && getState().audio)) return true
+  inflightKey = key
+  try {
+    const { pcm, sampleRate } = await renderMusicAsync(meta)
+    const now = getState().doc.audio
+    if (!now?.generated || recipeKey(now) !== key) return true
+    const ctx = audioContext()
+    const buffer = ctx.createBuffer(1, pcm.length, sampleRate)
+    buffer.copyToChannel(pcm as Float32Array<ArrayBuffer>, 0)
+    getState().set({ audio: { buffer, peaks: waveformPeaks(pcm, 4000), bytes: new ArrayBuffer(0), mime: GENERATED_MIME } })
+    renderedKey = key
+  } catch (err) {
+    getState().toast(`Could not generate the score: ${err instanceof Error ? err.message : String(err)}`, 'err')
+  } finally {
+    if (inflightKey === key) inflightKey = ''
+  }
+  return true
+}
+
+const GENERATED_MIME = 'audio/x-generated'
+
+/**
+ * Keep the playing audio in step with the document: a composed score is
+ * (re)rendered whenever its recipe changes — compose, recompose, undo, redo —
+ * and undoing back to a loaded song brings that song back.
+ */
+export function startMusicSync() {
+  useStore.subscribe((s, prev) => {
+    if (s.doc.audio === prev.doc.audio) return
+    const m = s.doc.audio
+    if (m?.generated) {
+      if (recipeKey(m) !== renderedKey || !s.audio) void attachGeneratedMusic()
+    } else if (s.audio?.mime === GENERATED_MIME) {
+      renderedKey = ''
+      getState().set({ audio: null })
+      void restoreMusic()
+    }
+  })
+}
+
 /** Restore music saved in a previous session (if it matches the show). */
 export async function restoreMusic() {
   const meta = getState().doc.audio
   if (!meta) return
+  if (meta.generated) { await attachGeneratedMusic(); return }
   try {
     const saved = await idbGet<{ bytes: ArrayBuffer; mime: string; name: string }>('audio')
     if (!saved || saved.name !== meta.name) return
@@ -158,9 +212,10 @@ export function safeName(name: string): string {
 
 export function saveProject() {
   const s = getState()
-  const audio = s.audio && s.doc.audio ? { mime: s.audio.mime, data: bytesToBase64(new Uint8Array(s.audio.bytes)) } : null
+  // Generated music is saved as its recipe (regenerated on open), not as audio.
+  const audio = s.audio && s.doc.audio && !s.doc.audio.generated ? { mime: s.audio.mime, data: bytesToBase64(new Uint8Array(s.audio.bytes)) } : null
   download(JSON.stringify(toProjectFile(s.doc, audio)), `${safeName(s.doc.name)}.droneshow.json`, 'application/json')
-  s.toast(audio ? 'Project saved (music included)' : 'Project saved')
+  s.toast(audio || s.doc.audio?.generated ? 'Project saved (music included)' : 'Project saved')
 }
 
 export async function openProjectFile(file: File) {
@@ -169,7 +224,8 @@ export async function openProjectFile(file: File) {
     const { doc, audio } = parseProjectFile(await file.text())
     s.loadDoc(doc)
     s.set({ audio: null })
-    if (audio && doc.audio) {
+    if (doc.audio?.generated) void attachGeneratedMusic()
+    else if (audio && doc.audio) {
       const bytes = base64ToBytes(audio.data).buffer as ArrayBuffer
       const decoded = await decode(bytes, audio.mime)
       getState().set({ audio: decoded.runtime })

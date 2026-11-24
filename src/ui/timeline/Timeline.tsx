@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Music, Pause, Play, Plus, Repeat, Magnet, ZoomIn, ZoomOut, Maximize2, AlertTriangle, X, Drum, Sparkle } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Music, Pause, Play, Plus, Repeat, Magnet, ZoomIn, ZoomOut, Maximize2, AlertTriangle, X, Drum, Sparkle, Wand2 } from 'lucide-react'
 import { alignScenesToBars, songAccents, songSections } from '@/core/music'
-import { MUSIC_TAG, fitToSong, lightTheMusic, type LightingStyle } from '@/core/musicTools'
+import { MUSIC_TAG, composeScore, fitToSong, lightTheMusic, type LightingStyle } from '@/core/musicTools'
 import { SECTION_COLORS } from '@/core/sections'
 import { getState, useStore } from '@/state/store'
 import { pause, play, seek, setRate, togglePlay } from '@/state/playback'
@@ -367,6 +367,9 @@ export function Timeline() {
                   <button className="menu-item" onClick={async () => { close(); const f = await pickFile('audio/*'); if (f) await loadMusic(await f.arrayBuffer(), f.type || 'audio/mpeg', f.name) }}>
                     {doc.audio ? 'Replace music…' : 'Load music…'}
                   </button>
+                  <button className="menu-item" title="An original soundtrack written to this show: arrivals move onto bar lines, and the music builds and drops as the hero formations arrive" onClick={() => { close(); runComposeScore() }}>
+                    <Wand2 size={13} /> {doc.audio?.generated ? 'Compose a new score' : 'Compose a score for this show'}
+                  </button>
                   {doc.audio && (
                     <>
                       <div className="menu-sep" />
@@ -442,7 +445,7 @@ export function Timeline() {
               ))}
               {doc.audio && songAccents(doc).map((a, i) => <div key={i} className="accent-tick" style={{ left: toX(a) }} title={`Accent at ${fmtTime(a)}`} />)}
               {doc.audio ? (
-                <MusicClip left={toX(doc.audio.offset)} width={doc.audio.duration * pps} name={doc.audio.name} peaks={audio?.peaks ?? null} missing={!audio}
+                <MusicClip left={toX(doc.audio.offset)} width={doc.audio.duration * pps} name={doc.audio.name} peaks={audio?.peaks ?? null} missing={!audio} generated={!!doc.audio.generated}
                   energy={doc.audio.energy ?? null} beats={doc.audio.beats} duration={doc.audio.duration}
                   onPointerDown={(e) => {
                     const o0 = doc.audio!.offset
@@ -475,6 +478,17 @@ export function runLightTheMusic(style: LightingStyle) {
   if (!added) { s.toast('No song structure to light — load music first.', 'err'); return }
   s.replaceDoc(doc, `Light the music (${style})`)
   s.toast(`${added} light cues now follow the music`)
+}
+
+export function runComposeScore() {
+  const s = getState()
+  if (!s.doc.scenes.length) { s.toast('Add a formation first — the score is written to the show.', 'err'); return }
+  const before = s.doc
+  const { doc, plan } = composeScore(before)
+  if (!plan) return
+  s.replaceDoc(before.cues.some((q) => q.tag === MUSIC_TAG) ? lightTheMusic(doc, 'subtle').doc : doc, 'Compose a score')
+  const drops = plan.sections.filter((x) => x.label === 'drop').length
+  s.toast(`Composed a ${formatTime(plan.duration)} score · ${drops} drop${drops === 1 ? '' : 's'} on your hero formations${before.audio && !before.audio.generated ? ` — replaced “${before.audio.name}” (Undo to get it back)` : ''}`)
 }
 
 export function runFitToSong() {
@@ -512,8 +526,8 @@ function Playhead({ toX, scrollRef }: { toX: (t: number) => number; scrollRef: R
   return <div className="playhead" style={{ left: x - 1 }} />
 }
 
-function MusicClip({ left, width, name, peaks, missing, energy, beats, duration, onPointerDown }: {
-  left: number; width: number; name: string; peaks: Float32Array | null; missing: boolean
+function MusicClip({ left, width, name, peaks, missing, generated, energy, beats, duration, onPointerDown }: {
+  left: number; width: number; name: string; peaks: Float32Array | null; missing: boolean; generated: boolean
   energy: number[] | null; beats: number[]; duration: number
   onPointerDown: (e: React.PointerEvent) => void
 }) {
@@ -553,7 +567,7 @@ function MusicClip({ left, width, name, peaks, missing, energy, beats, duration,
   return (
     <div className="music-clip" style={{ left, width: Math.max(4, width) }} onPointerDown={onPointerDown} title="Drag to move the music">
       {(peaks || energy) && <canvas ref={ref} />}
-      <span className="mname">{name}{missing ? ' — file not loaded (use the Music menu to re-attach)' : ''}</span>
+      <span className="mname">{name}{missing ? (generated ? ' — composing…' : ' — file not loaded (use the Music menu to re-attach)') : ''}</span>
     </div>
   )
 }

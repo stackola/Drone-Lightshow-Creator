@@ -4,7 +4,7 @@ import { getState, useStore } from '@/state/store'
 import { Modal, NumberField, Segmented } from './components/controls'
 import { DEMOS } from '@/app/demos'
 import { newShow } from '@/core/defaults'
-import { exportCsv } from '@/state/persist'
+import { attachGeneratedMusic, exportCsv } from '@/state/persist'
 import { buildDemoAsync } from '@/engine/client'
 import { formatTime } from '@/core/validate'
 import { Suspense, lazy } from 'react'
@@ -55,6 +55,7 @@ function NewShowDialog({ onClose }: { onClose: () => void }) {
     }
     s.replaceDoc(doc, 'New show')
     s.set({ audio: null, selection: { kind: 'show' }, time: 0, focus: null })
+    if (doc.audio?.generated) void attachGeneratedMusic()
     s.toast(demo ? `Opened demo “${demo.title}” — Undo to go back` : 'New show — Undo to go back')
     onClose()
   }

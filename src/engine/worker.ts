@@ -4,7 +4,8 @@
 import { compile } from '@/core/compile'
 import { validate } from '@/core/validate'
 import { detectBeats } from '@/core/beats'
-import type { ShowDoc } from '@/core/types'
+import type { AudioMeta, ShowDoc } from '@/core/types'
+import { planFromMeta, renderSoundtrack } from '@/core/soundtrack'
 import { demoById } from '@/app/demos'
 import { setTextRasterizer } from '@/core/defaults'
 import { canvasTextMask } from './textRaster'
@@ -16,6 +17,7 @@ export type WorkerRequest =
   | { type: 'compile'; id: number; doc: ShowDoc }
   | { type: 'beats'; id: number; samples: Float32Array; sampleRate: number }
   | { type: 'demo'; id: number; demo: string }
+  | { type: 'render-music'; id: number; meta: AudioMeta; sampleRate: number }
 
 declare const self: DedicatedWorkerGlobalScope
 
@@ -29,6 +31,11 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
       self.postMessage({ type: 'compiled', id: m.id, compiled, validation, ms: performance.now() - t0 })
     } else if (m.type === 'beats') {
       self.postMessage({ type: 'beats', id: m.id, result: detectBeats(m.samples, m.sampleRate) })
+    } else if (m.type === 'render-music') {
+      const plan = planFromMeta(m.meta)
+      if (!plan) throw new Error('This music cannot be regenerated.')
+      const pcm = renderSoundtrack(plan, m.sampleRate)
+      self.postMessage({ type: 'music', id: m.id, pcm, sampleRate: m.sampleRate }, [pcm.buffer])
     } else if (m.type === 'demo') {
       // Building also warms this worker's planning caches, so the compile that follows is quick.
       const demo = demoById(m.demo)

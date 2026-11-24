@@ -5,7 +5,7 @@ import { App } from './ui/App'
 import { setTextRasterizer } from './core/defaults'
 import { canvasTextMask } from './ui/content'
 import { getState } from './state/store'
-import { loadAutosave, restoreMusic, startAutosave } from './state/persist'
+import { loadAutosave, restoreMusic, startAutosave, startMusicSync } from './state/persist'
 import { startEngine } from './engine/client'
 import { demoById } from './app/demos'
 
@@ -16,6 +16,7 @@ getState().loadDoc(saved ?? demoById('hello')!.build())
 
 startEngine()
 startAutosave()
+startMusicSync()
 void restoreMusic()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

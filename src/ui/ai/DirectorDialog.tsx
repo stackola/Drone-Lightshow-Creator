@@ -18,11 +18,13 @@ type Length = 'music' | 'natural' | '60' | '120' | '180' | '300'
 
 export function DirectorDialog({ onClose }: { onClose: () => void }) {
   const doc = useStore((s) => s.doc)
-  const hasMusic = !!doc.audio?.beats.length
+  // A composed score belongs to the current show; a new show gets a new one.
+  const hasMusic = !!doc.audio?.beats.length && !doc.audio.generated
   const [brief, setBrief] = useState('')
   const [drones, setDrones] = useState(doc.droneCount)
   const [length, setLength] = useState<Length>(hasMusic ? 'music' : 'natural')
   const [useMusic, setUseMusic] = useState(hasMusic)
+  const [compose, setCompose] = useState(!hasMusic)
   const [progress, setProgress] = useState<DirectorProgress | null>(null)
   const [result, setResult] = useState<DirectorResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -35,7 +37,7 @@ export function DirectorDialog({ onClose }: { onClose: () => void }) {
     setProgress({ phase: 'planning', scenes: [] })
     try {
       const target = length === 'music' || length === 'natural' ? null : Number(length)
-      const r = await directShow({ brief, droneCount: drones, targetSeconds: target, useMusic: useMusic && hasMusic }, setProgress, controller.current.signal)
+      const r = await directShow({ brief, droneCount: drones, targetSeconds: target, useMusic: useMusic && hasMusic, composeScore: compose && !(useMusic && hasMusic) }, setProgress, controller.current.signal)
       setResult(r)
     } catch (err) {
       setError(describeError(err))
@@ -109,7 +111,13 @@ export function DirectorDialog({ onClose }: { onClose: () => void }) {
               <Toggle checked={useMusic} onChange={setUseMusic} label={`Choreograph to “${doc.audio!.name}” (${Math.round(doc.audio!.bpm)} BPM) — formations land on downbeats`} />
             </div>
           )}
-          {!hasMusic && <p className="hint">Tip: load music first (timeline → Music) and the show will be choreographed to it.</p>}
+          {(!hasMusic || !useMusic) && (
+            <div className="row">
+              <label />
+              <Toggle checked={compose} onChange={setCompose} label="Compose an original score — the music builds and drops as the hero formations arrive" />
+            </div>
+          )}
+          {!hasMusic && <p className="hint">Or load your own song first (timeline → Music) and the show will be choreographed to it.</p>}
           <p className="hint">Replaces the current show — you can undo. Every formation is sized and checked by the safety engine.</p>
           {error && <div className="cp-notice error" style={{ marginTop: 8 }}>{error}</div>}
         </>
@@ -129,7 +137,7 @@ export function DirectorDialog({ onClose }: { onClose: () => void }) {
           <p style={{ margin: 0, color: 'var(--muted)' }}>{result.plan.concept}</p>
           <p className="hint" style={{ marginTop: 6 }}>
             {result.built.doc.scenes.length} scenes · {result.built.doc.cues.length} light cues · {formatTime(preview.duration)}
-            {result.built.alignedToMusic ? ` · ${result.built.alignedToMusic} formations land on downbeats` : ''}
+            {result.built.composed ? ' · with an original score' : result.built.alignedToMusic ? ` · ${result.built.alignedToMusic} formations land on downbeats` : ''}
             {result.built.fixesApplied ? ` · ${result.built.fixesApplied} automatic safety fix${result.built.fixesApplied > 1 ? 'es' : ''}` : ''}
             {result.customFailures ? ` · ${result.customFailures} custom drawing${result.customFailures > 1 ? 's' : ''} failed (replaced with a sphere)` : ''}
           </p>

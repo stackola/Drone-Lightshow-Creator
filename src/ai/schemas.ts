@@ -126,6 +126,11 @@ export const ShowPlan = z.object({
   cues: z.array(DirectorCue).describe('Light cues layered over the formations (accents, flashes, washes)'),
   music_lighting: z.enum(['none', 'subtle', 'bold']).optional().describe('With music: automatically light the music on top of your cues — breathing in quiet parts, sweeps into drops, flashes on every hit (bold) or gentler (subtle). Default bold when there is music.'),
   fit_to_song: z.boolean().optional().describe('With music: stretch or tighten holds (in whole bars) so the finale ends with the song. Default true.'),
+  original_score: z.object({
+    bpm: z.number().optional().describe('Tempo 80–140 matching the mood (default 120)'),
+    drops_at: z.array(z.number()).describe('0-based indices of the 2–5 hero formations: the score builds up and drops exactly as each arrives'),
+    breaks_at: z.array(z.number()).optional().describe('0-based indices of tender, quiet moments (a soft break in the music)'),
+  }).optional().describe('When an original score is being composed (no song): which formations the music builds to and drops on, and where it goes quiet.'),
 })
 export type ShowPlan = z.infer<typeof ShowPlan>
 

@@ -11,6 +11,10 @@ import { applySpareRole, applySpareRoles, calmMotion, fitRolesToAirspace } from 
 import { sceneGeometry, type Compiled } from '@/core/compile'
 import { maxSafeSpin, validate } from '@/core/validate'
 import { autoFix } from '@/core/fixes'
+import { alignScenesToBars } from '@/core/music'
+import { lightTheMusic } from '@/core/musicTools'
+import { scorePlan, soundtrackMeta, type SoundtrackPlan } from '@/core/soundtrack'
+import type { SectionLabel } from '@/core/sections'
 
 export const ODYSSEY_DRONES = 400
 
@@ -200,6 +204,35 @@ export function odysseyCues(doc: ShowDoc, c: Compiled): LightCue[] {
   ]
 }
 
+const BPM = 120
+const BAR = (60 / BPM) * 4
+
+/**
+ * The score's structure, composed to the show (like a film score): a quiet
+ * intro for the takeoff, a build into a drop wherever a hero formation
+ * arrives, a marching groove under the ant walk, a break for THANK YOU and an
+ * outro under GOOD NIGHT and the landing. Every boundary is on a bar line.
+ */
+export function odysseyScore(doc: ShowDoc, c: Compiled): SoundtrackPlan {
+  const at = (name: string) => c.sceneTimes[doc.scenes.findIndex((s) => s.name === name)]!
+  const end = Math.ceil((c.duration + BAR) / BAR) * BAR
+  const marks: [SectionLabel, number][] = [['intro', 0], ['verse', at('Sunrise').holdStart]]
+  const dropWithBuild = (name: string) => {
+    const t = at(name).holdStart
+    marks.push(['build', t - 8 * BAR], ['drop', t])
+  }
+  dropWithBuild('Tree of life')
+  marks.push(['verse', at('Heart').holdStart])
+  dropWithBuild('Earth')
+  marks.push(['verse', at('Together (LED)').flightStart], ['drop', at('Together (LED)').holdStart])
+  marks.push(['verse', at('Balloon').holdStart])
+  dropWithBuild('Saturn')
+  marks.push(['break', at('THANK YOU').holdStart])
+  dropWithBuild('Ring of fire')
+  marks.push(['outro', at('GOOD NIGHT').holdStart])
+  return scorePlan(marks, BPM, end, 2027)
+}
+
 /**
  * Build the whole show. `compile` is passed in so the caller decides where
  * (main thread or worker). Text is rasterised with whatever fonts the
@@ -215,6 +248,12 @@ export function buildOdyssey(compile: (doc: ShowDoc) => Compiled): ShowDoc {
   // The finale rains down: drones drip to a low carpet, then settle onto the pads.
   doc.site.returnFlight = { duration: null, dim: false, style: { kind: 'rain', amount: 0.3 } }
   if (validate(doc, compile(doc)).issues.length) doc = autoFix(doc).doc
+  // Land every arrival on the score's bar grid, then compose the score to the show's timing.
+  doc.audio = soundtrackMeta({ bpm: BPM, duration: 25 * 60, sections: [{ label: 'verse', start: 0, end: 25 * 60, energy: 0.5 }], seed: 2027 })
+  doc = alignScenesToBars(doc).doc
+  doc.audio = soundtrackMeta(odysseyScore(doc, compile(doc)), 'Odyssey — original score')
+  // Hand-placed signature moments, plus lighting that follows the score.
   doc.cues = odysseyCues(doc, compile(doc))
+  doc = lightTheMusic(doc, 'subtle').doc
   return doc
 }
