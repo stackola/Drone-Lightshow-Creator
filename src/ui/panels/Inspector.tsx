@@ -154,7 +154,7 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
                   </button>
                 ))}
                 <div className="menu-sep" />
-                <ShapePicker onPick={(k) => { close(); if (k === 'describe') getState().set({ dialog: 'describe' }); else if (k !== 'image') addLayer(id, k) }} />
+                <ShapePicker scenePresets={false} onPick={(k) => { close(); if (k === 'describe') getState().set({ dialog: 'describe' }); else if (k !== 'image' && k !== 'led') addLayer(id, k) }} />
               </>
             )}
           </MenuButton>

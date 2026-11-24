@@ -1,7 +1,7 @@
 import type { Draft } from 'immer'
 import type { Effect, LightCue, Scene, ShapeKind, ShapeSpec, ShowDoc, SpareRole } from '@/core/types'
 import { SPARE_ROLES, addSpareLayer, applySpareRole, calmMotion } from '@/core/idle'
-import { fitScene, fitToAirspace, newId, newLayer, newScene, newShape } from '@/core/defaults'
+import { fitScene, fitToAirspace, newId, newLayer, newLedSign, newScene, newShape } from '@/core/defaults'
 import { comfortableSpacing, type FixAction, type Issue } from '@/core/validate'
 import { applyFixToDoc, autoFix } from '@/core/fixes'
 import { defaultEffect } from '@/core/effects'
@@ -17,6 +17,19 @@ export function addScene(kind: ShapeKind, opts: { shape?: ShapeSpec; name?: stri
   const scene = newScene(s.doc, kind, { shape: opts.shape, name: opts.name, position: after ? [...after.position] : undefined })
   const at = idx >= 0 ? idx + 1 : s.doc.scenes.length
   s.update((d) => { d.scenes.splice(at, 0, scene as Draft<Scene>) }, `Add ${scene.name}`)
+  s.select({ kind: 'scene', id: scene.id })
+  return scene
+}
+
+/** Add an LED sign (scrolling dot-matrix text) after the selection. */
+export function addLedSign(text = 'WELCOME') {
+  const s = getState()
+  const sel = s.selection
+  const idx = sel.kind === 'scene' || sel.kind === 'flight' ? s.doc.scenes.findIndex((x) => x.id === sel.id) : -1
+  const after = idx >= 0 ? s.doc.scenes[idx] : s.doc.scenes[s.doc.scenes.length - 1]
+  const scene = newLedSign(s.doc, text, { position: after ? [...after.position] : undefined })
+  const at = idx >= 0 ? idx + 1 : s.doc.scenes.length
+  s.update((d) => { d.scenes.splice(at, 0, scene as Draft<Scene>) }, 'Add LED sign')
   s.select({ kind: 'scene', id: scene.id })
   return scene
 }

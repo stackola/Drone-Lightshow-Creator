@@ -3,7 +3,9 @@
 
 import type { Effect, EffectKind } from './types'
 import { hexToRgb, hsv, type RGB } from './color'
-import { DEG } from './math'
+import { DEG, hash01 } from './math'
+import { pixelTextMask } from './pixelFont'
+import { decodeMask } from './sample'
 
 export interface DroneLook {
   /** Local position normalised to roughly [-1, 1] by the layer's largest half-extent. */
@@ -13,9 +15,21 @@ export interface DroneLook {
   order: number
   /** Stable random in [0, 1). */
   rand: number
+  /** Letters in the shape (text), 0 otherwise. For text, order = (letter + pen fraction) / glyphs. */
+  glyphs: number
+  /** The layer's half-width and half-height in u/v units (for dot-matrix text). */
+  uh: number
+  vh: number
   /** Image colour if the shape has one. */
   image: RGB | null
 }
+
+export function blankLook(): DroneLook {
+  return { u: 0, v: 0, order: 0, rand: 0, glyphs: 0, uh: 1, vh: 1, image: null }
+}
+
+/** Effects that reveal or display text, driven by each drone's letter and pen order. */
+export const TEXT_EFFECTS: EffectKind[] = ['write', 'type', 'flip', 'matrix']
 
 export interface EffectDef {
   kind: EffectKind
@@ -34,6 +48,10 @@ export const EFFECTS: EffectDef[] = [
   { kind: 'flash', label: 'Flash' },
   { kind: 'strobe', label: 'Strobe' },
   { kind: 'off', label: 'Lights off' },
+  { kind: 'write', label: 'Write on' },
+  { kind: 'type', label: 'Typewriter' },
+  { kind: 'flip', label: 'Flip board' },
+  { kind: 'matrix', label: 'LED text' },
 ]
 
 export function defaultEffect(kind: EffectKind, base = '#38bdf8'): Effect {
@@ -49,6 +67,10 @@ export function defaultEffect(kind: EffectKind, base = '#38bdf8'): Effect {
     case 'flash': return { kind, color: '#ffffff', decay: 0.35, beatSync: true, every: 1, brightness: 1 }
     case 'strobe': return { kind, color: '#ffffff', rate: 8, brightness: 1 }
     case 'off': return { kind, brightness: 0 }
+    case 'write': return { kind, a: base, b: '#000000', pen: '#ffffff', duration: 4, brightness: 1 }
+    case 'type': return { kind, a: base, b: '#000000', cursor: '#ffffff', duration: 3, brightness: 1 }
+    case 'flip': return { kind, a: base, b: '#10131c', duration: 3, rate: 12, brightness: 1 }
+    case 'matrix': return { kind, text: 'HELLO', a: '#ffb020', b: '#1c1406', speed: 6, brightness: 1 }
   }
 }
 
@@ -57,6 +79,28 @@ export function defaultEffect(kind: EffectKind, base = '#38bdf8'): Effect {
  * index, and seconds since it started — or null outside the music.
  */
 export type BeatPhase = (t: number) => { phase: number; index: number; since: number } | null
+
+const WHITE: RGB = [1, 1, 1]
+
+function setHex(hex: string, out: RGB): RGB {
+  const c = hexToRgb(hex)
+  out[0] = c[0]; out[1] = c[1]; out[2] = c[2]
+  return out
+}
+
+const bitmaps = new Map<string, { w: number; h: number; on: Uint8Array }>()
+
+/** 5×7 dot-matrix bitmap of a line of text (cached). */
+export function textBitmap(text: string): { w: number; h: number; on: Uint8Array } {
+  let b = bitmaps.get(text)
+  if (!b) {
+    const m = pixelTextMask(text.replace(/\s+/g, ' ').trim() || ' ', 1)
+    b = { w: m.w, h: m.h, on: decodeMask(m) }
+    if (bitmaps.size > 64) bitmaps.clear()
+    bitmaps.set(text, b)
+  }
+  return b
+}
 
 function mix(a: RGB, b: RGB, t: number, out: RGB): RGB {
   out[0] = a[0] + (b[0] - a[0]) * t
@@ -156,6 +200,68 @@ export function effectColor(e: Effect, d: DroneLook, tau: number, t: number, bea
       out[0] = 0; out[1] = 0; out[2] = 0
       break
     }
+    case 'write': {
+      // Pen progress in order units; the newest-lit drones glow in the pen colour.
+      const G = Math.max(1, d.glyphs)
+      const P = Math.max(0, Math.min(1, tau / Math.max(0.1, e.duration)))
+      if (d.order <= P) {
+        const w = Math.min(0.08, 0.35 / G)
+        const k = P < 1 ? (P - d.order) / w : 1
+        mix(hexToRgb(e.pen), hexToRgb(e.a), Math.min(1, k), out)
+      } else setHex(e.b, out)
+      break
+    }
+    case 'type': {
+      // Whole letters appear one after another; the next letter blinks as a cursor.
+      const G = d.glyphs > 0 ? d.glyphs : 12
+      const dur = Math.max(0.1, e.duration)
+      const P = Math.max(0, Math.min(1, tau / dur))
+      const shown = Math.floor(P * G + 1e-6)
+      const g = Math.min(G - 1, Math.floor(d.order * G))
+      if (g < shown) {
+        const age = tau - ((g + 1) / G) * dur
+        mix(hexToRgb(e.a), WHITE, age >= 0 ? Math.exp(-age / 0.12) * 0.8 : 0, out)
+      } else if (g === shown && P < 1 && Math.floor(tau * 3) % 2 === 0) {
+        mix(hexToRgb(e.b), hexToRgb(e.cursor), 0.55, out)
+      } else setHex(e.b, out)
+      break
+    }
+    case 'flip': {
+      // Each letter flickers through random states, then settles; letters settle left to right.
+      const G = d.glyphs > 0 ? d.glyphs : 10
+      const g = Math.min(G - 1, Math.floor(d.order * G))
+      const settle = ((g + 1) / G) * Math.max(0.1, e.duration)
+      if (tau >= settle) {
+        mix(hexToRgb(e.a), WHITE, Math.exp(-(tau - settle) / 0.1) * 0.7, out)
+      } else {
+        const tick = Math.floor(tau * Math.max(1, e.rate))
+        const r = hash01(Math.floor(d.rand * 1e6) + tick * 7919, 31)
+        if (r < 0.45) setHex(e.b, out)
+        else if (r < 0.8) setHex(e.a, out)
+        else { out[0] = 0.9; out[1] = 0.92; out[2] = 1 }
+      }
+      break
+    }
+    case 'matrix': {
+      // A 5×7 dot-matrix bitmap mapped onto the layer: rows fill its height, columns keep the same pitch.
+      const bmp = textBitmap(e.text)
+      const vh = d.vh > 1e-6 ? d.vh : 1, uh = d.uh > 1e-6 ? d.uh : 1
+      const pitch = (2 * vh) / (bmp.h - 1)
+      // A small bias keeps exact half-pitch positions (even column counts) rounding the same way despite float noise.
+      const row = Math.round((vh - d.v) / pitch + 1e-4)
+      const x = d.u / pitch + 1e-4
+      let c: number
+      if (e.speed > 0) {
+        // Scroll right to left, one column at a time, entering at the right edge and fully leaving before repeating.
+        const half = uh / pitch
+        const period = bmp.w + Math.round(2 * half) + 2
+        const raw = Math.round(x - half + Math.floor(tau * e.speed))
+        c = ((raw % period) + period) % period
+      } else c = Math.round(x + (bmp.w - 1) / 2)
+      const lit = row >= 0 && row < bmp.h && c >= 0 && c < bmp.w && bmp.on[row * bmp.w + c] === 1
+      setHex(lit ? e.a : e.b, out)
+      break
+    }
   }
   const b = Math.max(0, Math.min(1, e.brightness))
   out[0] *= b; out[1] *= b; out[2] *= b
@@ -173,6 +279,10 @@ export function effectSwatch(e: Effect): string {
     case 'chase': return `linear-gradient(90deg, ${e.a}, ${e.b})`
     case 'wave': return `linear-gradient(90deg, ${e.a}, ${e.b}, ${e.a})`
     case 'image': return 'linear-gradient(90deg,#f87171,#38bdf8)'
+    case 'write': return `linear-gradient(90deg, ${e.a} 0 60%, ${e.pen} 60% 70%, ${e.b} 70%)`
+    case 'type': return `linear-gradient(90deg, ${e.a} 0 55%, ${e.cursor} 55% 65%, ${e.b} 65%)`
+    case 'flip': return `repeating-linear-gradient(90deg, ${e.a} 0 5px, ${e.b} 5px 7px)`
+    case 'matrix': return `radial-gradient(circle, ${e.a} 0 1.5px, ${e.b} 2px) 0 0 / 5px 5px`
     case 'flash': return e.color
     case 'strobe': return `repeating-linear-gradient(90deg, ${e.color} 0 4px, #000 4px 8px)`
     case 'off': return '#05070d'

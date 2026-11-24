@@ -13,7 +13,7 @@ import { generateShape } from './shapes'
 import { DEG, ceilTo, centroid, hash01, hashArray, isIdentityRotation, minPairDistance, rotationMatrix, transformPoints } from './math'
 import { NO_MOTION, ZERO_PROFILE, fastestProfile, moveExtents, spinAngle, stretchProfile, type Profile } from './motion'
 import { comfortableSpacing, flightClosestApproach } from './separation'
-import { effectColor, type BeatPhase, type DroneLook } from './effects'
+import { blankLook, effectColor, type BeatPhase, type DroneLook } from './effects'
 import type { RGB } from './color'
 
 /** Dim warm white used while taking off and landing. */
@@ -165,27 +165,38 @@ export interface SceneGeometry {
   image: Float32Array | null
 }
 
+/** Per-point look data stride: u, v, order, rand, glyphs, half-width, half-height (see DroneLook). */
+export const LOOK = 7
+
 /** World-space points for a scene at hold start (point order), plus per-point look data. */
 export function sceneGeometry(scene: Scene, n: number): SceneGeometry {
   const counts = allocate(n, scene.layers.map((l) => l.weight))
   const points = new Float32Array(n * 3)
   const layerOf = new Uint16Array(n)
-  const look = new Float32Array(n * 4)
+  const look = new Float32Array(n * LOOK)
   let image: Float32Array | null = null
   const sceneRot = isIdentityRotation(scene.rotation) ? null : rotationMatrix(scene.rotation)
   let o = 0
   scene.layers.forEach((layer, li) => {
     const c = counts[li]!
     if (c === 0) return
-    const { points: local, colors } = generateShape(layer.shape, c)
+    const { points: local, colors, order, glyphs } = generateShape(layer.shape, c)
     // Normalise for effects using the unrotated local shape.
-    let ext = 1e-9
-    for (let k = 0; k < c; k++) ext = Math.max(ext, Math.abs(local[k * 3]!), Math.abs(local[k * 3 + 1]!), Math.abs(local[k * 3 + 2]!))
+    let ext = 1e-9, extX = 1e-9, extY = 1e-9
     for (let k = 0; k < c; k++) {
-      look[(o + k) * 4] = local[k * 3]! / ext
-      look[(o + k) * 4 + 1] = local[k * 3 + 1]! / ext
-      look[(o + k) * 4 + 2] = c > 1 ? k / (c - 1) : 0
-      look[(o + k) * 4 + 3] = hash01(k, li * 7919 + 17)
+      const ax = Math.abs(local[k * 3]!), ay = Math.abs(local[k * 3 + 1]!)
+      ext = Math.max(ext, ax, ay, Math.abs(local[k * 3 + 2]!))
+      extX = Math.max(extX, ax); extY = Math.max(extY, ay)
+    }
+    for (let k = 0; k < c; k++) {
+      const L = (o + k) * LOOK
+      look[L] = local[k * 3]! / ext
+      look[L + 1] = local[k * 3 + 1]! / ext
+      look[L + 2] = order ? order[k]! : c > 1 ? k / (c - 1) : 0
+      look[L + 3] = hash01(k, li * 7919 + 17)
+      look[L + 4] = glyphs ?? 0
+      look[L + 5] = extX / ext
+      look[L + 6] = extY / ext
       layerOf[o + k] = li
     }
     if (colors) {
@@ -495,16 +506,26 @@ function constColors(n: number, c: RGB): Float32Array {
   return out
 }
 
-const look: DroneLook = { u: 0, v: 0, order: 0, rand: 0, image: null }
+const look: DroneLook = blankLook()
 const imgTmp: RGB = [1, 1, 1]
 const colTmp: RGB = [0, 0, 0]
 
 /** Colour of point `k` of a compiled scene. */
+/** Fill a DroneLook from packed look data (point k). */
+export function readLook(src: Float32Array, k: number, look: DroneLook): DroneLook {
+  const L = k * LOOK
+  look.u = src[L]!
+  look.v = src[L + 1]!
+  look.order = src[L + 2]!
+  look.rand = src[L + 3]!
+  look.glyphs = src[L + 4]!
+  look.uh = src[L + 5]!
+  look.vh = src[L + 6]!
+  return look
+}
+
 export function pointColor(cs: CompiledScene, k: number, tau: number, t: number, beat: BeatPhase, out: RGB): RGB {
-  look.u = cs.look[k * 4]!
-  look.v = cs.look[k * 4 + 1]!
-  look.order = cs.look[k * 4 + 2]!
-  look.rand = cs.look[k * 4 + 3]!
+  readLook(cs.look, k, look)
   if (cs.image) {
     imgTmp[0] = cs.image[k * 3]!; imgTmp[1] = cs.image[k * 3 + 1]!; imgTmp[2] = cs.image[k * 3 + 2]!
     look.image = imgTmp

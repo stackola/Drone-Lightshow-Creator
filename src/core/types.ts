@@ -69,6 +69,14 @@ export type Effect =
   | { kind: 'flash'; color: Hex; decay: number; beatSync: boolean; every: number; brightness: number }
   | { kind: 'strobe'; color: Hex; rate: number; brightness: number }
   | { kind: 'off'; brightness: number }
+  /** Draws the shape in pen order (text: letter by letter, stroke by stroke), with a glowing pen tip. */
+  | { kind: 'write'; a: Hex; b: Hex; pen: Hex; duration: number; brightness: number }
+  /** Text appears one letter at a time, with a blinking cursor on the next letter. */
+  | { kind: 'type'; a: Hex; b: Hex; cursor: Hex; duration: number; brightness: number }
+  /** Split-flap board: letters flicker, then settle left to right. */
+  | { kind: 'flip'; a: Hex; b: Hex; duration: number; rate: number; brightness: number }
+  /** LED matrix: dot-matrix text scrolling across (or standing on) the formation, best on a grid. */
+  | { kind: 'matrix'; text: string; a: Hex; b: Hex; speed: number; brightness: number }
 
 export type EffectKind = Effect['kind']
 

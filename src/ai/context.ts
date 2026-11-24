@@ -23,6 +23,10 @@ export function describeEffect(e: Effect): string {
     case 'strobe': return `strobe ${e.color} at ${e.rate} Hz`
     case 'off': return 'lights off'
     case 'image': return 'image colours'
+    case 'write': return `write-on ${e.a} with a ${e.pen} pen over ${e.duration}s`
+    case 'type': return `typewriter ${e.a} over ${e.duration}s`
+    case 'flip': return `flip board settling to ${e.a} over ${e.duration}s`
+    case 'matrix': return `LED text "${e.text}" ${e.a} on ${e.b}, ${e.speed ? `scrolling ${e.speed} columns/s` : 'static'}`
   }
 }
 

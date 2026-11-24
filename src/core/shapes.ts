@@ -5,6 +5,7 @@
 import type { Fill, ModelPart, ShapeKind, ShapeSpec } from './types'
 import { sampleModel } from './model3d'
 import { hash01 } from './math'
+import { glyphMap, textPointOrder, type GlyphMap } from './textOrder'
 import {
   base64ToBytes, gather, maskCandidates, polygonCandidates, readingOrder, sampleCurve,
   samplePolygonOutline, spreadPick,
@@ -15,6 +16,10 @@ export interface ShapePoints {
   points: Float32Array
   /** Optional packed rgb 0..1 (image shapes). */
   colors: Float32Array | null
+  /** Optional order 0..1 per point (default: index order). Text: pen order, glyph by glyph. */
+  order?: Float32Array
+  /** Number of letters (text shapes), for letter-by-letter effects. */
+  glyphs?: number
 }
 
 export interface ParamDef {
@@ -199,7 +204,7 @@ export function generateShape(spec: ShapeSpec, n: number): ShapePoints {
     cache.set(key, unit)
     if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value as string)
   }
-  return { points: scale(unit.points.slice(), spec.size), colors: unit.colors ? unit.colors.slice() : null }
+  return { points: scale(unit.points.slice(), spec.size), colors: unit.colors ? unit.colors.slice() : null, order: unit.order, glyphs: unit.glyphs }
 }
 
 function cacheKey(spec: ShapeSpec, n: number): string {
@@ -383,13 +388,31 @@ function maskSize(w: number, h: number): [number, number] {
   return [1, h / Math.max(1, w)]
 }
 
+const glyphCache = new Map<string, GlyphMap>()
+
 function textShape(mask: { w: number; h: number; bits: string }, n: number): ShapePoints {
   if (!mask.w || !mask.h) return plain(sunflower(n))
   // size = cap height: scale so mask height = 1
   const width = mask.w / mask.h
   const cand = maskCandidates(mask, width, 1, Math.max(n * 30, 3000))
   if (cand.length === 0) return plain(sunflower(n))
-  return plain(readingOrder(gather(cand, spreadPick(cand, n)), 0.05))
+  const pts = readingOrder(gather(cand, spreadPick(cand, n)), 0.05)
+  // Pen order: letters left to right, each in a natural stroke order.
+  const key = `${mask.w}x${mask.h}:${mask.bits}`
+  let map = glyphCache.get(key)
+  if (!map) {
+    map = glyphMap(mask)
+    if (glyphCache.size > 32) glyphCache.clear()
+    glyphCache.set(key, map)
+  }
+  const ord = textPointOrder(map, width, pts)
+  const idx = Array.from({ length: n }, (_, k) => k).sort((a, b) => ord[a]! - ord[b]!)
+  const points = new Float32Array(n * 3), order = new Float32Array(n)
+  idx.forEach((src, k) => {
+    points[k * 3] = pts[src * 3]!; points[k * 3 + 1] = pts[src * 3 + 1]!; points[k * 3 + 2] = pts[src * 3 + 2]!
+    order[k] = ord[src]!
+  })
+  return { points, colors: null, order, glyphs: map.glyphs }
 }
 
 function imageShape(spec: Extract<ShapeSpec, { kind: 'image' }>, n: number): ShapePoints {

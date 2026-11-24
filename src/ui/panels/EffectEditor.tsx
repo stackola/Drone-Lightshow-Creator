@@ -8,6 +8,7 @@ function baseColor(e: Effect): string {
     case 'flash': case 'strobe': return e.color
     case 'gradient': case 'pulse': case 'twinkle': case 'wave': return e.a
     case 'chase': return e.b
+    case 'write': case 'type': case 'flip': case 'matrix': return e.a
     default: return '#38bdf8'
   }
 }
@@ -63,6 +64,24 @@ export function EffectEditor({ effect, onChange, allowImage, keyPrefix, hasBeats
         </>
       )}
       {effect.kind === 'strobe' && (<>{color('color', 'Colour')}{num('rate', 'Rate', 0.5, 'Hz', 0.5, 25)}</>)}
+      {effect.kind === 'write' && (
+        <>
+          {color('a', 'Ink')}{color('pen', 'Pen tip')}{color('b', 'Unwritten')}{num('duration', 'Writes in', 0.5, 's', 0.5, 60)}
+          <div className="hint">Text is written letter by letter in stroke order; other shapes are drawn along their outline.</div>
+        </>
+      )}
+      {effect.kind === 'type' && (<>{color('a', 'Letters')}{color('cursor', 'Cursor')}{color('b', 'Blank')}{num('duration', 'Types in', 0.5, 's', 0.5, 60)}</>)}
+      {effect.kind === 'flip' && (<>{color('a', 'Letters')}{color('b', 'Dark flaps')}{num('duration', 'Settles in', 0.5, 's', 0.5, 60)}{num('rate', 'Flicker', 1, 'Hz', 1, 30)}</>)}
+      {effect.kind === 'matrix' && (
+        <>
+          <Row label="Text">
+            <input className="text-input" value={effect.text} aria-label="LED text" maxLength={120} onChange={(ev) => set('text', ev.target.value.toUpperCase())} />
+          </Row>
+          {color('a', 'LEDs on')}{color('b', 'LEDs off')}
+          {num('speed', 'Scroll', 1, 'col/s', 0, 40)}
+          <div className="hint">Dot-matrix letters 7 dots tall, scrolling right to left (0 = still). Looks best on an LED sign: a grid 7 drones tall.</div>
+        </>
+      )}
       {effect.kind === 'image' && <div className="hint">Each drone shows the colour of its part of the shape (image pixel or 3D model part).</div>}
       {effect.kind === 'off' && <div className="hint">These drones fly with lights off — handy for parking spare drones out of sight.</div>}
       {effect.kind !== 'off' && (

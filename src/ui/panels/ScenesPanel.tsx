@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Copy, Plus, Trash2, PlaneTakeoff, PlaneLanding, AlertTriangle, Type, ImageUp, Sparkles } from 'lucide-react'
 import { getState, useStore } from '@/state/store'
-import { addScene, deleteScene, duplicateScene, moveScene, seekToScene } from '@/state/actions'
+import { addLedSign, addScene, deleteScene, duplicateScene, moveScene, seekToScene } from '@/state/actions'
 import { seek } from '@/state/playback'
 import { SHAPES, generateShape } from '@/core/shapes'
 import { scenePointColors } from '@/core/compile'
@@ -42,7 +42,9 @@ export async function addImageScene() {
   }
 }
 
-export function ShapePicker({ onPick }: { onPick: (kind: ShapeKind | 'describe') => void }) {
+export type PickKind = ShapeKind | 'describe' | 'led'
+
+export function ShapePicker({ onPick, scenePresets = true }: { onPick: (kind: PickKind) => void; scenePresets?: boolean }) {
   const groups: ('2D' | '3D' | 'Content')[] = ['2D', '3D', 'Content']
   return (
     <div>
@@ -62,6 +64,12 @@ export function ShapePicker({ onPick }: { onPick: (kind: ShapeKind | 'describe')
                 {s.label}
               </button>
             ))}
+            {g === 'Content' && scenePresets && (
+              <button className="shape-tile" onClick={() => onPick('led')} title="A dot-matrix LED sign: scrolling text on a grid of drones 7 tall">
+                <span className="led-tile" aria-hidden />
+                LED sign
+              </button>
+            )}
             {g === 'Content' && (
               <button className="shape-tile" onClick={() => onPick('describe')} title="Describe any picture and Claude draws it in drones">
                 <Sparkles size={26} style={{ margin: '7px 0' }} className="ai-mark" />
@@ -75,8 +83,9 @@ export function ShapePicker({ onPick }: { onPick: (kind: ShapeKind | 'describe')
   )
 }
 
-export function pickAndAdd(kind: ShapeKind | 'describe') {
+export function pickAndAdd(kind: PickKind) {
   if (kind === 'describe') getState().set({ dialog: 'describe' })
+  else if (kind === 'led') addLedSign()
   else if (kind === 'model') getState().set({ dialog: 'model3d', aiTarget: null })
   else if (kind === 'image') void addImageScene()
   else addScene(kind)

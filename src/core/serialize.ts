@@ -178,6 +178,7 @@ function effect(v: unknown): Effect {
     const x = v[k]
     if (typeof d === 'number') out[k] = num(x, d)
     else if (typeof d === 'boolean') out[k] = bool(x, d)
+    else if (k === 'text') out[k] = str(x, d as string).slice(0, 200)
     else if (typeof d === 'string') out[k] = hex(x, d)
   }
   return out as unknown as Effect

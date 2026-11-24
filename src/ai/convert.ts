@@ -48,6 +48,10 @@ export function effectFromInput(l: LightInput, fallbackColor = '#38bdf8'): Effec
     case 'strobe': return { kind: 'strobe', color: normalizeHex(l.color, '#ffffff'), rate: clamp(l.rate, 0.5, 25, 8), brightness }
     case 'off': return defaultEffect('off')
     case 'image': return { kind: 'image', brightness }
+    case 'write': return { kind: 'write', a: color, b: '#000000', pen: normalizeHex(l.color2, '#ffffff'), duration: clamp(l.duration, 0.5, 60, 4), brightness }
+    case 'type': return { kind: 'type', a: color, b: '#000000', cursor: normalizeHex(l.color2, '#ffffff'), duration: clamp(l.duration, 0.5, 60, 3), brightness }
+    case 'flip': return { kind: 'flip', a: color, b: normalizeHex(l.color2, '#10131c'), duration: clamp(l.duration, 0.5, 60, 3), rate: clamp(l.rate, 1, 30, 12), brightness }
+    case 'matrix': return { kind: 'matrix', text: (l.text ?? 'HELLO').toUpperCase().slice(0, 120), a: normalizeHex(l.color, '#ffb020'), b: normalizeHex(l.color2, '#1c1406'), speed: clamp(l.speed, 0, 40, 6), brightness }
   }
 }
 

@@ -133,6 +133,39 @@ export function newScene(doc: ShowDoc, kind: ShapeKind, opts: { name?: string; p
 }
 
 /**
+ * An LED sign: a grid exactly 7 drones tall (one drone per dot of the 5×7
+ * font) showing scrolling dot-matrix text. Drones that don't fit the panel
+ * are parked behind it. The hold is long enough for the text to pass once.
+ */
+export function newLedSign(doc: ShowDoc, text = 'WELCOME', opts: { color?: string; speed?: number; position?: Vec3 } = {}): Scene {
+  const n = doc.droneCount
+  const rows = Math.min(7, Math.max(1, n))
+  const cols = Math.max(1, Math.floor(n / rows))
+  const panel = rows * cols
+  const spacing = comfortableSpacing(doc.limits.minSpacing)
+  const speed = opts.speed ?? 6
+  const effect: Effect = { kind: 'matrix', text: text.toUpperCase(), a: opts.color ?? '#ffb020', b: '#1c1406', speed, brightness: 1 }
+  const grid: ShapeSpec = { kind: 'grid', size: Math.max(1, (cols - 1) * spacing), aspect: cols / rows, scatter: 0, fill: 'filled' }
+  const layers = [{ ...newLayer(grid, effect), weight: panel }]
+  if (n > panel) {
+    const spare = newLayer(newShape('grid'), defaultEffect('off'))
+    layers.push({ ...spare, role: 'park', weight: n - panel, offset: [0, 0, -25] })
+  }
+  const textCols = pixelTextMask(text, 1).w
+  const scene: Scene = {
+    id: newId('scene'),
+    name: `LED: ${text}`.slice(0, 60),
+    hold: speed > 0 ? Math.ceil((textCols + cols + 2) / speed) + 1 : 6,
+    flight: { duration: null, dim: false },
+    position: opts.position ?? [...DEFAULT_CENTER],
+    rotation: [0, 0, 0],
+    spin: 0,
+    layers,
+  }
+  return placeInAirspace(fitScene(scene, n, spacing, 'grow'), doc)
+}
+
+/**
  * Give a fraction of the drones to a dark "parking" grid 25 m behind the main
  * shape — for formations that look best with fewer drones (digits, short text).
  */

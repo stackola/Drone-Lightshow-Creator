@@ -5,7 +5,7 @@
 import { z } from 'zod'
 
 export const SHAPE_KINDS = ['circle', 'heart', 'star', 'polygon', 'grid', 'spiral', 'wave', 'sphere', 'torus', 'cube', 'helix', 'cone', 'text'] as const
-export const EFFECT_KINDS = ['solid', 'gradient', 'rainbow', 'pulse', 'twinkle', 'chase', 'wave', 'flash', 'strobe', 'off', 'image'] as const
+export const EFFECT_KINDS = ['solid', 'gradient', 'rainbow', 'pulse', 'twinkle', 'chase', 'wave', 'flash', 'strobe', 'off', 'image', 'write', 'type', 'flip', 'matrix'] as const
 
 const hex = z.string().describe('Hex colour, e.g. "#ff3366"')
 
@@ -14,7 +14,11 @@ export const LightInput = z.object({
     'solid: one colour. gradient: color → color2 across the shape. rainbow: moving hues. pulse: color on each beat fading toward color2. ' +
       'twinkle: color with random color2 sparkles. chase: color2 highlight running along the shape over a color base. ' +
       'wave: color2 band sweeping across a color base. flash: color flash (on every N beats when beat_sync). strobe: color strobe. ' +
-      'off: lights off (parked drones). image: colours of an imported image (image formations only).',
+      'off: lights off (parked drones). image: colours of an imported image (image formations only). ' +
+      'Text reveals (best on text formations, over `duration` seconds from when the formation arrives or the cue starts): ' +
+      'write: the text is written stroke by stroke with a glowing pen (color, pen colour color2); also draws outlines of other shapes. ' +
+      'type: typewriter, one letter at a time with a blinking cursor. flip: split-flap board, letters flicker then settle left to right. ' +
+      'matrix: LED-sign dot-matrix `text` scrolling across the formation at `speed` columns/s (0 = static) — best on a grid formation 7 drones tall (shape kind "grid"), color on, color2 the unlit LED glow.',
   ),
   color: hex.optional().describe('Main colour'),
   color2: hex.optional().describe('Second colour (gradient end, pulse rest, twinkle sparkle, chase/wave highlight)'),
@@ -27,6 +31,8 @@ export const LightInput = z.object({
   decay: z.number().optional().describe('flash fade-out time in seconds (0.2–1)'),
   width: z.number().optional().describe('chase/wave band width as a fraction of the shape (0.1–0.5)'),
   brightness: z.number().optional().describe('0–1, default 1'),
+  duration: z.number().optional().describe('write/type/flip: seconds to reveal the whole text (2–8)'),
+  text: z.string().optional().describe('matrix: the text shown on the LED matrix (A–Z, 0–9, basic punctuation)'),
 })
 export type LightInput = z.infer<typeof LightInput>
 

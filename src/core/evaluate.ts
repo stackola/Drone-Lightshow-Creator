@@ -2,10 +2,10 @@
 // One function for preview, validation and export — no separate "bake" path.
 
 import type { Compiled, Leg, Segment } from './compile'
-import { GROUND_COLOR, beatPhaseFn, pointColor } from './compile'
+import { GROUND_COLOR, LOOK, beatPhaseFn, pointColor, readLook } from './compile'
 import { holdPose, profileS } from './motion'
 import type { RGB } from './color'
-import { effectColor, type BeatPhase, type DroneLook } from './effects'
+import { TEXT_EFFECTS, blankLook, effectColor, type BeatPhase, type DroneLook } from './effects'
 import { hash01 } from './math'
 
 export function segmentAt(c: Compiled, t: number): number {
@@ -83,7 +83,7 @@ export function evaluate(c: Compiled, t: number, pos: Float32Array, col: Float32
       break
     }
   }
-  if (col && c.cues.length) applyCues(c, t, pos, col, beat)
+  if (col && c.cues.length) applyCues(c, seg, t, pos, col, beat)
   return seg
 }
 
@@ -96,21 +96,36 @@ export function cueEnvelope(q: { t0: number; t1: number; fadeIn: number; fadeOut
   return Math.min(a, b)
 }
 
-const cueLook: DroneLook = { u: 0, v: 0, order: 0, rand: 0, image: null }
+const cueLook: DroneLook = blankLook()
 
-function applyCues(c: Compiled, t: number, pos: Float32Array, col: Float32Array, beat: BeatPhase): void {
+/**
+ * Light cues over the base colours. Position-based effects use the whole
+ * stage, so sweeps run continuously across scenes. While a formation is held,
+ * drones also carry its order (chases follow the shape, write-on follows the
+ * pen) and text effects use the formation's own layout (letters, dot matrix).
+ */
+function applyCues(c: Compiled, seg: Segment, t: number, pos: Float32Array, col: Float32Array, beat: BeatPhase): void {
   const n = c.n
-  const { cx, cy, r } = c.stage
+  const { cx, cy, r, minX, maxX, minY, maxY } = c.stage
+  const cs = seg.kind === 'hold' ? c.scenes[seg.scene]! : null
   for (const q of c.cues) {
     if (q.t0 > t) break
     const w = cueEnvelope(q, t)
     if (w <= 0) continue
     const tau = t - q.t0
+    const textFx = TEXT_EFFECTS.includes(q.effect.kind)
     for (let i = 0; i < n; i++) {
-      cueLook.u = (pos[i * 3]! - cx) / r
-      cueLook.v = (pos[i * 3 + 1]! - cy) / r
-      cueLook.order = n > 1 ? i / (n - 1) : 0
-      cueLook.rand = hash01(i, 4242)
+      if (cs && textFx) {
+        readLook(cs.look, cs.slot[i]!, cueLook)
+      } else {
+        cueLook.u = (pos[i * 3]! - cx) / r
+        cueLook.v = (pos[i * 3 + 1]! - cy) / r
+        cueLook.order = cs ? cs.look[cs.slot[i]! * LOOK + 2]! : n > 1 ? i / (n - 1) : 0
+        cueLook.rand = hash01(i, 4242)
+        cueLook.glyphs = 0
+        cueLook.uh = Math.max(Math.abs(maxX - cx), Math.abs(minX - cx)) / r
+        cueLook.vh = Math.max(Math.abs(maxY - cy), Math.abs(minY - cy)) / r
+      }
       effectColor(q.effect, cueLook, tau, t, beat, tmp)
       const o = i * 3
       switch (q.blend) {
