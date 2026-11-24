@@ -89,7 +89,7 @@ export interface Compiled {
   /** Light cues, sorted by start. */
   cues: CompiledCue[]
   /** Normalisation for position-based cue effects: centre and half-extent of the show. */
-  stage: { cx: number; cy: number; r: number }
+  stage: { cx: number; cy: number; r: number; minX: number; maxX: number; minY: number; maxY: number }
   /** Times for UI. */
   takeoff: { t0: number; t1: number }
   landing: { t0: number; t1: number }
@@ -359,8 +359,8 @@ export function compile(doc: ShowDoc): Compiled {
       if (y < minY) minY = y; if (y > maxY) maxY = y
     }
   const stage = Number.isFinite(minX)
-    ? { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, r: Math.max(1, (maxX - minX) / 2, (maxY - minY) / 2) }
-    : { cx: 0, cy: site.takeoffAltitude, r: 20 }
+    ? { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, r: Math.max(1, (maxX - minX) / 2, (maxY - minY) / 2), minX, maxX, minY, maxY }
+    : { cx: 0, cy: site.takeoffAltitude, r: 20, minX: -20, maxX: 20, minY: 0, maxY: site.takeoffAltitude + 20 }
 
   const cues: CompiledCue[] = (doc.cues ?? [])
     .filter((q) => q.duration > 0)

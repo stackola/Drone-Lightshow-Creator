@@ -154,10 +154,6 @@ function heartPolygon(): [number, number][] {
   return raw.map(([x, y]) => [(x - cx) * s, (y - cy) * s])
 }
 
-function circlePolygon(): [number, number][] {
-  return Array.from({ length: 360 }, (_, i) => [0.5 * Math.cos((i / 360) * TAU), 0.5 * Math.sin((i / 360) * TAU)] as [number, number])
-}
-
 function polyShape(poly: [number, number][], fill: Fill, n: number): Float32Array {
   if (fill === 'outline') return samplePolygonOutline(n, poly)
   const cand = polygonCandidates(poly, Math.max(n * 30, 2000))

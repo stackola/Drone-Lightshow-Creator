@@ -1,0 +1,470 @@
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { ChevronLeft, ChevronRight, Music, Pause, Play, Plus, Repeat, Magnet, ZoomIn, ZoomOut, Maximize2, AlertTriangle, X } from 'lucide-react'
+import { getState, useStore } from '@/state/store'
+import { pause, play, seek, setRate, togglePlay } from '@/state/playback'
+import { CUE_PRESETS, addCue, focusIssue, seekToScene, stepScene, updateCue, updateScene } from '@/state/actions'
+import { effectSwatch } from '@/core/effects'
+import { ceilTo } from '@/core/math'
+import { formatTime } from '@/core/validate'
+import { loadMusic, pickFile, removeMusic } from '@/state/persist'
+import { MenuButton } from '@/ui/components/controls'
+import type { Scene } from '@/core/types'
+
+const PAD = 14
+const LANES = { ruler: 24, scenes: 46, lights: 34, music: 42 }
+
+function fmtTime(t: number) {
+  const m = Math.floor(t / 60)
+  const s = t - m * 60
+  return `${m}:${s.toFixed(1).padStart(4, '0')}`
+}
+
+/** Colour used for a scene block: the first visible layer's base look. */
+function sceneColor(scene: Scene): string {
+  const e = scene.layers.find((l) => l.effect.kind !== 'off')?.effect ?? scene.layers[0]?.effect
+  if (!e) return '#2a3550'
+  const sw = effectSwatch(e)
+  return sw.startsWith('#') ? sw : sw
+}
+
+export function Timeline() {
+  const compiled = useStore((s) => s.compiled)
+  const doc = useStore((s) => s.doc)
+  const selection = useStore((s) => s.selection)
+  const validation = useStore((s) => s.validation)
+  const snap = useStore((s) => s.snap)
+  const loop = useStore((s) => s.loop)
+  const rate = useStore((s) => s.rate)
+  const playing = useStore((s) => s.playing)
+  const audio = useStore((s) => s.audio)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(800)
+  const [zoom, setZoom] = useState<number | null>(null) // px per second; null = fit
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setWidth(el.clientWidth))
+    ro.observe(el)
+    setWidth(el.clientWidth)
+    return () => ro.disconnect()
+  }, [])
+
+  const duration = Math.max(compiled?.duration ?? 30, doc.audio ? doc.audio.offset + doc.audio.duration : 0)
+  const fit = Math.max(0.5, (width - PAD * 2 - 8) / Math.max(1, duration))
+  const pps = zoom ?? fit
+  const toX = useCallback((t: number) => PAD + t * pps, [pps])
+  const toT = useCallback((x: number) => (x - PAD) / pps, [pps])
+  const contentW = Math.max(width, toX(duration) + PAD + 40)
+
+  const beats = useMemo(() => compiled?.beats ?? [], [compiled])
+  const downbeat = compiled?.downbeat ?? 0
+
+  /** Snap a time to the nearest beat (if music) or 0.1 s. Alt disables snapping. */
+  const snapT = useCallback(
+    (t: number, alt: boolean) => {
+      if (snap && !alt && beats.length) {
+        let best = t, bd = Infinity
+        let lo = 0, hi = beats.length - 1
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1
+          if (beats[mid]! < t) lo = mid + 1
+          else hi = mid
+        }
+        for (const i of [lo - 1, lo]) {
+          const b = beats[i]
+          if (b !== undefined && Math.abs(b - t) < bd) { bd = Math.abs(b - t); best = b }
+        }
+        if (bd * pps < 14) return best
+      }
+      return Math.round(t * 10) / 10
+    },
+    [snap, beats, pps],
+  )
+
+  // Ctrl/Cmd + wheel zoom around the pointer.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      const x = e.clientX - rect.left + el.scrollLeft
+      const t = toT(x)
+      const next = Math.max(fit, Math.min(400, pps * Math.exp(-e.deltaY * 0.0025)))
+      setZoom(next <= fit * 1.001 ? null : next)
+      requestAnimationFrame(() => {
+        el.scrollLeft = PAD + t * next - (e.clientX - rect.left)
+      })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [pps, fit, toT])
+
+  // Generic drag helper.
+  const drag = (e: React.PointerEvent, onMove: (t: number, ev: PointerEvent, dx: number) => void, onClick?: () => void) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const el = e.currentTarget as HTMLElement
+    el.setPointerCapture(e.pointerId)
+    const startX = e.clientX
+    const rect = scrollRef.current!.getBoundingClientRect()
+    let moved = false
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.abs(ev.clientX - startX) < 3) return
+      moved = true
+      const x = ev.clientX - rect.left + scrollRef.current!.scrollLeft
+      onMove(toT(x), ev, (ev.clientX - startX) / pps)
+    }
+    const up = () => {
+      el.removeEventListener('pointermove', move)
+      if (!moved) onClick?.()
+    }
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', up, { once: true })
+  }
+
+  const scrub = (e: React.PointerEvent) => {
+    const rect = scrollRef.current!.getBoundingClientRect()
+    const at = (clientX: number) => toT(clientX - rect.left + scrollRef.current!.scrollLeft)
+    const wasPlaying = getState().playing
+    if (wasPlaying) pause()
+    seek(at(e.clientX))
+    const el = e.currentTarget as HTMLElement
+    el.setPointerCapture(e.pointerId)
+    const move = (ev: PointerEvent) => seek(at(ev.clientX))
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', () => {
+      el.removeEventListener('pointermove', move)
+      if (wasPlaying) play()
+    }, { once: true })
+  }
+
+  const issueScenes = useMemo(() => new Set(validation?.issues.map((i) => i.sceneId).filter(Boolean)), [validation])
+
+  // Ruler ticks
+  const ticks = useMemo(() => {
+    const steps = [0.5, 1, 2, 5, 10, 15, 30, 60, 120]
+    const step = steps.find((s) => s * pps >= 64) ?? 120
+    const out: number[] = []
+    for (let t = 0; t <= duration + 1e-6; t += step) out.push(Math.round(t * 100) / 100)
+    return out
+  }, [pps, duration])
+
+  const blocks: JSX.Element[] = []
+  if (compiled) {
+    const st = compiled.sceneTimes
+    const seg0 = compiled.takeoff
+    blocks.push(
+      <div key="to" className={`blk ground${selection.kind === 'takeoff' ? ' sel' : ''}`} style={{ left: toX(seg0.t0), width: Math.max(2, (seg0.t1 - seg0.t0) * pps - 2) }} onClick={() => { getState().select({ kind: 'takeoff' }); seek(0) }} title="Takeoff">
+        {(seg0.t1 - seg0.t0) * pps > 60 ? 'Takeoff' : ''}
+      </div>,
+    )
+    doc.scenes.forEach((scene, i) => {
+      const t = st[i]
+      if (!t || t.id !== scene.id) return
+      const fw = (t.holdStart - t.flightStart) * pps
+      const selF = selection.kind === 'flight' && selection.id === scene.id
+      blocks.push(
+        <div
+          key={`f-${scene.id}`}
+          className={`blk flight${t.extended ? ' ext' : ''}${selF ? ' sel' : ''}`}
+          style={{ left: toX(t.flightStart) + 1, width: Math.max(2, fw - 3) }}
+          title={`Flight into ${scene.name}: ${(t.holdStart - t.flightStart).toFixed(1)} s${t.auto ? ' (auto)' : ''} · fastest safe ${t.minFlight.toFixed(1)} s${t.extended ? ' — extended for safety' : ''}`}
+          onClick={() => getState().select({ kind: 'flight', id: scene.id })}
+        >
+          {fw > 44 ? `${(t.holdStart - t.flightStart).toFixed(1)}s` : ''}
+          <div
+            className="grip r"
+            onPointerDown={(e) =>
+              drag(e, (tt, ev) => {
+                const min = ceilTo(t.minFlight, 0.1)
+                const dur = Math.max(min, snapT(tt, ev.altKey) - t.flightStart)
+                updateScene(scene.id, (s) => { s.flight.duration = Math.round(dur * 100) / 100 }, 'Flight duration', `flight:${scene.id}`)
+              })
+            }
+          />
+        </div>,
+      )
+      const hw = (t.holdEnd - t.holdStart) * pps
+      const sel = selection.kind === 'scene' && selection.id === scene.id
+      blocks.push(
+        <div
+          key={`h-${scene.id}`}
+          className={`blk hold${sel ? ' sel' : ''}`}
+          style={{ left: toX(t.holdStart), width: Math.max(4, hw), ['--c' as string]: sceneColor(scene) }}
+          title={`${scene.name} · ${fmtTime(t.holdStart)}–${fmtTime(t.holdEnd)}`}
+          onPointerDown={(e) => drag(e, () => {}, () => { getState().select({ kind: 'scene', id: scene.id }); seekToScene(scene.id) })}
+        >
+          {issueScenes.has(scene.id) && <span className="err-dot" />}
+          {hw > 50 ? scene.name : ''}
+          <div
+            className="grip r"
+            onPointerDown={(e) =>
+              drag(e, (tt, ev) => {
+                const hold = Math.max(0, snapT(tt, ev.altKey) - t.holdStart)
+                updateScene(scene.id, (s) => { s.hold = Math.round(hold * 100) / 100 }, 'Hold duration', `hold:${scene.id}`)
+              })
+            }
+          />
+        </div>,
+      )
+    })
+    const rf = compiled.returnFlight
+    const rw = (rf.t1 - rf.t0) * pps
+    blocks.push(
+      <div
+        key="rf"
+        className={`blk flight${rf.extended ? ' ext' : ''}${selection.kind === 'landing' ? ' sel' : ''}`}
+        style={{ left: toX(rf.t0) + 1, width: Math.max(2, rw - 3) }}
+        title={`Return flight: ${(rf.t1 - rf.t0).toFixed(1)} s`}
+        onClick={() => getState().select({ kind: 'landing' })}
+      >
+        {rw > 44 ? `${(rf.t1 - rf.t0).toFixed(1)}s` : ''}
+        <div
+          className="grip r"
+          onPointerDown={(e) =>
+            drag(e, (tt, ev) => {
+              const dur = Math.max(ceilTo(rf.minDuration, 0.1), snapT(tt, ev.altKey) - rf.t0)
+              getState().update((d) => { d.site.returnFlight.duration = Math.round(dur * 100) / 100 }, 'Return flight', 'returnFlight')
+            })
+          }
+        />
+      </div>,
+    )
+    const ld = compiled.landing
+    blocks.push(
+      <div key="ld" className={`blk ground${selection.kind === 'landing' ? ' sel' : ''}`} style={{ left: toX(ld.t0), width: Math.max(2, (ld.t1 - ld.t0) * pps - 2) }} onClick={() => getState().select({ kind: 'landing' })} title="Landing">
+        {(ld.t1 - ld.t0) * pps > 50 ? 'Land' : ''}
+      </div>,
+    )
+  }
+
+  const cueBlocks = doc.cues.map((q) => {
+    const sel = selection.kind === 'cue' && selection.id === q.id
+    const w = Math.max(6, q.duration * pps)
+    const fadeInW = Math.min(w, q.fadeIn * pps), fadeOutW = Math.min(w, q.fadeOut * pps)
+    return (
+      <div
+        key={q.id}
+        className={`blk cue${sel ? ' sel' : ''}`}
+        style={{ left: toX(q.start), width: w }}
+        title={`Light cue · ${fmtTime(q.start)} for ${q.duration.toFixed(1)} s`}
+        onPointerDown={(e) => {
+          const start0 = q.start
+          drag(
+            e,
+            (_t, ev, dt) => {
+              const s = Math.max(0, snapT(start0 + dt, ev.altKey))
+              updateCue(q.id, (c) => { c.start = s }, 'Move light cue', `cue-move:${q.id}`)
+            },
+            () => getState().select({ kind: 'cue', id: q.id }),
+          )
+        }}
+      >
+        {fadeInW > 1 && <span className="fade" style={{ left: 0, width: fadeInW, background: 'linear-gradient(90deg, rgba(9,11,16,0.8), transparent)' }} />}
+        {fadeOutW > 1 && <span className="fade" style={{ right: 0, width: fadeOutW, background: 'linear-gradient(270deg, rgba(9,11,16,0.8), transparent)' }} />}
+        <span className="chip" style={{ background: effectSwatch(q.effect) }} />
+        {w > 70 ? cueLabel(q.effect.kind) : ''}
+        <div
+          className="grip l"
+          onPointerDown={(e) => {
+            const end = q.start + q.duration
+            drag(e, (tt, ev) => {
+              const s = Math.max(0, Math.min(end - 0.1, snapT(tt, ev.altKey)))
+              updateCue(q.id, (c) => { c.start = s; c.duration = end - s }, 'Resize light cue', `cue-l:${q.id}`)
+            })
+          }}
+        />
+        <div
+          className="grip r"
+          onPointerDown={(e) =>
+            drag(e, (tt, ev) => {
+              const d = Math.max(0.1, snapT(tt, ev.altKey) - q.start)
+              updateCue(q.id, (c) => { c.duration = Math.round(d * 100) / 100 }, 'Resize light cue', `cue-r:${q.id}`)
+            })
+          }
+        />
+      </div>
+    )
+  })
+
+  const totalH = LANES.ruler + LANES.scenes + LANES.lights + LANES.music
+  const bpm = doc.audio?.bpm
+
+  return (
+    <div className="timeline">
+      <div className="tl-bar">
+        <button className="btn ghost icon" onClick={() => stepScene(-1)} title="Previous scene (↑)" aria-label="Previous scene"><ChevronLeft size={16} /></button>
+        <button className="btn primary icon" onClick={togglePlay} title="Play / pause (Space)" aria-label={playing ? 'Pause' : 'Play'}>
+          {playing ? <Pause size={15} /> : <Play size={15} />}
+        </button>
+        <button className="btn ghost icon" onClick={() => stepScene(1)} title="Next scene (↓)" aria-label="Next scene"><ChevronRight size={16} /></button>
+        <TimeCode duration={compiled?.duration ?? 0} />
+        <button className={`btn ghost icon${loop ? ' on' : ''}`} onClick={() => getState().set({ loop: !loop })} title="Loop" aria-pressed={loop}><Repeat size={14} /></button>
+        <select className="select" style={{ width: 70, height: 26 }} value={rate} onChange={(e) => setRate(Number(e.target.value))} aria-label="Playback speed" title="Playback speed">
+          {[0.25, 0.5, 1, 2, 4].map((r) => <option key={r} value={r}>{r}×</option>)}
+        </select>
+        <div className="spacer" />
+        {validation && validation.issues.length > 0 && (
+          <span className="badge-err" style={{ marginRight: 6 }}><AlertTriangle size={12} /> {validation.issues.length} on timeline</span>
+        )}
+        <button className={`btn sm ghost${snap ? ' on' : ''}`} onClick={() => getState().set({ snap: !snap })} title="Snap edits to beats (hold Alt to bypass)" aria-pressed={snap}>
+          <Magnet size={13} /> {beats.length ? `Snap · ${Math.round(bpm ?? 0)} BPM` : 'Snap'}
+        </button>
+        <div className="divider-v" />
+        <button className="btn ghost icon sm" onClick={() => setZoom(Math.max(fit, pps / 1.5) <= fit * 1.001 ? null : pps / 1.5)} title="Zoom out" aria-label="Zoom out"><ZoomOut size={14} /></button>
+        <button className="btn ghost icon sm" onClick={() => setZoom(Math.min(400, pps * 1.5))} title="Zoom in (Ctrl + scroll)" aria-label="Zoom in"><ZoomIn size={14} /></button>
+        <button className={`btn ghost icon sm${zoom === null ? ' on' : ''}`} onClick={() => setZoom(null)} title="Fit whole show" aria-label="Fit"><Maximize2 size={13} /></button>
+      </div>
+      <div className="tl-body" style={{ height: totalH }}>
+        <div className="tl-labels">
+          <div className="tl-label" style={{ ['--h' as string]: `${LANES.ruler}px` }} />
+          <div className="tl-label" style={{ ['--h' as string]: `${LANES.scenes}px` }}>Scenes</div>
+          <div className="tl-label" style={{ ['--h' as string]: `${LANES.lights}px` }}>
+            Lights
+            <MenuButton className="btn ghost icon sm" title="Add light cue at playhead" button={<Plus size={13} />} width={210}>
+              {(close) => (
+                <>
+                  <div className="menu-label">Add at playhead</div>
+                  {CUE_PRESETS.map((p, i) => (
+                    <button key={p.label} className="menu-item" onClick={() => { addCue(snapT(getState().time, false), i); close() }}>
+                      {p.label}
+                    </button>
+                  ))}
+                </>
+              )}
+            </MenuButton>
+          </div>
+          <div className="tl-label" style={{ ['--h' as string]: `${LANES.music}px` }}>
+            Music
+            <MenuButton className="btn ghost icon sm" title="Music" button={<Music size={13} />} width={200}>
+              {(close) => (
+                <>
+                  <button className="menu-item" onClick={async () => { close(); const f = await pickFile('audio/*'); if (f) await loadMusic(await f.arrayBuffer(), f.type || 'audio/mpeg', f.name) }}>
+                    {doc.audio ? 'Replace music…' : 'Load music…'}
+                  </button>
+                  {doc.audio && (
+                    <button className="menu-item" onClick={() => { close(); void removeMusic() }}>
+                      <X size={13} /> Remove music
+                    </button>
+                  )}
+                </>
+              )}
+            </MenuButton>
+          </div>
+        </div>
+        <div className="tl-scroll" ref={scrollRef}>
+          <div className="tl-content" style={{ width: contentW, height: totalH }}>
+            <div className="tl-lane ruler" style={{ ['--h' as string]: `${LANES.ruler}px` }} onPointerDown={scrub}>
+              {ticks.map((t) => (
+                <div key={t} className="tick" style={{ left: toX(t) }}>
+                  <span>{fmtTime(t).replace(/\.0$/, '')}</span>
+                </div>
+              ))}
+              {beats.length > 0 && (60 / (bpm || 120)) * pps > 5
+                ? beats.map((b, i) => <div key={i} className={(i - downbeat) % 4 === 0 ? 'bar' : 'beat'} style={{ left: toX(b) }} />)
+                : (240 / (bpm || 120)) * pps > 5 && beats.map((b, i) => ((i - downbeat) % 4 === 0 ? <div key={i} className="bar" style={{ left: toX(b) }} /> : null))}
+              {validation?.issues.map((iss) => (
+                <svg key={iss.id} className="imark" style={{ left: toX(iss.time) }} viewBox="0 0 10 10" onPointerDown={(e) => { e.stopPropagation(); focusIssue(iss) }}>
+                  <title>{iss.title}</title>
+                  <path d="M5 9 L0.5 1 H9.5 Z" fill="currentColor" />
+                </svg>
+              ))}
+            </div>
+            <div className="tl-lane" style={{ ['--h' as string]: `${LANES.scenes}px` }}>
+              {blocks}
+            </div>
+            <div
+              className="tl-lane"
+              style={{ ['--h' as string]: `${LANES.lights}px` }}
+              onDoubleClick={(e) => {
+                const rect = scrollRef.current!.getBoundingClientRect()
+                addCue(snapT(toT(e.clientX - rect.left + scrollRef.current!.scrollLeft), false), 5)
+              }}
+            >
+              {cueBlocks}
+              {doc.cues.length === 0 && <div className="lane-empty" style={{ left: toX(0) }}>Double-click to add a light cue — flashes, sweeps and washes that play over the formations</div>}
+            </div>
+            <div className="tl-lane" style={{ ['--h' as string]: `${LANES.music}px` }}>
+              {doc.audio ? (
+                <MusicClip left={toX(doc.audio.offset)} width={doc.audio.duration * pps} name={doc.audio.name} peaks={audio?.peaks ?? null} missing={!audio}
+                  onPointerDown={(e) => {
+                    const o0 = doc.audio!.offset
+                    drag(e, (_t, ev, dt) => {
+                      const o = Math.round((o0 + dt) * 10) / 10
+                      getState().update((d) => { if (d.audio) d.audio.offset = ev.altKey ? o0 + dt : o }, 'Move music', 'music-offset')
+                    })
+                  }}
+                />
+              ) : (
+                <div className="lane-empty" style={{ left: toX(0) }}>
+                  <button className="btn sm" onClick={async () => { const f = await pickFile('audio/*'); if (f) await loadMusic(await f.arrayBuffer(), f.type || 'audio/mpeg', f.name) }}>
+                    <Music size={13} /> Load music
+                  </button>
+                  or drop an audio file anywhere — beats are detected so scenes and lights snap to the music
+                </div>
+              )}
+            </div>
+            <Playhead toX={toX} scrollRef={scrollRef} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function cueLabel(kind: string): string {
+  return { solid: 'Wash', gradient: 'Gradient', rainbow: 'Rainbow', pulse: 'Pulse', twinkle: 'Twinkle', chase: 'Chase', wave: 'Sweep', image: 'Image', flash: 'Flash', strobe: 'Strobe', off: 'Blackout' }[kind] ?? kind
+}
+
+function TimeCode({ duration }: { duration: number }) {
+  const time = useStore((s) => s.time)
+  return (
+    <div className="timecode" aria-live="off">
+      {fmtTime(time)} <span>/ {formatTime(duration)}</span>
+    </div>
+  )
+}
+
+function Playhead({ toX, scrollRef }: { toX: (t: number) => number; scrollRef: React.RefObject<HTMLDivElement> }) {
+  const time = useStore((s) => s.time)
+  const playing = useStore((s) => s.playing)
+  const x = toX(time)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !playing) return
+    if (x > el.scrollLeft + el.clientWidth - 40) el.scrollLeft = x - 80
+    else if (x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 80)
+  }, [x, playing, scrollRef])
+  return <div className="playhead" style={{ left: x - 1 }} />
+}
+
+function MusicClip({ left, width, name, peaks, missing, onPointerDown }: { left: number; width: number; name: string; peaks: Float32Array | null; missing: boolean; onPointerDown: (e: React.PointerEvent) => void }) {
+  const ref = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const cv = ref.current
+    if (!cv || !peaks) return
+    const w = Math.max(1, Math.min(16000, Math.round(width)))
+    const h = 32
+    cv.width = w
+    cv.height = h
+    const ctx = cv.getContext('2d')!
+    ctx.clearRect(0, 0, w, h)
+    ctx.fillStyle = 'rgba(120, 180, 255, 0.55)'
+    for (let x = 0; x < w; x++) {
+      const a = Math.floor((x / w) * peaks.length), b = Math.max(a + 1, Math.floor(((x + 1) / w) * peaks.length))
+      let m = 0
+      for (let i = a; i < b; i++) m = Math.max(m, peaks[i]!)
+      const ph = Math.max(1, m * h * 0.95)
+      ctx.fillRect(x, (h - ph) / 2, 1, ph)
+    }
+  }, [peaks, width])
+  return (
+    <div className="music-clip" style={{ left, width: Math.max(4, width) }} onPointerDown={onPointerDown} title="Drag to move the music">
+      {peaks && <canvas ref={ref} />}
+      <span className="mname">{name}{missing ? ' — file not loaded (use the Music menu to re-attach)' : ''}</span>
+    </div>
+  )
+}
