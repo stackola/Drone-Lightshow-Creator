@@ -6,6 +6,14 @@ Built for small agencies and operators who need to go from an idea to a convinci
 
 ![Editor: scene list, audience view, inspector, and a timeline with scenes, light cues and music](docs/screenshot.png)
 
+## The flagship show
+
+**Odyssey** (File → New show) is a 15-minute, 400-drone show in four acts, built entirely through the editor's own model API and required by the tests to pass every safety check. It plans in the background in a few seconds.
+- **Dawn:** a breathing sunrise that ripples up from the pads, and WELCOME written on over a starfield.
+- **Earth:** a swaying 3D tree, a bloom, a beating heart, and a swirling Earth. Then an ant-walk column marches over an arch into an LED sign scrolling "TOGETHER WE SHINE".
+- **Sky:** a bobbing hot-air balloon, a rocket that launches on a strobe, Saturn swirling in, a galaxy with a halo and starfield, and a cascading helix.
+- **Finale:** THANK YOU flipping into place inside a frame, a ring of fire, a gold star, a bursting firework with flashes, and GOOD NIGHT written on. The drones then rain down to land.
+
 ## How it works
 
 A show is a sequence: **takeoff → scene → scene → … → return & land**. Each scene is a formation that the drones hold for a while. Between scenes, the drones fly.

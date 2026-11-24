@@ -202,19 +202,25 @@ function extent(scene: Scene, doc: ShowDoc): { minY: number; maxY: number; reach
  * park more and more drones dark until it is short and narrow enough; finally
  * place it between the floor and the ceiling.
  */
+/** Whether a formation (all its layers, including its spin sweep) is short and narrow enough for the airspace. */
+export function fitsAirspace(s: Scene, doc: ShowDoc): boolean {
+  const L = doc.limits
+  const e = extent(s, doc)
+  return e.maxY - e.minY <= L.maxAltitude - L.minAltitude - 6 && e.reach <= L.maxRadius - 2
+}
+
 export function fitToAirspace(scene: Scene, doc: ShowDoc): Scene {
   const L = doc.limits
-  const fits = (s: Scene) => {
-    const e = extent(s, doc)
-    return e.maxY - e.minY <= L.maxAltitude - L.minAltitude - 6 && e.reach <= L.maxRadius - 2
-  }
+  const fits = (s: Scene) => fitsAirspace(s, doc)
   const target = comfortableSpacing(L.minSpacing)
   let s = scene
   const main = s.layers[0]!
   if (!fits(s) && 'fill' in main.shape && main.shape.fill === 'outline') {
     s = fitScene({ ...s, layers: [{ ...main, shape: { ...main.shape, fill: 'filled' } as ShapeSpec }, ...s.layers.slice(1)] }, doc.droneCount, target, 'exact')
   }
-  if (!fits(s) && s.layers.length <= 2) {
+  // Spare drones the designer gave a role (halo, starfield, …) are kept; only otherwise park more drones.
+  const hasRoles = s.layers.some((l) => l.role && l.role !== 'park')
+  if (!fits(s) && s.layers.length <= 2 && !hasRoles) {
     const single = { ...s, layers: [s.layers[0]!] }
     const current = s.layers.length === 2 ? s.layers[1]!.weight / (s.layers[0]!.weight + s.layers[1]!.weight) : 0
     for (const f of [0.2, 0.35, 0.5, 0.6, 0.7, 0.8]) {

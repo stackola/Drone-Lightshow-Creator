@@ -5,12 +5,15 @@ import type { Effect, LightCue, Scene, ShapeSpec, ShowDoc, TextFont } from '@/co
 import { newId, newScene, newShape, newShow, placeAboveFloor, rasterizeText, withSpareDrones } from '@/core/defaults'
 import { defaultEffect } from '@/core/effects'
 import { compile } from '@/core/compile'
+import { ODYSSEY_DRONES, buildOdyssey } from './odyssey'
 
 export interface Demo {
   id: string
   title: string
   blurb: string
   drones: number
+  /** Takes seconds to plan: built in the engine worker. */
+  heavy?: boolean
   build(): ShowDoc
 }
 
@@ -89,6 +92,15 @@ export const DEMOS: Demo[] = [
     },
   },
 ]
+
+DEMOS.unshift({
+  id: 'odyssey',
+  title: 'Odyssey — 15-minute flagship',
+  blurb: 'Dawn, Earth, Sky and Finale: 3D models, written and LED text, an ant-walk column, swirls, a burst and a rain-down landing.',
+  drones: ODYSSEY_DRONES,
+  heavy: true,
+  build: () => buildOdyssey(compile),
+})
 
 export function demoById(id: string): Demo | undefined {
   return DEMOS.find((d) => d.id === id)

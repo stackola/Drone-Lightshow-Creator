@@ -10,6 +10,7 @@ let busy = false
 let pending: ShowDoc | null = null
 let nextId = 1
 const beatWaiters = new Map<number, (r: BeatResult) => void>()
+const demoWaiters = new Map<number, { resolve: (d: ShowDoc) => void; reject: (e: Error) => void }>()
 
 function ensureWorker(): Worker {
   if (worker) return worker
@@ -25,8 +26,14 @@ function ensureWorker(): Worker {
     } else if (m.type === 'beats') {
       beatWaiters.get(m.id)?.(m.result)
       beatWaiters.delete(m.id)
+    } else if (m.type === 'demo') {
+      demoWaiters.get(m.id)?.resolve(m.doc)
+      demoWaiters.delete(m.id)
     } else if (m.type === 'error') {
-      if (beatWaiters.has(m.id)) {
+      if (demoWaiters.has(m.id)) {
+        demoWaiters.get(m.id)!.reject(new Error(m.message))
+        demoWaiters.delete(m.id)
+      } else if (beatWaiters.has(m.id)) {
         beatWaiters.delete(m.id)
         getState().toast(`Beat detection failed: ${m.message}`, 'err')
       } else {
@@ -62,6 +69,15 @@ function send(doc: ShowDoc) {
 export function requestCompile(doc: ShowDoc) {
   if (busy) pending = doc
   else send(doc)
+}
+
+/** Build a (heavy) demo show in the engine worker. */
+export function buildDemoAsync(demo: string): Promise<ShowDoc> {
+  const id = nextId++
+  return new Promise((resolve, reject) => {
+    demoWaiters.set(id, { resolve, reject })
+    ensureWorker().postMessage({ type: 'demo', id, demo })
+  })
 }
 
 export function detectBeatsAsync(samples: Float32Array, sampleRate: number): Promise<BeatResult> {

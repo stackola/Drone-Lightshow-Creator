@@ -12,5 +12,5 @@ describe('demo shows', () => {
     expect(v.issues.map((i) => `${i.title}: ${i.detail}`)).toEqual([])
     expect(v.stats.minDistance).toBeGreaterThanOrEqual(doc.limits.minSpacing)
     expect(c.duration).toBeLessThan(doc.limits.maxFlightTime)
-  })
+  }, 180_000)
 })

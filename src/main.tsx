@@ -7,12 +7,12 @@ import { canvasTextMask } from './ui/content'
 import { getState } from './state/store'
 import { loadAutosave, restoreMusic, startAutosave } from './state/persist'
 import { startEngine } from './engine/client'
-import { DEMOS } from './app/demos'
+import { demoById } from './app/demos'
 
 setTextRasterizer(canvasTextMask)
 
 const saved = loadAutosave()
-getState().loadDoc(saved ?? DEMOS[0]!.build())
+getState().loadDoc(saved ?? demoById('hello')!.build())
 
 startEngine()
 startAutosave()

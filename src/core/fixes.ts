@@ -4,6 +4,7 @@ import type { Scene, ShowDoc } from './types'
 import { compile } from './compile'
 import { comfortableSpacing, validate, type FixAction, type Validation } from './validate'
 import { fitScene, fitToAirspace, placeAboveFloor } from './defaults'
+import { fitRolesToAirspace } from './idle'
 
 function replaceScene(doc: ShowDoc, id: string, f: (s: Scene) => Scene): ShowDoc {
   return { ...doc, scenes: doc.scenes.map((s) => (s.id === id ? f(s) : s)) }
@@ -23,7 +24,8 @@ export function applyFixToDoc(doc: ShowDoc, action: FixAction): ShowDoc {
     case 'grid-spacing':
       return { ...doc, site: { ...doc.site, gridSpacing: action.value } }
     case 'fit-airspace':
-      return replaceScene(doc, action.sceneId, (s) => fitToAirspace(s, doc))
+      // Scenes with supporting roles shrink by giving drones to their roles; others park spares.
+      return replaceScene(doc, action.sceneId, (s) => (s.layers.some((l) => l.role && l.role !== 'park') ? fitRolesToAirspace(s, doc) : fitToAirspace(s, doc)))
     case 'calm-hold':
       return replaceScene(doc, action.sceneId, (s) => calmHold(s, action.factor))
     case 'flight-style':

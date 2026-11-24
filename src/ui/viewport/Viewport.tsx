@@ -48,6 +48,7 @@ function CameraRig({ present }: { present: boolean }) {
   const hasCompiled = useStore((s) => !!s.compiled)
   const anim = useRef<{ from: THREE.Vector3; to: THREE.Vector3; tFrom: THREE.Vector3; tTo: THREE.Vector3; t: number } | null>(null)
   const first = useRef(true)
+  const drag = useRef(false)
 
   useEffect(() => {
     if (!hasCompiled) return
@@ -115,11 +116,17 @@ function CameraRig({ present }: { present: boolean }) {
       maxDistance={1500}
       onStart={() => {
         // Grabbing the gizmo is not a camera move.
-        if (gizmoHovered()) return
+        drag.current = !gizmoHovered()
+      }}
+      onChange={() => {
+        // Only an actual drag/zoom leaves the preset view — a plain click (to select or deselect) doesn't.
+        if (!drag.current) return
+        drag.current = false
         anim.current = null
         const s = getState()
         if (s.camera !== 'orbit' && !present) s.set({ camera: 'orbit' })
       }}
+      onEnd={() => { drag.current = false }}
     />
   )
 }

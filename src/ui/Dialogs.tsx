@@ -5,6 +5,7 @@ import { Modal, NumberField, Segmented } from './components/controls'
 import { DEMOS } from '@/app/demos'
 import { newShow } from '@/core/defaults'
 import { exportCsv } from '@/state/persist'
+import { buildDemoAsync } from '@/engine/client'
 import { formatTime } from '@/core/validate'
 import { Suspense, lazy } from 'react'
 
@@ -37,17 +38,39 @@ export function Dialogs() {
 function NewShowDialog({ onClose }: { onClose: () => void }) {
   const [choice, setChoice] = useState<string>('blank')
   const [drones, setDrones] = useState(200)
-  const create = () => {
+  const [building, setBuilding] = useState(false)
+  const create = async () => {
     const s = getState()
     const demo = DEMOS.find((d) => d.id === choice)
-    const doc = demo ? demo.build() : newShow(drones, 'Untitled show')
+    let doc
+    try {
+      if (demo?.heavy) {
+        setBuilding(true)
+        doc = await buildDemoAsync(demo.id)
+      } else doc = demo ? demo.build() : newShow(drones, 'Untitled show')
+    } catch (err) {
+      setBuilding(false)
+      s.toast(`Could not build the demo: ${err instanceof Error ? err.message : String(err)}`, 'err')
+      return
+    }
     s.replaceDoc(doc, 'New show')
     s.set({ audio: null, selection: { kind: 'show' }, time: 0, focus: null })
     s.toast(demo ? `Opened demo “${demo.title}” — Undo to go back` : 'New show — Undo to go back')
     onClose()
   }
   return (
-    <Modal title="New show" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={create}>Create</button></>}>
+    <Modal
+      title="New show"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={building} onClick={() => void create()}>
+            {building ? <><span className="spinner" /> Planning the show…</> : 'Create'}
+          </button>
+        </>
+      }
+    >
       <div className="choice-grid">
         <button className={`choice${choice === 'blank' ? ' on' : ''}`} onClick={() => setChoice('blank')}>
           <b>Blank show</b>

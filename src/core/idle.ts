@@ -13,7 +13,7 @@ import { DEG, isIdentityRotation, rotationMatrix, transformPoints } from './math
 import { extremeRels, maxSafeMotionAmount } from './validate'
 import { defaultEffect } from './effects'
 import { comfortableSpacing } from './separation'
-import { fitScene, fittedSize, newId, newShape, placeInAirspace } from './defaults'
+import { fitScene, fitsAirspace, fittedSize, newId, newShape, placeInAirspace } from './defaults'
 
 export interface SpareRoleDef {
   role: SpareRole
@@ -124,7 +124,7 @@ function accentOf(scene: Scene): string {
 }
 
 /** Shape, placement and look of spare drones in a role, sized for `count` drones at `spacing`. */
-export function spareLayerFor(role: SpareRole, ext: Extent | null, count: number, spacing: number, accent: string, roomHeight = Infinity): Pick<Layer, 'shape' | 'offset' | 'rotation' | 'effect'> {
+export function spareLayerFor(role: SpareRole, ext: Extent | null, count: number, spacing: number, accent: string, roomHeight = Infinity, roomWidth = Infinity): Pick<Layer, 'shape' | 'offset' | 'rotation' | 'effect'> {
   const e: Extent = ext ?? { min: [-10, -10, 0], max: [10, 10, 0], center: [0, 0, 0], width: 20, height: 20, radius: 14 }
   const [cx, cy, cz] = e.center
   const back = e.min[2]
@@ -137,9 +137,11 @@ export function spareLayerFor(role: SpareRole, ext: Extent | null, count: number
       // Larger than the formation (but within the airspace height), behind it,
       // lit dim with a slow twinkle. Scatter 0.3 keeps every gap ≥ 70% of the grid step.
       const scatter = 0.3
-      const h = Math.max(10, Math.min(Math.max(e.height * 1.4, 30), roomHeight))
-      const need = (count * (spacing / (1 - scatter)) ** 2) / h
-      const w = Math.max(e.width * 1.3, 30, need * 1.05)
+      const area = count * (spacing / (1 - scatter)) ** 2 * 1.05
+      let h = Math.max(10, Math.min(Math.max(e.height * 1.15, 30), roomHeight * 0.9))
+      // As wide as the formation (and enough for its drones), but not wider than the flight area allows.
+      const w = Math.min(Math.max(e.width * 1.25, 30, area / h), Math.max(30, roomWidth))
+      if (w * h < area) h = Math.min(roomHeight * 0.9, area / w)
       const fx: Effect = { kind: 'twinkle', a: '#1b2338', b: '#e8eeff', rate: 0.35, brightness: 0.7 }
       return { shape: grid(w / h, scatter, w), offset: [cx, cy, back - 30], rotation: zero, effect: fx }
     }
@@ -159,7 +161,7 @@ export function spareLayerFor(role: SpareRole, ext: Extent | null, count: number
     }
     case 'base': {
       // A band at least as wide as the formation, a few rows deep.
-      const w = Math.max(e.width * 1.1, spacing * 4)
+      const w = Math.min(Math.max(e.width * 1.1, spacing * 4), Math.max(spacing * 4, roomWidth))
       const cols = Math.max(2, Math.floor(w / spacing) + 1)
       const aspect = Math.max(1, Math.min(60, (cols * cols) / Math.max(1, count)))
       const rows = Math.ceil(count / cols)
@@ -175,15 +177,61 @@ export function spareLayerFor(role: SpareRole, ext: Extent | null, count: number
  * airspace.
  */
 export function applySpareRole(scene: Scene, doc: ShowDoc, layerId: string, role: SpareRole): Scene {
+  return applySpareRoles(scene, doc, [[layerId, role]])
+}
+
+/**
+ * Give several spare layers their roles at once — all placed around the same
+ * main formation, then fitted together (fitting one at a time would let the
+ * not-yet-placed layers overlap the formation and blow the scene up).
+ */
+export function applySpareRoles(scene: Scene, doc: ShowDoc, roles: [string, SpareRole][]): Scene {
   const n = doc.droneCount
-  const idx = scene.layers.findIndex((l) => l.id === layerId)
-  if (idx < 0) return scene
   const counts = allocate(n, scene.layers.map((l) => l.weight))
   const target = comfortableSpacing(doc.limits.minSpacing)
   const room = doc.limits.maxAltitude - doc.limits.minAltitude - 10
-  const spec = spareLayerFor(role, mainExtent(scene, n), counts[idx]!, target, accentOf(scene), room)
-  const layers = scene.layers.map((l, i) => (i === idx ? { ...l, ...spec, role } : l))
+  // Width available across the flight area at the scene's position (it may be offset sideways).
+  const roomW = 2 * Math.max(15, doc.limits.maxRadius - 15 - Math.hypot(scene.position[0], scene.position[2]))
+  const marked: Scene = { ...scene, layers: scene.layers.map((l) => { const r = roles.find(([id]) => id === l.id); return r ? { ...l, role: r[1] } : l }) }
+  const ext = mainExtent(marked, n)
+  const accent = accentOf(marked)
+  const layers = marked.layers.map((l, i) => {
+    const r = roles.find(([id]) => id === l.id)
+    return r ? { ...l, ...spareLayerFor(r[1], ext, counts[i]!, target, accent, room, roomW), role: r[1] } : l
+  })
   return placeInAirspace(fitScene({ ...scene, layers }, n, target, 'grow'), doc)
+}
+
+/**
+ * Make a formation with supporting roles fit the airspace: scale the main
+ * shape and its roles down together (each keeps its share), parking the
+ * freed drones dark behind the formation, until it fits. Roles keep their
+ * look; frames and halos shrink with fewer drones.
+ */
+export function fitRolesToAirspace(scene: Scene, doc: ShowDoc): Scene {
+  const n = doc.droneCount
+  const target = comfortableSpacing(doc.limits.minSpacing)
+  const roleLayers = scene.layers.filter((l) => l.role && l.role !== 'park')
+  if (!roleLayers.length || fitsAirspace(scene, doc)) return scene
+  const counts = allocate(n, scene.layers.map((l) => l.weight))
+  const parked = scene.layers.find((l) => l.role === 'park')
+  let best = scene
+  for (const f of [0.15, 0.3, 0.45, 0.6]) {
+    let freed = 0
+    const layers: Layer[] = scene.layers.filter((l) => l !== parked).map((l) => {
+      const i = scene.layers.indexOf(l)
+      const c = Math.max(1, Math.round(counts[i]! * (1 - f)))
+      freed += counts[i]! - c
+      if (isSpareLayer(l)) return { ...l, weight: c }
+      return { ...l, weight: c, shape: { ...l.shape, size: fittedSize(l.shape, c, target) } as ShapeSpec, offset: l.offset.map((v) => v * Math.sqrt(1 - f)) as Vec3 }
+    })
+    const park: Layer = parked
+      ? { ...parked, weight: counts[scene.layers.indexOf(parked)]! + freed }
+      : { id: newId('layer'), role: 'park', shape: newShape('grid'), weight: freed, offset: [0, 0, 0], rotation: [0, 0, 0], effect: defaultEffect('off') }
+    best = applySpareRoles({ ...scene, layers: [...layers, park] }, doc, [...roleLayers.map((l) => [l.id, l.role!] as [string, SpareRole]), [park.id, 'park']])
+    if (fitsAirspace(best, doc)) return best
+  }
+  return best
 }
 
 /**
