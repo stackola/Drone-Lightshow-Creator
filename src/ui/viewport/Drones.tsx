@@ -4,6 +4,22 @@ import * as THREE from 'three'
 import { evaluate } from '@/core/evaluate'
 import { getState, useStore } from '@/state/store'
 import { simPositions } from '@/state/sim'
+import { sceneAt } from '@/core/evaluate'
+import type { ThreeEvent } from '@react-three/fiber'
+import { gizmoJustUsed } from './Manipulator'
+
+/** Click a drone: select the formation it belongs to at the playhead. */
+function pickDrone(e: ThreeEvent<MouseEvent>) {
+  if (e.delta > 4 || gizmoJustUsed()) return
+  const s = getState()
+  const c = s.compiled
+  if (!c) return
+  e.stopPropagation()
+  const at = sceneAt(c, s.time)
+  const scene = at.scene >= 0 ? s.doc.scenes[at.scene] : null
+  if (scene) s.select({ kind: 'scene', id: scene.id })
+  else s.select({ kind: at.phase === 'takeoff' ? 'takeoff' : 'landing' })
+}
 
 /** Latest drone positions (shared with overlays such as issue markers). */
 export const frame = { positions: new Float32Array(0) }
@@ -79,7 +95,7 @@ export function Drones({ present }: { present: boolean }) {
 
   if (!n) return null
   return (
-    <points frustumCulled={false} material={material}>
+    <points frustumCulled={false} material={material} onClick={present ? undefined : pickDrone}>
       <bufferGeometry ref={geoRef} key={n}>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
         <bufferAttribute attach="attributes-color" args={[colors, 3]} />

@@ -137,3 +137,33 @@ test('wind test: simulates the show and plays the simulated flight in the viewpo
   await page.locator('.sim-badge').getByRole('button', { name: 'Show plan' }).click()
   await expect(page.locator('.sim-badge')).toHaveCount(0)
 })
+
+test('viewport manipulation: tools, nudging, framing and click-to-deselect', async ({ page }) => {
+  await fresh(page)
+  await page.locator('.slist .srow', { hasText: 'Heart' }).click()
+  const alt = page.getByLabel('Alt').first()
+  const before = Number(await alt.inputValue())
+  await page.keyboard.press('Alt+ArrowUp')
+  await page.keyboard.press('Alt+Shift+ArrowUp')
+  await expect(alt).toHaveValue(String(before + 6))
+  // One undo step for consecutive nudges.
+  await page.keyboard.press('Control+z')
+  await expect(alt).toHaveValue(String(before))
+  // Tools
+  const toolbar = page.locator('.toolbar')
+  await page.keyboard.press('e')
+  await expect(toolbar.getByRole('radio', { name: /Rotate/ })).toHaveAttribute('aria-checked', 'true')
+  await page.keyboard.press('r')
+  await expect(toolbar.getByRole('radio', { name: /Scale/ })).toHaveAttribute('aria-checked', 'true')
+  await page.keyboard.press('w')
+  await expect(toolbar.getByRole('radio', { name: /Move/ })).toHaveAttribute('aria-checked', 'true')
+  // F frames the formation in the orbit view.
+  await page.keyboard.press('f')
+  await expect(page.getByRole('radio', { name: /Orbit/ })).toHaveAttribute('aria-checked', 'true')
+  // Clicking empty sky deselects.
+  await page.keyboard.press('1')
+  const box = (await page.locator('main.stage canvas').first().boundingBox())!
+  await page.mouse.click(box.x + 40, box.y + box.height * 0.3)
+  await expect(page.locator('.insp-kind').first()).toHaveText(/Show/i)
+  await expect(page.locator('.toolbar')).toHaveCount(0)
+})

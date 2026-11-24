@@ -3,6 +3,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Grid, Html, OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
 import { Drones, frame } from './Drones'
+import { Manipulator, gizmoHovered, gizmoJustUsed } from './Manipulator'
 import { getState, useStore, type CameraMode } from '@/state/store'
 import type { Compiled } from '@/core/compile'
 
@@ -50,6 +51,8 @@ function CameraRig({ present }: { present: boolean }) {
 
   useEffect(() => {
     if (!hasCompiled) return
+    // A pending "frame selection" request owns the camera move.
+    if (mode === 'orbit' && getState().frameRequest && !first.current) return
     const p = presetFor(mode, getState().compiled, audience)
     const cam = camera as THREE.PerspectiveCamera
     cam.fov = mode === 'audience' ? audienceFov(getState().compiled, audience, size.width / size.height, p.target) : 40
@@ -64,6 +67,27 @@ function CameraRig({ present }: { present: boolean }) {
     }
     anim.current = { from: camera.position.clone(), to: p.pos, tFrom: ctl.target.clone(), tTo: p.target, t: 0 }
   }, [mode, nonce, audience, hasCompiled, camera, size.width, size.height])
+
+  // F: fly to the selected formation, keeping the current viewing direction.
+  const frameReq = useStore((s) => s.frameRequest)
+  useEffect(() => {
+    const ctl = controls.current
+    if (!frameReq || !ctl) return
+    const target = new THREE.Vector3(...frameReq.center)
+    const dir = camera.position.clone().sub(ctl.target)
+    if (dir.lengthSq() < 1e-6) dir.set(0, 0.3, 1)
+    dir.normalize()
+    if (dir.y < 0.05) dir.y = 0.05
+    dir.normalize()
+    const cam = camera as THREE.PerspectiveCamera
+    cam.fov = 40
+    cam.updateProjectionMatrix()
+    const dist = (frameReq.radius / Math.sin((cam.fov * Math.PI) / 360)) * 1.15
+    const pos = target.clone().addScaledVector(dir, dist)
+    pos.y = Math.max(2, pos.y)
+    anim.current = { from: camera.position.clone(), to: pos, tFrom: ctl.target.clone(), tTo: target, t: 0 }
+    getState().set({ frameRequest: null })
+  }, [frameReq, camera])
 
   useFrame((_, dt) => {
     // Never let the camera sink below the ground.
@@ -90,6 +114,8 @@ function CameraRig({ present }: { present: boolean }) {
       minDistance={5}
       maxDistance={1500}
       onStart={() => {
+        // Grabbing the gizmo is not a camera move.
+        if (gizmoHovered()) return
         anim.current = null
         const s = getState()
         if (s.camera !== 'orbit' && !present) s.set({ camera: 'orbit' })
@@ -267,6 +293,13 @@ export function Viewport({ present = false }: { present?: boolean }) {
       gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
       onCreated={({ gl }) => gl.setClearColor('#04060b')}
       frameloop="always"
+      raycaster={{ params: { Points: { threshold: 1.5 }, Mesh: {}, Line: { threshold: 1 }, LOD: {}, Sprite: {} } }}
+      onPointerMissed={(e) => {
+        // A click on empty sky deselects the formation (not after an orbit drag).
+        if (present || e.button !== 0 || gizmoJustUsed()) return
+        const s = getState()
+        if (s.selection.kind === 'scene' || s.selection.kind === 'flight') s.select({ kind: 'show' })
+      }}
     >
       <CameraRig present={present} />
       <Ground present={present} />
@@ -274,6 +307,7 @@ export function Viewport({ present = false }: { present?: boolean }) {
       <Drones present={present} />
       {!present && <SelectionBox />}
       {!present && <IssueMarkers />}
+      {!present && <Manipulator />}
     </Canvas>
   )
 }

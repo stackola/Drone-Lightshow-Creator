@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 
 const CopilotPanel = lazy(() => import('./ai/CopilotPanel').then((m) => ({ default: m.CopilotPanel })))
-import { Users, Orbit, Map as MapIcon, AlertTriangle, Wind } from 'lucide-react'
+import { Users, Orbit, Map as MapIcon, AlertTriangle, Wind, MousePointer2, Move3d, Rotate3d, Scaling, Focus } from 'lucide-react'
 import { TopBar } from './TopBar'
 import { ScenesPanel } from './panels/ScenesPanel'
 import { Inspector } from './panels/Inspector'
@@ -12,13 +12,13 @@ import { Viewport } from './viewport/Viewport'
 import { Present } from './Present'
 import { Dialogs } from './Dialogs'
 import { Segmented } from './components/controls'
-import { getState, useStore, type CameraMode } from '@/state/store'
+import { getState, useStore, type CameraMode, type Tool } from '@/state/store'
 import { useShallow } from 'zustand/react/shallow'
 import { useCopilot } from '@/ai/copilotStore'
 
 const useCopilotRunning = () => useCopilot((s) => s.running)
 import { seek, togglePlay } from '@/state/playback'
-import { addCue, addScene, deleteCue, deleteScene, duplicateCue, duplicateScene, stepScene } from '@/state/actions'
+import { addCue, addScene, deleteCue, deleteScene, duplicateCue, duplicateScene, frameScene, nudgeScene, selectedSceneId, stepScene } from '@/state/actions'
 import { loadMusic, openProjectFile, saveProject } from '@/state/persist'
 import { imageShape } from './content'
 import { sceneAt } from '@/core/evaluate'
@@ -55,6 +55,7 @@ function StageOverlay() {
             ]}
           />
         </div>
+        <ToolBar />
         {computing && <div className="glass computing"><span className="spinner" /> Planning flights…</div>}
         {error && <div className="glass computing" style={{ color: 'var(--err)' }}><AlertTriangle size={13} /> {error}</div>}
       </div>
@@ -81,6 +82,26 @@ function StageOverlay() {
         </div>
       )}
     </>
+  )
+}
+
+const TOOLS: { value: Tool; label: React.ReactNode; title: string }[] = [
+  { value: 'select', label: <MousePointer2 size={13} />, title: 'Select — click drones to pick a formation (Q)' },
+  { value: 'move', label: <Move3d size={13} />, title: 'Move (W) — drag the arrows; Alt for free movement' },
+  { value: 'rotate', label: <Rotate3d size={13} />, title: 'Rotate (E) — snaps to 5°; Alt for free rotation' },
+  { value: 'scale', label: <Scaling size={13} />, title: 'Scale (R) — never below the safe spacing' },
+]
+
+/** Viewport tools for the selected formation. */
+function ToolBar() {
+  const tool = useStore((s) => s.tool)
+  const id = useStore((s) => (s.selection.kind === 'scene' || s.selection.kind === 'flight' ? s.selection.id : null))
+  if (!id) return null
+  return (
+    <div className="glass toolbar" style={{ padding: 3, display: 'flex', gap: 3 }}>
+      <Segmented<Tool> value={tool} onChange={(t) => getState().set({ tool: t })} options={TOOLS} />
+      <button className="btn ghost sm icon" title="Frame the formation (F)" aria-label="Frame the formation" onClick={() => frameScene(id)}><Focus size={13} /></button>
+    </div>
   )
 }
 
@@ -173,7 +194,23 @@ export function App() {
         return
       }
       if (mod) return
+      // Alt + arrows / PageUp / PageDown nudge the selected formation (Shift: 5 m).
+      const target = selectedSceneId()
+      if (e.altKey && target) {
+        const step = e.shiftKey ? 5 : 1
+        const d: Record<string, [number, number, number]> = {
+          ArrowLeft: [-step, 0, 0], ArrowRight: [step, 0, 0], ArrowUp: [0, step, 0], ArrowDown: [0, -step, 0],
+          PageUp: [0, 0, -step], PageDown: [0, 0, step],
+        }
+        const delta = d[e.key]
+        if (delta) { e.preventDefault(); nudgeScene(target, delta); return }
+      }
       switch (e.key) {
+        case 'q': case 'Q': s.set({ tool: 'select' }); break
+        case 'w': case 'W': s.set({ tool: 'move' }); break
+        case 'e': case 'E': s.set({ tool: 'rotate' }); break
+        case 'r': case 'R': s.set({ tool: 'scale' }); break
+        case 'f': case 'F': if (target) frameScene(target); break
         case ' ': e.preventDefault(); togglePlay(); break
         case 'ArrowLeft': e.preventDefault(); seek(s.time - (e.shiftKey ? 5 : 1)); break
         case 'ArrowRight': e.preventDefault(); seek(s.time + (e.shiftKey ? 5 : 1)); break

@@ -15,6 +15,9 @@ export type Selection =
 
 export type CameraMode = 'audience' | 'orbit' | 'top'
 
+/** Viewport tool for the selected formation. */
+export type Tool = 'select' | 'move' | 'rotate' | 'scale'
+
 export interface Toast {
   id: number
   text: string
@@ -57,6 +60,10 @@ interface State {
   aiTarget: { sceneId: string; layerId: string } | null
   /** Which tool the right-hand panel shows. */
   rightTab: 'inspector' | 'copilot'
+  /** Viewport manipulation tool. */
+  tool: Tool
+  /** Ask the camera to fly to a region (F: frame selection). */
+  frameRequest: { center: [number, number, number]; radius: number; nonce: number } | null
 }
 
 interface Actions {
@@ -105,6 +112,8 @@ export const useStore = create<State & Actions>()((set, get) => ({
   dialog: null,
   rightTab: 'inspector',
   aiTarget: null,
+  tool: 'move',
+  frameRequest: null,
 
   update(recipe, label = 'Edit', key) {
     const { doc, past, lastKey, lastAt } = get()

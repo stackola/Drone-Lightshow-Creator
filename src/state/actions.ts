@@ -193,6 +193,56 @@ export function focusIssue(issue: Issue) {
   seek(issue.time)
 }
 
+// --- Viewport manipulation ------------------------------------------------------------
+
+/** Selected formation, if any (a selected flight counts as its formation). */
+export function selectedSceneId(): string | null {
+  const sel = getState().selection
+  return sel.kind === 'scene' || sel.kind === 'flight' ? sel.id : null
+}
+
+/** Move a scene by a delta; consecutive nudges merge into one undo step. */
+export function nudgeScene(id: string, delta: [number, number, number]) {
+  updateScene(id, (s) => {
+    s.position = [s.position[0] + delta[0], s.position[1] + delta[1], s.position[2] + delta[2]].map((v) => Math.round(v * 100) / 100) as [number, number, number]
+  }, 'Move scene', `nudge:${id}`)
+}
+
+/**
+ * Commit a viewport transform: new centre and rotation, and a uniform scale
+ * (applied to every layer's size and offset). Scaling never goes below the
+ * safe spacing.
+ */
+export function transformScene(id: string, t: { position?: [number, number, number]; rotation?: [number, number, number]; scale?: number }, label: string) {
+  const s = getState()
+  const scene = s.doc.scenes.find((x) => x.id === id)
+  if (!scene) return
+  let next: Scene = { ...scene }
+  if (t.position) next.position = t.position.map((v) => Math.round(v * 100) / 100) as [number, number, number]
+  if (t.rotation) next.rotation = t.rotation.map((v) => Math.round(v * 10) / 10) as [number, number, number]
+  if (t.scale && Math.abs(t.scale - 1) > 1e-4) {
+    const k = t.scale
+    next.layers = next.layers.map((l) => ({ ...l, shape: { ...l.shape, size: Math.round(l.shape.size * k * 10) / 10 } as ShapeSpec, offset: l.offset.map((v) => v * k) as [number, number, number] }))
+    next = fitScene(next, s.doc.droneCount, comfortableSpacing(s.doc.limits.minSpacing), 'grow')
+  }
+  s.update((d) => {
+    const i = d.scenes.findIndex((x) => x.id === id)
+    if (i >= 0) d.scenes[i] = next as Draft<Scene>
+  }, label)
+}
+
+/** Fly the camera to a formation (orbit view). */
+export function frameScene(id: string) {
+  const s = getState()
+  const cs = s.compiled?.scenes.find((x) => x.id === id)
+  if (!cs) return
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity]
+  for (let i = 0; i < cs.points.length; i += 3) for (let a = 0; a < 3; a++) { lo[a] = Math.min(lo[a]!, cs.points[i + a]!); hi[a] = Math.max(hi[a]!, cs.points[i + a]!) }
+  const center: [number, number, number] = [(lo[0]! + hi[0]!) / 2, (lo[1]! + hi[1]!) / 2, (lo[2]! + hi[2]!) / 2]
+  const radius = Math.max(5, Math.hypot(hi[0]! - lo[0]!, hi[1]! - lo[1]!, hi[2]! - lo[2]!) / 2)
+  s.set({ camera: 'orbit', frameRequest: { center, radius, nonce: (s.frameRequest?.nonce ?? 0) + 1 } })
+}
+
 // --- Navigation ----------------------------------------------------------------------
 
 export function seekToScene(id: string) {
