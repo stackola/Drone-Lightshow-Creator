@@ -5,9 +5,9 @@ import { getState, useStore } from '@/state/store'
 import { useShallow } from 'zustand/react/shallow'
 import {
   addLayer, addSpare, applyFix, changeLayerKind, deleteCue, deleteScene, duplicateCue, duplicateScene, fitSceneToSpacing, fixAll,
-  focusIssue, removeLayer, setDroneCount, setLayerCount, setLayerShape, setSpareRole, updateCue, updateScene,
+  focusIssue, removeLayer, resizeLedPanel, setDroneCount, setLayerCount, setLayerShape, setSpareRole, updateCue, updateScene,
 } from '@/state/actions'
-import { SHAPES, SHAPE_BY_KIND, sizeLabel } from '@/core/shapes'
+import { SHAPES, SHAPE_BY_KIND, gridRows, sizeLabel } from '@/core/shapes'
 import { allocate } from '@/core/compile'
 import { comfortableSpacing, extremeRels, maxSafeMotionAmount, maxSafeSpin, formatTime, type Issue } from '@/core/validate'
 import { MOTION_KINDS, SPARE_ROLES, defaultMotion, motionAmountUnit } from '@/core/idle'
@@ -16,6 +16,7 @@ import { fitScene, fitToAirspace, rasterizeText, unitSpacing } from '@/core/defa
 import type { HoldMotion, Layer, LightCue, Scene, ShapeKind, ShapeSpec, TextFont, Vec3 } from '@/core/types'
 import { NumberField, Row, Segmented, Toggle, MenuButton } from '@/ui/components/controls'
 import { EffectEditor } from './EffectEditor'
+import { TransitionEditor } from './TransitionEditor'
 import { ShapePicker } from './ScenesPanel'
 import { imageShape } from '@/ui/content'
 import { pickFile } from '@/state/persist'
@@ -136,6 +137,12 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
             Collision-free detour: a straight flight would bring drones too close, so they spread out, cross, then close in.
           </div>
         )}
+        <TransitionEditor
+          style={scene.flight.style}
+          info={times?.transition}
+          keyPrefix={`tr:${id}`}
+          onChange={(st, label, key) => up((s) => { if (st) s.flight.style = st; else delete s.flight.style }, label, key)}
+        />
         <Row label="">
           <Toggle checked={scene.flight.dim} onChange={(v) => up((s) => { s.flight.dim = v }, 'Dim during flight')} label="Dim lights while flying in" />
         </Row>
@@ -326,6 +333,12 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
             {spacingOk && spacing + 1e-6 < target ? ` · below ${target.toFixed(1)} m, flights are checked pair by pair` : ''}
           </div>
         )}
+        {shape.kind === 'grid' && layer.effect.kind === 'matrix' && (
+          <Row label="LED panel" title="Columns × rows of drones. One drone per dot: rows = 7 for 5×7 letters, 5 for 3×5.">
+            <NumberField value={Math.max(1, Math.round(count / gridRows(count, shape.aspect)))} step={1} min={1} max={400} unit="cols" precision={0} onChange={(v) => resizeLedPanel(scene.id, layer.id, v, gridRows(count, shape.aspect))} />
+            <NumberField value={gridRows(count, shape.aspect)} step={1} min={1} max={60} unit="rows" precision={0} onChange={(v) => resizeLedPanel(scene.id, layer.id, Math.round(count / gridRows(count, shape.aspect)), v)} />
+          </Row>
+        )}
         {def.hasFill && 'fill' in shape && (
           <Row label="Style">
             <Segmented full value={shape.fill ?? 'filled'} options={[{ value: 'filled', label: 'Filled' }, { value: 'outline', label: 'Outline' }]} onChange={(v) => { setLayerShape(scene.id, layer.id, { ...shape, fill: v } as ShapeSpec, 'Change style') }} />
@@ -433,6 +446,12 @@ function LandingInspector() {
           {manual ? <NumberField value={site.returnFlight.duration ?? dur} step={0.5} unit="s" min={0} onChange={(v) => up((d) => { d.site.returnFlight.duration = v }, 'Return duration', 'rfd')} /> : <span className="hint">{dur.toFixed(1)} s</span>}
         </Row>
         {rf && <div className="hint" style={{ margin: '4px 0 6px 100px' }}>Fastest safe: {rf.minDuration.toFixed(1)} s</div>}
+        <TransitionEditor
+          style={site.returnFlight.style}
+          info={rf?.transition}
+          keyPrefix="tr:return"
+          onChange={(st, label, key) => up((d) => { if (st) d.site.returnFlight.style = st; else delete d.site.returnFlight.style }, label, key)}
+        />
         <Row label=""><Toggle checked={site.returnFlight.dim} onChange={(v) => up((d) => { d.site.returnFlight.dim = v }, 'Dim return flight')} label="Dim lights while returning" /></Row>
       </Section>
       <Section title="Pads">

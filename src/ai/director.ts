@@ -23,6 +23,8 @@ The medium
 - Text: keep it short (about 1 character per 15–25 drones for crisp letters). For digits or short words use spare_fraction (0.3–0.6) so the text stays compact while the remaining drones wait dark behind it.
 - For flat pictures that aren't built-in shapes (logos, symbols, silhouettes), use shape kind "custom" with a clear visual description. For 3D objects (a rocket, a trophy, a globe on a stand, an animal), use "model3d" — it is built from solid parts, checked visually from four angles, and looks best spinning. Use at most 4 custom or model3d shapes per show, for the moments that matter most.
 - 3D shapes (sphere, torus, cube, helix, cone) look best spinning slowly (spin 10–25 °/s). 2D shapes face the audience; tilt or turn them only for effect.
+- Transitions are part of the show: give 1–3 key flights a spectacle transition (cascade ripples, swirl, burst on a drop, an ant-walk column or rain for a big reveal). They take longer than direct flights (ant walk and rain ~1 min), so budget the battery and use direct for the rest.
+- Text can be revealed: light effects write (stroke-by-stroke handwriting), type (typewriter) and flip (split-flap board) on text formations; an LED sign is a grid 7 drones tall with the matrix effect scrolling text.
 - Long holds stay alive with a gentle idle_motion (breathe 4–8%, bob 1–2 m, sway 5–10°); use it on a few scenes, not all. When a formation uses only part of the fleet, give the spares a role instead of hiding them: a starfield behind a quiet scene, a halo or frame around a logo or name, a base band under text.
 - Light: each scene has a base light; cues add accents over time (flashes, washes, sweeps, blackouts), anchored to a scene's arrival. Use cues sparingly and with intent.
 

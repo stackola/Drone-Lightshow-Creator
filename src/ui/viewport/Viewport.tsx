@@ -29,7 +29,7 @@ const EYE = 1.7
  */
 function audienceFov(c: Compiled | null, dist: number, aspect: number, target: THREE.Vector3): number {
   if (!c) return 40
-  const { minX, maxX, maxY } = c.stage
+  const { minX, maxX, maxY } = c.view ?? c.stage
   const pitch = Math.atan2(target.y - EYE, dist)
   const top = Math.atan2(maxY - EYE, dist) - pitch
   const bottom = pitch - Math.atan2(-2, dist) // keep a sliver of horizon in view

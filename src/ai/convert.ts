@@ -3,8 +3,8 @@
 // suggests, the engine decides what is physically safe.
 
 import type { Effect, LightCue, Scene, ShapeSpec, ShowDoc, Vec3 } from '@/core/types'
-import type { IdleMotionInput, LightInput, SceneInput, ShapeInput, ShowPlan } from './schemas'
-import type { HoldMotion, SpareRole } from '@/core/types'
+import type { IdleMotionInput, LightInput, SceneInput, ShapeInput, ShowPlan, TransitionInput } from './schemas'
+import type { HoldMotion, SpareRole, TransitionStyle } from '@/core/types'
 import { applySpareRole, addSpareLayer, calmMotion, defaultMotion } from '@/core/idle'
 import { defaultEffect } from '@/core/effects'
 import { DEFAULT_CENTER, fitScene, fitToAirspace, newId, newScene, newShape, rasterizeText, withSpareDrones } from '@/core/defaults'
@@ -51,7 +51,7 @@ export function effectFromInput(l: LightInput, fallbackColor = '#38bdf8'): Effec
     case 'write': return { kind: 'write', a: color, b: '#000000', pen: normalizeHex(l.color2, '#ffffff'), duration: clamp(l.duration, 0.5, 60, 4), brightness }
     case 'type': return { kind: 'type', a: color, b: '#000000', cursor: normalizeHex(l.color2, '#ffffff'), duration: clamp(l.duration, 0.5, 60, 3), brightness }
     case 'flip': return { kind: 'flip', a: color, b: normalizeHex(l.color2, '#10131c'), duration: clamp(l.duration, 0.5, 60, 3), rate: clamp(l.rate, 1, 30, 12), brightness }
-    case 'matrix': return { kind: 'matrix', text: (l.text ?? 'HELLO').toUpperCase().slice(0, 120), a: normalizeHex(l.color, '#ffb020'), b: normalizeHex(l.color2, '#1c1406'), speed: clamp(l.speed, 0, 40, 6), brightness }
+    case 'matrix': return { kind: 'matrix', text: (l.text ?? 'HELLO').toUpperCase().slice(0, 120), a: normalizeHex(l.color, '#ffb020'), b: normalizeHex(l.color2, '#1c1406'), speed: clamp(l.speed, 0, 40, 6), font: l.font_dots === 5 ? 5 : 7, brightness }
   }
 }
 
@@ -92,7 +92,7 @@ export function sceneFromInput(doc: ShowDoc, input: SceneInput, opts: { custom?:
     hold: clamp(input.hold_seconds, 0, 600, 6),
     spin: clamp(input.spin, -90, 90, 0),
     rotation: [clamp(input.tilt, -90, 90, 0), clamp(input.turn, -180, 180, 0), 0],
-    flight: { duration: null, dim: input.dim_flight ?? false },
+    flight: { duration: null, dim: input.dim_flight ?? false, ...(input.transition && transitionFromInput(input.transition) ? { style: transitionFromInput(input.transition) } : {}) },
   }
   if (input.idle_motion) scene = { ...scene, motion: motionFromInput(input.idle_motion) }
   if (input.spare_fraction && input.spare_fraction > 0.02) scene = withSpareDrones(scene, doc, clamp(input.spare_fraction, 0, 0.7, 0))
@@ -113,6 +113,18 @@ export function withSpareRole(scene: Scene, doc: ShowDoc, role: SpareRole, fract
   const spare = [...scene.layers].reverse().find((l) => l.role || l.effect.kind === 'off')
   if (spare) return applySpareRole(scene, doc, spare.id, role)
   return addSpareLayer(scene, doc, role, clamp(fraction, 0.05, 0.6, 0.25))
+}
+
+export function transitionFromInput(t: TransitionInput): TransitionStyle | undefined {
+  if (t.style === 'direct') return undefined
+  const amount = clamp(t.amount, 0.1, 1, 0.6)
+  switch (t.style) {
+    case 'cascade': return { kind: 'cascade', amount, order: t.order ?? 'left' }
+    case 'swirl': return { kind: 'swirl', amount, turns: Math.round(clamp(t.turns, -3, 3, 0.5) * 4) / 4 || 0.25 }
+    case 'burst': return { kind: 'burst', amount }
+    case 'ant': return { kind: 'ant', amount, lanes: 0 }
+    case 'rain': return { kind: 'rain', amount }
+  }
 }
 
 export function motionFromInput(m: IdleMotionInput): HoldMotion | undefined {

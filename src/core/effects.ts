@@ -4,8 +4,7 @@
 import type { Effect, EffectKind } from './types'
 import { hexToRgb, hsv, type RGB } from './color'
 import { DEG, hash01 } from './math'
-import { pixelTextMask } from './pixelFont'
-import { decodeMask } from './sample'
+import { dotTextBitmap } from './pixelFont'
 
 export interface DroneLook {
   /** Local position normalised to roughly [-1, 1] by the layer's largest half-extent. */
@@ -20,12 +19,14 @@ export interface DroneLook {
   /** The layer's half-width and half-height in u/v units (for dot-matrix text). */
   uh: number
   vh: number
+  /** Rows of drones if the layer is a grid (an LED panel), else 0. */
+  rows: number
   /** Image colour if the shape has one. */
   image: RGB | null
 }
 
 export function blankLook(): DroneLook {
-  return { u: 0, v: 0, order: 0, rand: 0, glyphs: 0, uh: 1, vh: 1, image: null }
+  return { u: 0, v: 0, order: 0, rand: 0, glyphs: 0, uh: 1, vh: 1, rows: 0, image: null }
 }
 
 /** Effects that reveal or display text, driven by each drone's letter and pen order. */
@@ -70,7 +71,7 @@ export function defaultEffect(kind: EffectKind, base = '#38bdf8'): Effect {
     case 'write': return { kind, a: base, b: '#000000', pen: '#ffffff', duration: 4, brightness: 1 }
     case 'type': return { kind, a: base, b: '#000000', cursor: '#ffffff', duration: 3, brightness: 1 }
     case 'flip': return { kind, a: base, b: '#10131c', duration: 3, rate: 12, brightness: 1 }
-    case 'matrix': return { kind, text: 'HELLO', a: '#ffb020', b: '#1c1406', speed: 6, brightness: 1 }
+    case 'matrix': return { kind, text: 'HELLO', a: '#ffb020', b: '#1c1406', speed: 6, font: 7, brightness: 1 }
   }
 }
 
@@ -90,14 +91,14 @@ function setHex(hex: string, out: RGB): RGB {
 
 const bitmaps = new Map<string, { w: number; h: number; on: Uint8Array }>()
 
-/** 5×7 dot-matrix bitmap of a line of text (cached). */
-export function textBitmap(text: string): { w: number; h: number; on: Uint8Array } {
-  let b = bitmaps.get(text)
+/** Dot-matrix bitmap of a line of text, 5×7 (height 7) or 3×5 (height 5) letters (cached). */
+export function textBitmap(text: string, height: 5 | 7 = 7): { w: number; h: number; on: Uint8Array } {
+  const key = `${height}|${text}`
+  let b = bitmaps.get(key)
   if (!b) {
-    const m = pixelTextMask(text.replace(/\s+/g, ' ').trim() || ' ', 1)
-    b = { w: m.w, h: m.h, on: decodeMask(m) }
+    b = dotTextBitmap(text.replace(/\s+/g, ' ').trim() || ' ', height)
     if (bitmaps.size > 64) bitmaps.clear()
-    bitmaps.set(text, b)
+    bitmaps.set(key, b)
   }
   return b
 }
@@ -243,12 +244,15 @@ export function effectColor(e: Effect, d: DroneLook, tau: number, t: number, bea
       break
     }
     case 'matrix': {
-      // A 5×7 dot-matrix bitmap mapped onto the layer: rows fill its height, columns keep the same pitch.
-      const bmp = textBitmap(e.text)
+      // Dot-matrix text. On a grid (an LED panel) each font dot is one drone row/column, with the text
+      // centred vertically if the panel is taller than the font; elsewhere the font fills the shape's height.
+      const H = e.font === 5 ? 5 : 7
+      const bmp = textBitmap(e.text, H)
       const vh = d.vh > 1e-6 ? d.vh : 1, uh = d.uh > 1e-6 ? d.uh : 1
-      const pitch = (2 * vh) / (bmp.h - 1)
+      const panelRows = d.rows >= H ? d.rows : H
+      const pitch = (2 * vh) / Math.max(1, panelRows - 1)
       // A small bias keeps exact half-pitch positions (even column counts) rounding the same way despite float noise.
-      const row = Math.round((vh - d.v) / pitch + 1e-4)
+      const row = Math.round((vh - d.v) / pitch + 1e-4) - Math.floor((panelRows - H) / 2)
       const x = d.u / pitch + 1e-4
       let c: number
       if (e.speed > 0) {

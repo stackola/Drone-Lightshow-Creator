@@ -26,6 +26,9 @@ export function applyFixToDoc(doc: ShowDoc, action: FixAction): ShowDoc {
       return replaceScene(doc, action.sceneId, (s) => fitToAirspace(s, doc))
     case 'calm-hold':
       return replaceScene(doc, action.sceneId, (s) => calmHold(s, action.factor))
+    case 'flight-style':
+      if (action.sceneId === null) return { ...doc, site: { ...doc.site, returnFlight: { ...doc.site.returnFlight, style: undefined } } }
+      return replaceScene(doc, action.sceneId, (s) => ({ ...s, flight: { ...s.flight, style: undefined } }))
   }
 }
 
@@ -51,7 +54,7 @@ export function autoFix(doc: ShowDoc, maxPasses = 4): { doc: ShowDoc; validation
     // One fix per scene per pass: later fixes may be obsolete after the first.
     const seen = new Set<string>()
     for (const issue of fixes) {
-      const key = issue.fix!.action.kind === 'grid-spacing' ? 'pads' : (issue.fix!.action as { sceneId: string }).sceneId
+      const key = issue.fix!.action.kind === 'grid-spacing' ? 'pads' : (issue.fix!.action as { sceneId: string | null }).sceneId ?? 'return'
       if (seen.has(key)) continue
       seen.add(key)
       doc = applyFixToDoc(doc, issue.fix!.action)

@@ -14,8 +14,8 @@ import { alignScenesToBars } from '@/core/music'
 import { autoFix } from '@/core/fixes'
 import { ceilTo } from '@/core/math'
 import { defaultEffect } from '@/core/effects'
-import { CueTiming, IdleMotionInput, LightInput, SceneInput, ShapeInput, SpareRoleInput } from './schemas'
-import { cueFromInput, effectFromInput, motionFromInput, sceneFromInput, shapeFromInput, withSpareRole } from './convert'
+import { CueTiming, IdleMotionInput, LightInput, SceneInput, ShapeInput, SpareRoleInput, TransitionInput } from './schemas'
+import { cueFromInput, effectFromInput, motionFromInput, sceneFromInput, shapeFromInput, transitionFromInput, withSpareRole } from './convert'
 import { calmMotion } from '@/core/idle'
 import { describeMusic, summarizeShow } from './context'
 import { contactSheet, fourViews } from './render'
@@ -158,7 +158,7 @@ export const TOOLS = [
   }),
   tool({
     name: 'edit_scene',
-    description: 'Change a scene’s name, timing, placement, rotation, spin, idle motion, spare drones or overall size. Sizes can only grow beyond the safe minimum; flights can be set longer than their fastest safe time but never shorter.',
+    description: 'Change a scene’s name, timing, placement, rotation, spin, idle motion, spare drones, transition style (how drones fly in) or overall size. Sizes can only grow beyond the safe minimum; flights can be set longer than their fastest safe time but never shorter.',
     schema: z.object({
       scene_id: sceneRef,
       name: z.string().optional(),
@@ -175,6 +175,7 @@ export const TOOLS = [
       size_scale: z.number().optional().describe('Multiply the formation size, e.g. 1.2 = 20% larger, 0.8 = smaller (never below safe spacing)'),
       idle_motion: IdleMotionInput.optional(),
       spare_role: SpareRoleInput.optional().describe('Give the scene’s spare drones a role (adds 25% spares if it has none)'),
+      transition: TransitionInput.optional().describe('How drones fly into this scene'),
     }),
     label: () => 'Editing a scene',
     run: (i) => {
@@ -210,6 +211,13 @@ export const TOOLS = [
         else delete out.motion
         out = calmMotion(out, doc())
         changes.push(out.motion ? `idle motion ${out.motion.kind} ${out.motion.amount}${m && out.motion.amount < m.amount ? ' (calmed to the safe limit)' : ''}` : m ? 'idle motion removed: too fast for this formation even when calmed' : 'still while held')
+      }
+      if (i.transition) {
+        const st = transitionFromInput(i.transition)
+        out = { ...out, flight: { ...out.flight } }
+        if (st) out.flight.style = st
+        else delete out.flight.style
+        changes.push(`transition ${i.transition.style}`)
       }
       if (i.spare_role) {
         out = withSpareRole(out, doc(), i.spare_role)

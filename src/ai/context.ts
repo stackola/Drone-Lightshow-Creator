@@ -65,7 +65,7 @@ export function summarizeShow(doc: ShowDoc, compiled: Compiled = compile(doc), v
     const timing = t
       ? `flies in ${formatTime(t.flightStart)}–${formatTime(t.holdStart)} (${f1(t.holdStart - t.flightStart)} s, ${s.flight.duration === null ? 'auto' : 'set'}; fastest safe ${f1(t.minFlight)} s${s.flight.dim ? ', dimmed' : ''}), holds ${formatTime(t.holdStart)}–${formatTime(t.holdEnd)}`
       : ''
-    lines.push(`${i + 1}. [${s.id}] "${s.name}" — ${timing}. Centre (${s.position.map(f1).join(', ')}) m, rotation tilt ${s.rotation[0]}° turn ${s.rotation[1]}° roll ${s.rotation[2]}°, spin ${s.spin}°/s${describeMotion(s)}.${t?.detour ? ' Flight in takes a collision-free detour (spread, cross, close in).' : ''}`)
+    lines.push(`${i + 1}. [${s.id}] "${s.name}" — ${timing}. Centre (${s.position.map(f1).join(', ')}) m, rotation tilt ${s.rotation[0]}° turn ${s.rotation[1]}° roll ${s.rotation[2]}°, spin ${s.spin}°/s${describeMotion(s)}.${t?.detour ? ' Flight in takes a collision-free detour (spread, cross, close in).' : ''}${t && t.transition.requested !== 'direct' ? ` Transition in: ${t.transition.used}${t.transition.used !== t.transition.requested ? ` (asked for ${t.transition.requested})` : ''}${t.transition.note ? ` — ${t.transition.note}` : ''}.` : ''}`)
     s.layers.forEach((l, li) => {
       lines.push(`   layer ${li}${l.role ? ` (spare drones: ${l.role})` : ''}: ${counts[li]} drones, ${describeShape(l.shape)}; light: ${describeEffect(l.effect)}${l.offset.some((v) => v !== 0) ? `; offset (${l.offset.map(f1).join(', ')})` : ''}`)
     })

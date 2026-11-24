@@ -18,7 +18,7 @@ export const LightInput = z.object({
       'Text reveals (best on text formations, over `duration` seconds from when the formation arrives or the cue starts): ' +
       'write: the text is written stroke by stroke with a glowing pen (color, pen colour color2); also draws outlines of other shapes. ' +
       'type: typewriter, one letter at a time with a blinking cursor. flip: split-flap board, letters flicker then settle left to right. ' +
-      'matrix: LED-sign dot-matrix `text` scrolling across the formation at `speed` columns/s (0 = static) — best on a grid formation 7 drones tall (shape kind "grid"), color on, color2 the unlit LED glow.',
+      'matrix: LED-sign dot-matrix `text` scrolling across the formation at `speed` columns/s (0 = static) — best on a grid formation 7 drones tall (5 with font_dots 5), color on, color2 the unlit LED glow.',
   ),
   color: hex.optional().describe('Main colour'),
   color2: hex.optional().describe('Second colour (gradient end, pulse rest, twinkle sparkle, chase/wave highlight)'),
@@ -33,6 +33,7 @@ export const LightInput = z.object({
   brightness: z.number().optional().describe('0–1, default 1'),
   duration: z.number().optional().describe('write/type/flip: seconds to reveal the whole text (2–8)'),
   text: z.string().optional().describe('matrix: the text shown on the LED matrix (A–Z, 0–9, basic punctuation)'),
+  font_dots: z.number().optional().describe('matrix: 7 = 5×7 letters (default), 5 = compact 3×5 letters for small panels (a grid 5 drones tall)'),
 })
 export type LightInput = z.infer<typeof LightInput>
 
@@ -70,6 +71,19 @@ export const IdleMotionInput = z.object({
 })
 export type IdleMotionInput = z.infer<typeof IdleMotionInput>
 
+export const TransitionInput = z.object({
+  style: z.enum(['direct', 'cascade', 'swirl', 'burst', 'ant', 'rain']).describe(
+    'How drones fly into this formation. direct: straight, together (default, fastest). cascade: drones set off in a ripple (see order). ' +
+      'swirl: the flying formation turns on the way. burst: explodes outward mid-flight then reforms. ' +
+      'ant: drones march in a column over an arch and file into place (slow — a showpiece moment, ~1 min). rain: drones drip down to a low carpet then rise into the new shape (slow). ' +
+      'Unsafe styles are softened or replaced automatically; spectacle transitions take longer than direct flights.',
+  ),
+  amount: z.number().optional().describe('0.1–1 strength (cascade ripple, burst size, rain drip stagger); default 0.6'),
+  order: z.enum(['left', 'right', 'center', 'edge', 'top', 'bottom']).optional().describe('cascade: where the ripple starts'),
+  turns: z.number().optional().describe('swirl: turns on the way (0.25–1; larger formations need longer)'),
+})
+export type TransitionInput = z.infer<typeof TransitionInput>
+
 export const SceneInput = z.object({
   name: z.string().describe('Short scene name shown in the editor'),
   shape: ShapeInput,
@@ -83,6 +97,7 @@ export const SceneInput = z.object({
   spare_fraction: z.number().optional().describe('0–0.7: fraction of drones taken out of the main formation as spares. Use 0.3–0.6 for digits or short text so it stays compact.'),
   spare_role: SpareRoleInput.optional().describe('What the spare drones do (default park).'),
   idle_motion: IdleMotionInput.optional().describe('Gentle motion while held, to keep a long hold alive. Optional; spacing never shrinks.'),
+  transition: TransitionInput.optional().describe('How the drones travel into this formation (default direct). Use spectacle transitions on a few key moments.'),
 })
 export type SceneInput = z.infer<typeof SceneInput>
 

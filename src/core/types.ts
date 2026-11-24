@@ -40,6 +40,33 @@ export interface FlightSpec {
   duration: number | null
   /** Dim lights while flying between formations. */
   dim: boolean
+  /** How the drones travel: straight (default) or a choreographed transition. */
+  style?: TransitionStyle
+}
+
+/**
+ * Transition styles — the flight as part of the spectacle.
+ *  direct:  everyone flies straight, together.
+ *  cascade: the same straight paths, but drones set off in a ripple (left→right, centre-out, …).
+ *  swirl:   the whole flying formation turns about its vertical axis on the way.
+ *  burst:   the formation explodes outward mid-flight, then reforms.
+ *  ant:     drones file out in lanes, march along an arch over the formations, and file into place.
+ *  rain:    drones drip down onto a low carpet, then rise into the new shape, top first.
+ */
+export type TransitionKind = 'direct' | 'cascade' | 'swirl' | 'burst' | 'ant' | 'rain'
+
+export type CascadeOrder = 'left' | 'right' | 'center' | 'edge' | 'top' | 'bottom'
+
+export interface TransitionStyle {
+  kind: TransitionKind
+  /** 0..1 strength: cascade/rain stagger, burst expansion. */
+  amount: number
+  /** Cascade: where the ripple starts. */
+  order?: CascadeOrder
+  /** Swirl: turns (any fraction), sign = direction. */
+  turns?: number
+  /** Ant walk: number of lanes side by side (0 = automatic). */
+  lanes?: number
 }
 
 export interface Site {
@@ -75,8 +102,8 @@ export type Effect =
   | { kind: 'type'; a: Hex; b: Hex; cursor: Hex; duration: number; brightness: number }
   /** Split-flap board: letters flicker, then settle left to right. */
   | { kind: 'flip'; a: Hex; b: Hex; duration: number; rate: number; brightness: number }
-  /** LED matrix: dot-matrix text scrolling across (or standing on) the formation, best on a grid. */
-  | { kind: 'matrix'; text: string; a: Hex; b: Hex; speed: number; brightness: number }
+  /** LED matrix: dot-matrix text (font 7 = 5×7 dots, 5 = 3×5) scrolling across (or standing on) the formation, best on a grid. */
+  | { kind: 'matrix'; text: string; a: Hex; b: Hex; speed: number; font: number; brightness: number }
 
 export type EffectKind = Effect['kind']
 

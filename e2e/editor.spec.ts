@@ -167,3 +167,33 @@ test('viewport manipulation: tools, nudging, framing and click-to-deselect', asy
   await expect(page.locator('.insp-kind').first()).toHaveText(/Show/i)
   await expect(page.locator('.toolbar')).toHaveCount(0)
 })
+
+test('transitions: pick a spectacle transition for a flight', async ({ page }) => {
+  await fresh(page)
+  await page.locator('.slist .srow', { hasText: 'Heart' }).click()
+  await page.getByLabel('Transition style').selectOption('swirl')
+  await expect(page.getByLabel('Transition style')).toHaveValue('swirl')
+  await expect(page.locator('.blk.flight.styled')).toHaveCount(1, { timeout: 20000 })
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 20000 })
+  await page.getByLabel('Transition style').selectOption('cascade')
+  await page.getByLabel('Ripple direction').selectOption('center')
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 20000 })
+  // Undo back to a direct flight.
+  await page.keyboard.press('Control+z')
+  await page.keyboard.press('Control+z')
+  await page.keyboard.press('Control+z')
+  await expect(page.locator('.blk.flight.styled')).toHaveCount(0, { timeout: 20000 })
+})
+
+test('text effects: LED sign with small letters, and write-on', async ({ page }) => {
+  await fresh(page)
+  await page.getByRole('button', { name: 'Add', exact: true }).click()
+  await page.getByRole('button', { name: 'LED sign' }).click()
+  await expect(page.getByLabel('LED text')).toHaveValue('WELCOME')
+  await page.getByLabel('LED text').fill('HI THERE')
+  await page.getByRole('radio', { name: '3×5 (small)' }).click()
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 20000 })
+  await page.locator('.slist .srow', { hasText: 'Hello' }).click()
+  await page.getByLabel('Light effect').first().selectOption('write')
+  await expect(page.getByText('Writes in')).toBeVisible()
+})

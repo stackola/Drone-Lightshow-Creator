@@ -1,7 +1,7 @@
 // Project files: versioned JSON. Loading is defensive — any missing or
 // malformed field falls back to a sane default instead of crashing the editor.
 
-import type { AudioMeta, Effect, FlightSpec, Layer, LightCue, Limits, ModelPart, Scene, ShapeSpec, ShowDoc, Site, Vec3 } from './types'
+import type { AudioMeta, CascadeOrder, Effect, FlightSpec, Layer, LightCue, Limits, ModelPart, Scene, ShapeSpec, ShowDoc, Site, TransitionKind, TransitionStyle, Vec3 } from './types'
 import { MAX_PARTS } from './model3d'
 import { DEFAULT_LIMITS, DEFAULT_SITE, newId } from './defaults'
 import { SHAPE_BY_KIND } from './shapes'
@@ -98,7 +98,21 @@ export function normalizeDoc(r: Obj): ShowDoc {
 
 function flight(v: unknown): FlightSpec {
   const f = isObj(v) ? v : {}
-  return { duration: typeof f.duration === 'number' && Number.isFinite(f.duration) ? Math.max(0, f.duration) : null, dim: bool(f.dim, false) }
+  const style = transitionStyle(f.style)
+  return { duration: typeof f.duration === 'number' && Number.isFinite(f.duration) ? Math.max(0, f.duration) : null, dim: bool(f.dim, false), ...(style ? { style } : {}) }
+}
+
+const KINDS: TransitionKind[] = ['cascade', 'swirl', 'burst', 'ant', 'rain']
+const ORDERS: CascadeOrder[] = ['left', 'right', 'center', 'edge', 'top', 'bottom']
+
+function transitionStyle(v: unknown): TransitionStyle | undefined {
+  if (!isObj(v) || !KINDS.includes(v.kind as TransitionKind)) return undefined
+  const kind = v.kind as TransitionKind
+  const out: TransitionStyle = { kind, amount: num(v.amount, 0.6, 0, 1) }
+  if (kind === 'cascade') out.order = ORDERS.includes(v.order as CascadeOrder) ? (v.order as CascadeOrder) : 'left'
+  if (kind === 'swirl') out.turns = Math.round(num(v.turns, 0.5, -3, 3) * 8) / 8 || 0.5
+  if (kind === 'ant') out.lanes = Math.round(num(v.lanes, 0, 0, 40))
+  return out
 }
 
 function scene(s: Obj): Scene {

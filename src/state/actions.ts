@@ -8,6 +8,7 @@ import { defaultEffect } from '@/core/effects'
 import { getState } from './store'
 import { seek } from './playback'
 import { SHAPE_BY_KIND } from '@/core/shapes'
+import { allocate } from '@/core/compile'
 
 export function addScene(kind: ShapeKind, opts: { shape?: ShapeSpec; name?: string } = {}) {
   const s = getState()
@@ -32,6 +33,38 @@ export function addLedSign(text = 'WELCOME') {
   s.update((d) => { d.scenes.splice(at, 0, scene as Draft<Scene>) }, 'Add LED sign')
   s.select({ kind: 'scene', id: scene.id })
   return scene
+}
+
+/**
+ * Resize an LED panel (a grid layer) to exactly cols × rows drones. The rest of
+ * the fleet parks dark behind it; other shapes in the scene are kept.
+ */
+export function resizeLedPanel(sceneId: string, layerId: string, cols: number, rows: number) {
+  const s = getState()
+  const scene = s.doc.scenes.find((x) => x.id === sceneId)
+  const layer = scene?.layers.find((l) => l.id === layerId)
+  if (!scene || !layer || layer.shape.kind !== 'grid') return
+  const n = s.doc.droneCount
+  const others = scene.layers.filter((l) => l.id !== layerId && !(l.role === 'park'))
+  const counts = allocate(n, scene.layers.map((l) => l.weight))
+  const otherCount = scene.layers.reduce((a, l, i) => (others.includes(l) ? a + counts[i]! : a), 0)
+  const R = Math.max(1, Math.round(rows))
+  const C = Math.max(1, Math.min(Math.round(cols), Math.floor((n - otherCount) / R)))
+  const panel = C * R
+  const spacing = comfortableSpacing(s.doc.limits.minSpacing)
+  const grid = { ...layer.shape, aspect: C / R, scatter: 0, fill: 'filled' as const, size: Math.max(1, (C - 1) * spacing) }
+  const rest = n - otherCount - panel
+  const park = scene.layers.find((l) => l.role === 'park') ?? { ...newLayer(newShape('grid'), defaultEffect('off')), role: 'park' as const, offset: [0, 0, -25] as [number, number, number] }
+  const layers = [
+    ...scene.layers.filter((l) => others.includes(l)).map((l) => ({ ...l, weight: counts[scene.layers.indexOf(l)]! })),
+    { ...layer, shape: grid, weight: panel },
+    ...(rest > 0 ? [{ ...park, weight: rest }] : []),
+  ]
+  const next = fitScene({ ...scene, layers }, n, spacing, 'grow')
+  s.update((d) => {
+    const i = d.scenes.findIndex((x) => x.id === sceneId)
+    if (i >= 0) d.scenes[i] = next as Draft<Scene>
+  }, 'Resize LED panel', `led:${layerId}`)
 }
 
 export function duplicateScene(id: string) {
@@ -181,7 +214,7 @@ export function fitSceneToSpacing(sceneId: string, mode: 'exact' | 'grow' = 'exa
 
 export function applyFix(action: FixAction) {
   const s = getState()
-  const labels: Record<FixAction['kind'], string> = { 'fit-spacing': 'Fit to safe spacing', 'set-spin': 'Slow spin', move: 'Move scene', 'grid-spacing': 'Pad spacing', 'fit-airspace': 'Shrink to fit airspace', 'calm-hold': 'Calm hold motion' }
+  const labels: Record<FixAction['kind'], string> = { 'fit-spacing': 'Fit to safe spacing', 'set-spin': 'Slow spin', move: 'Move scene', 'grid-spacing': 'Pad spacing', 'fit-airspace': 'Shrink to fit airspace', 'calm-hold': 'Calm hold motion', 'flight-style': 'Fly direct' }
   s.replaceDoc(applyFixToDoc(s.doc, action), labels[action.kind])
   s.set({ focus: null })
 }

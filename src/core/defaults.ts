@@ -133,25 +133,28 @@ export function newScene(doc: ShowDoc, kind: ShapeKind, opts: { name?: string; p
 }
 
 /**
- * An LED sign: a grid exactly 7 drones tall (one drone per dot of the 5×7
- * font) showing scrolling dot-matrix text. Drones that don't fit the panel
- * are parked behind it. The hold is long enough for the text to pass once.
+ * An LED sign: a grid exactly as tall as the font (7 drones for 5×7 letters,
+ * 5 for the compact 3×5 font), one drone per dot, showing scrolling
+ * dot-matrix text. Width: `columns`, or as wide as the fleet allows. Drones
+ * not in the panel are parked behind it. The hold lets the text pass once.
+ * A 5-tall panel needs only 4 columns per letter in view (about 20 drones).
  */
-export function newLedSign(doc: ShowDoc, text = 'WELCOME', opts: { color?: string; speed?: number; position?: Vec3 } = {}): Scene {
+export function newLedSign(doc: ShowDoc, text = 'WELCOME', opts: { color?: string; speed?: number; position?: Vec3; font?: 5 | 7; columns?: number } = {}): Scene {
   const n = doc.droneCount
-  const rows = Math.min(7, Math.max(1, n))
-  const cols = Math.max(1, Math.floor(n / rows))
+  const font = opts.font ?? 7
+  const rows = Math.min(font, Math.max(1, n))
+  const cols = Math.max(1, Math.min(opts.columns ? Math.round(opts.columns) : Infinity, Math.floor(n / rows)))
   const panel = rows * cols
   const spacing = comfortableSpacing(doc.limits.minSpacing)
   const speed = opts.speed ?? 6
-  const effect: Effect = { kind: 'matrix', text: text.toUpperCase(), a: opts.color ?? '#ffb020', b: '#1c1406', speed, brightness: 1 }
+  const effect: Effect = { kind: 'matrix', text: text.toUpperCase(), a: opts.color ?? '#ffb020', b: '#1c1406', speed, font, brightness: 1 }
   const grid: ShapeSpec = { kind: 'grid', size: Math.max(1, (cols - 1) * spacing), aspect: cols / rows, scatter: 0, fill: 'filled' }
   const layers = [{ ...newLayer(grid, effect), weight: panel }]
   if (n > panel) {
     const spare = newLayer(newShape('grid'), defaultEffect('off'))
     layers.push({ ...spare, role: 'park', weight: n - panel, offset: [0, 0, -25] })
   }
-  const textCols = pixelTextMask(text, 1).w
+  const textCols = [...text].length * (font === 5 ? 4 : 6)
   const scene: Scene = {
     id: newId('scene'),
     name: `LED: ${text}`.slice(0, 60),

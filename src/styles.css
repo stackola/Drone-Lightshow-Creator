@@ -293,6 +293,7 @@ input, textarea { user-select: text; }
 /* Detour flights: a small "spread → cross → gather" glyph along the bottom edge. */
 .blk.flight.detour { border-bottom: 2px dotted var(--accent-2); }
 .detour-note { color: var(--accent-2); }
+.blk.flight.styled { background: repeating-linear-gradient(135deg, #2a2440 0 6px, #211c33 6px 12px); border-color: rgba(167,139,250,0.55); color: #d4c8ff; }
 .blk.flight.sel { box-shadow: 0 0 0 2px var(--accent); }
 .blk.ground { background: #161b25; border: 1px solid var(--line-2); color: var(--faint); justify-content: center; }
 .blk.ground.sel { box-shadow: 0 0 0 2px var(--accent); }

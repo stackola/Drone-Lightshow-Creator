@@ -1,6 +1,6 @@
 import type { Effect, EffectKind } from '@/core/types'
 import { EFFECTS, defaultEffect } from '@/core/effects'
-import { ColorField, NumberField, Row, Select, Toggle } from '@/ui/components/controls'
+import { ColorField, NumberField, Row, Segmented, Select, Toggle } from '@/ui/components/controls'
 
 function baseColor(e: Effect): string {
   switch (e.kind) {
@@ -77,9 +77,12 @@ export function EffectEditor({ effect, onChange, allowImage, keyPrefix, hasBeats
           <Row label="Text">
             <input className="text-input" value={effect.text} aria-label="LED text" maxLength={120} onChange={(ev) => set('text', ev.target.value.toUpperCase())} />
           </Row>
+          <Row label="Letters">
+            <Segmented full value={String(effect.font === 5 ? 5 : 7)} options={[{ value: '7', label: '5×7 dots' }, { value: '5', label: '3×5 (small)' }]} onChange={(v) => set('font', Number(v))} />
+          </Row>
           {color('a', 'LEDs on')}{color('b', 'LEDs off')}
           {num('speed', 'Scroll', 1, 'col/s', 0, 40)}
-          <div className="hint">Dot-matrix letters 7 dots tall, scrolling right to left (0 = still). Looks best on an LED sign: a grid 7 drones tall.</div>
+          <div className="hint">Scrolls right to left (0 = still). On a grid, each dot is one drone: a panel {effect.font === 5 ? 5 : 7} drones tall is pixel-perfect, taller panels centre the text. Each letter needs {effect.font === 5 ? 4 : 6} columns.</div>
         </>
       )}
       {effect.kind === 'image' && <div className="hint">Each drone shows the colour of its part of the shape (image pixel or 3D model part).</div>}

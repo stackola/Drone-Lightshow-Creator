@@ -9,7 +9,10 @@ import { ceilTo } from '@/core/math'
 import { formatTime } from '@/core/validate'
 import { loadMusic, pickFile, removeMusic } from '@/state/persist'
 import { MenuButton } from '@/ui/components/controls'
+import { TRANSITIONS } from '@/core/transitions'
 import type { Scene } from '@/core/types'
+
+const trLabel = (k: string) => TRANSITIONS.find((x) => x.kind === k)?.label ?? k
 
 const PAD = 14
 const LANES = { ruler: 24, scenes: 46, lights: 34, music: 42 }
@@ -170,12 +173,12 @@ export function Timeline() {
       blocks.push(
         <div
           key={`f-${scene.id}`}
-          className={`blk flight${t.extended ? ' ext' : ''}${t.detour ? ' detour' : ''}${selF ? ' sel' : ''}`}
+          className={`blk flight${t.extended ? ' ext' : ''}${t.detour ? ' detour' : ''}${t.transition.used !== 'direct' ? ' styled' : ''}${selF ? ' sel' : ''}`}
           style={{ left: toX(t.flightStart) + 1, width: Math.max(2, fw - 3) }}
-          title={`Flight into ${scene.name}: ${(t.holdStart - t.flightStart).toFixed(1)} s${t.auto ? ' (auto)' : ''} · fastest safe ${t.minFlight.toFixed(1)} s${t.extended ? ' — extended for safety' : ''}${t.detour ? ' · collision-free detour (spread, cross, close in)' : ''}`}
+          title={`Flight into ${scene.name}: ${(t.holdStart - t.flightStart).toFixed(1)} s${t.auto ? ' (auto)' : ''} · fastest safe ${t.minFlight.toFixed(1)} s${t.extended ? ' — extended for safety' : ''}${t.detour ? ' · collision-free detour (spread, cross, close in)' : ''}${t.transition.used !== 'direct' ? ` · ${trLabel(t.transition.used)} transition` : ''}${t.transition.note ? ` — ${t.transition.note}` : ''}`}
           onClick={() => getState().select({ kind: 'flight', id: scene.id })}
         >
-          {fw > 44 ? `${(t.holdStart - t.flightStart).toFixed(1)}s` : ''}
+          {fw > 44 ? `${t.transition.used !== 'direct' && fw > 90 ? `${trLabel(t.transition.used)} ` : ''}${(t.holdStart - t.flightStart).toFixed(1)}s` : ''}
           <div
             className="grip r"
             onPointerDown={(e) =>
@@ -217,9 +220,9 @@ export function Timeline() {
     blocks.push(
       <div
         key="rf"
-        className={`blk flight${rf.extended ? ' ext' : ''}${rf.detour ? ' detour' : ''}${selection.kind === 'landing' ? ' sel' : ''}`}
+        className={`blk flight${rf.extended ? ' ext' : ''}${rf.detour ? ' detour' : ''}${rf.transition.used !== 'direct' ? ' styled' : ''}${selection.kind === 'landing' ? ' sel' : ''}`}
         style={{ left: toX(rf.t0) + 1, width: Math.max(2, rw - 3) }}
-        title={`Return flight: ${(rf.t1 - rf.t0).toFixed(1)} s${rf.detour ? ' · collision-free detour' : ''}`}
+        title={`Return flight: ${(rf.t1 - rf.t0).toFixed(1)} s${rf.detour ? ' · collision-free detour' : ''}${rf.transition.used !== 'direct' ? ` · ${trLabel(rf.transition.used)} transition` : ''}`}
         onClick={() => getState().select({ kind: 'landing' })}
       >
         {rw > 44 ? `${(rf.t1 - rf.t0).toFixed(1)}s` : ''}

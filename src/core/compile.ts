@@ -7,9 +7,13 @@
 // `evaluate()` turns it into positions and colours at any time, and the same
 // function feeds the preview, the validator and the exporters.
 
-import type { Blend, Effect, HoldMotion, Limits, Scene, ShowDoc, Vec3 } from './types'
+import type { Blend, Effect, HoldMotion, Limits, Scene, ShowDoc, TransitionStyle, Vec3 } from './types'
+import {
+  PLAIN, buildAnt, buildCascade, buildRain, choreoPairs, choreoPeaks, choreoPos, legCentroids, minDurationFor, sampledPeaks, wrapPos,
+  TRANSITIONS, type Choreo, type FlightStyle, type TransitionInfo, type Wrap,
+} from './transitions'
 import { assignMinSquared } from './assign'
-import { generateShape } from './shapes'
+import { generateShape, gridRows } from './shapes'
 import { DEG, ceilTo, centroid, hash01, hashArray, isIdentityRotation, minPairDistance, rotationMatrix, transformPoints } from './math'
 import { NO_MOTION, ZERO_PROFILE, fastestProfile, moveExtents, spinAngle, stretchProfile, type Profile } from './motion'
 import { comfortableSpacing, flightClosestApproach } from './separation'
@@ -79,6 +83,11 @@ export type Segment =
       legs: Leg[]
       /** True when the flight takes the collision-avoiding detour. */
       detour: boolean
+      /** Choreographed transition (swirl/burst wrap the legs; cascade/rain/ant replace them). */
+      style?: FlightStyle
+      transition: TransitionInfo
+      /** Lowest altitude this flight may use (below the floor only when it starts or ends on the pads). */
+      floor: number
       from: Float32Array
       to: Float32Array
       c0: Float32Array
@@ -112,11 +121,13 @@ export interface Compiled {
   cues: CompiledCue[]
   /** Normalisation for position-based cue effects: centre and half-extent of the show. */
   stage: { cx: number; cy: number; r: number; minX: number; maxX: number; minY: number; maxY: number }
+  /** Everything the audience should see: the stage plus where spectacle transitions travel (for camera framing). */
+  view: { minX: number; maxX: number; maxY: number }
   /** Times for UI. */
   takeoff: { t0: number; t1: number }
   landing: { t0: number; t1: number }
-  returnFlight: { t0: number; t1: number; minDuration: number; auto: boolean; extended: boolean; detour: boolean }
-  sceneTimes: { id: string; flightStart: number; holdStart: number; holdEnd: number; minFlight: number; auto: boolean; extended: boolean; detour: boolean }[]
+  returnFlight: { t0: number; t1: number; minDuration: number; auto: boolean; extended: boolean; detour: boolean; transition: TransitionInfo }
+  sceneTimes: { id: string; flightStart: number; holdStart: number; holdEnd: number; minFlight: number; auto: boolean; extended: boolean; detour: boolean; transition: TransitionInfo }[]
 }
 
 export interface CompiledCue {
@@ -165,8 +176,8 @@ export interface SceneGeometry {
   image: Float32Array | null
 }
 
-/** Per-point look data stride: u, v, order, rand, glyphs, half-width, half-height (see DroneLook). */
-export const LOOK = 7
+/** Per-point look data stride: u, v, order, rand, glyphs, half-width, half-height, grid rows (see DroneLook). */
+export const LOOK = 8
 
 /** World-space points for a scene at hold start (point order), plus per-point look data. */
 export function sceneGeometry(scene: Scene, n: number): SceneGeometry {
@@ -181,6 +192,8 @@ export function sceneGeometry(scene: Scene, n: number): SceneGeometry {
     const c = counts[li]!
     if (c === 0) return
     const { points: local, colors, order, glyphs } = generateShape(layer.shape, c)
+    // Rows of drones in a grid layer (LED panels): lets dot-matrix text sit on exact rows.
+    const rows = layer.shape.kind === 'grid' && layer.shape.fill !== 'outline' ? gridRows(c, layer.shape.aspect) : 0
     // Normalise for effects using the unrotated local shape.
     let ext = 1e-9, extX = 1e-9, extY = 1e-9
     for (let k = 0; k < c; k++) {
@@ -197,6 +210,7 @@ export function sceneGeometry(scene: Scene, n: number): SceneGeometry {
       look[L + 4] = glyphs ?? 0
       look[L + 5] = extX / ext
       look[L + 6] = extY / ext
+      look[L + 7] = rows
       layerOf[o + k] = li
     }
     if (colors) {
@@ -369,6 +383,200 @@ function timeRoute(moves: Move[], limits: Limits, requested: number | null, t0: 
   return { legs, min, auto, extended, T }
 }
 
+interface PlannedFlight {
+  slot: Int32Array
+  legs: Leg[]
+  detour: boolean
+  T: number
+  min: number
+  auto: boolean
+  extended: boolean
+  style?: FlightStyle
+  transition: TransitionInfo
+  floor: number
+}
+
+function lowest(p: Float32Array): number {
+  let m = Infinity
+  for (let i = 1; i < p.length; i += 3) m = Math.min(m, p[i]!)
+  return m
+}
+
+/** Pick T from a minimum: automatic (with margin) or the requested time, never below the minimum. */
+function chooseDuration(min: number, requested: number | null): { T: number; auto: boolean; extended: boolean } {
+  if (requested === null) return { T: autoFlightDuration(min), auto: true, extended: false }
+  const floor = ceilTo(min, 0.1)
+  return requested + 1e-9 < floor ? { T: floor, auto: false, extended: true } : { T: Math.max(0, requested), auto: false, extended: false }
+}
+
+const label = (k: string) => TRANSITIONS.find((x) => x.kind === k)?.label ?? k
+
+/**
+ * Plan one flight: the safe route (straight or detour), then the requested
+ * transition style on top of it. Styles that would bring drones too close or
+ * leave the airspace are softened step by step; if even the gentlest version
+ * fails, the flight falls back to the plain route and says why.
+ */
+function planFlight(
+  style: TransitionStyle | undefined, from: Float32Array, prevSet: Float32Array, prevSpacing: number, curSlot: Int32Array,
+  targetSet: Float32Array, targetSpacing: number, limits: Limits, requested: number | null, t0: number, fixedSlot: Int32Array | null,
+): PlannedFlight {
+  const n = curSlot.length
+  const want = style?.kind ?? 'direct'
+  // Swirl turns the flying formation by any angle: plan the plain flight to a
+  // counter-rotated copy of the target, and the swirl turns it back into place.
+  const turns = want === 'swirl' ? Math.max(-3, Math.min(3, style?.turns ?? 0.5)) || 0.5 : 0
+  const aimSet = turns ? rotateAboutVertical(targetSet, centroid(targetSet), -2 * Math.PI * turns) : targetSet
+  const route = planRoute(prevSet, prevSpacing, curSlot, aimSet, targetSpacing, limits, fixedSlot)
+  const floor = Math.min(limits.minAltitude, lowest(from), lowest(targetSet))
+  const plain = (note: string | null): PlannedFlight => {
+    const r = timeRoute(route.moves, limits, requested, t0)
+    return {
+      slot: route.slot, legs: r.legs, detour: route.detour, T: r.T, min: r.min, auto: r.auto, extended: r.extended, floor,
+      transition: want === 'direct' ? PLAIN : { requested: want, used: 'direct', strength: 0, note },
+    }
+  }
+  if (want === 'direct' || n < 2 || !style) return plain(null)
+  const inAir = (e: { minY: number; maxY: number; maxR: number }) => e.minY >= floor - 1e-6 && e.maxY <= limits.maxAltitude + 1e-6 && e.maxR <= limits.maxRadius + 1e-6
+  const amount = Math.max(0, Math.min(1, style.amount))
+
+  if (want === 'swirl' || want === 'burst') {
+    const wkey = `${want}|${JSON.stringify(style)}|${JSON.stringify(limits)}|${floor}|${hashArray(from)}|${hashArray(aimSet)}|${route.moves.length}`
+    const hit = wrapCache.get(wkey)
+    if (hit) {
+      if (!hit.wrap) return plain(hit.note)
+      const d = chooseDuration(hit.min, requested)
+      return {
+        slot: route.slot, legs: timeRoute(route.moves, limits, d.T, t0).legs, detour: route.detour, T: d.T, min: hit.min, auto: d.auto, extended: d.extended, floor,
+        style: { kind: 'wrap', wrap: hit.wrap }, transition: { requested: want, used: want, strength: hit.strength, note: hit.note },
+      }
+    }
+    const remember = (v: WrapPlan) => { wrapCache.set(wkey, v); if (wrapCache.size > 64) wrapCache.delete(wrapCache.keys().next().value as string) }
+    const ref = timeRoute(route.moves, limits, null, 0)
+    const Tref = Math.max(ref.T, 1)
+    const legsRef = timeRoute(route.moves, limits, Tref, 0).legs
+    const cents = legCentroids(legsRef)
+    const tryWrap = (expand: number) => {
+      const wrap = { turns, expand, ...cents }
+      const pk = sampledPeaks(n, (u, out) => wrapPos(legsRef, wrap, 0, Tref, u * Tref, out), 480)
+      return { wrap, pk }
+    }
+    const fullExpand = want === 'burst' ? 1 + 1.5 * Math.max(0.05, amount) : 1
+    let best = tryWrap(fullExpand), strength = 1
+    if (!inAir(best.pk)) {
+      if (want === 'swirl') { const note = 'The swirling formation would leave the airspace — flying direct.'; remember({ wrap: null, min: 0, strength: 0, note }); return plain(note) }
+      // Burst: find the largest expansion that stays inside the airspace.
+      let lo = 1, hi = fullExpand
+      for (let k = 0; k < 7; k++) {
+        const mid = (lo + hi) / 2
+        if (inAir(tryWrap(mid).pk)) lo = mid
+        else hi = mid
+      }
+      if (lo < 1.15) { const note = 'No room in the airspace for the formation to burst outward — flying direct.'; remember({ wrap: null, min: 0, strength: 0, note }); return plain(note) }
+      best = tryWrap(lo)
+      strength = (lo - 1) / (fullExpand - 1)
+    }
+    const min = Math.max(ref.min, minDurationFor(best.pk, limits))
+    const note = strength < 0.999 ? `Burst limited to ${Math.round(strength * 100)}% to stay inside the airspace.` : null
+    remember({ wrap: best.wrap, min, strength, note })
+    const d = chooseDuration(min, requested)
+    const legs = timeRoute(route.moves, limits, d.T, t0).legs
+    return {
+      slot: route.slot, legs, detour: route.detour, T: d.T, min, auto: d.auto, extended: d.extended, floor,
+      style: { kind: 'wrap', wrap: best.wrap },
+      transition: { requested: want, used: want, strength, note },
+    }
+  }
+
+  // Choreographed: cascade, rain, ant walk.
+  if ((want === 'rain' || want === 'ant') && fixedSlot) return plain(`${label(want)} reorders drones, but landing returns each drone to its own pad — flying direct.`)
+  const target = permute(targetSet, route.slot)
+  const key = `${want}|${JSON.stringify(style)}|${JSON.stringify(limits)}|${floor}|${hashArray(from)}|${hashArray(targetSet)}|${hashArray(route.slot as unknown as Float32Array)}`
+  const cached = choreoCache.get(key)
+  if (cached) return finishChoreo(cached, requested, floor, want)
+  const done = (r: ChoreoPlan): PlannedFlight => {
+    choreoCache.set(key, r)
+    if (choreoCache.size > 64) choreoCache.delete(choreoCache.keys().next().value as string)
+    return finishChoreo(r, requested, floor, want)
+  }
+  // Softening: the ant walk spaces rows wider; cascade and rain search for the strongest safe stagger
+  // (rain at zero stagger falls and rises in sync, which is always available).
+  const build = (f: number): { choreo: Choreo; slot: Int32Array } | null => {
+    const D = 0.9 * Math.max(0.1, amount) * f
+    if (want === 'cascade') return { choreo: buildCascade(from, target, style.order ?? 'left', D, limits), slot: route.slot }
+    if (want === 'rain') return buildRain(from, targetSet, limits, floor, D)
+    return buildAnt(from, targetSet, limits, floor, style.lanes ?? 0, f)
+  }
+  const test = (f: number) => {
+    const built = build(f)
+    if (!built) return null
+    const pk = choreoPeaks(built.choreo)
+    if (!inAir(choreoExtents(built.choreo, n))) return { built, pk, ok: false }
+    const pairs = choreoPairs(built.choreo, n, limits.minSpacing, pk.acc, Math.hypot(pk.h, Math.max(pk.up, pk.down)))
+    return { built, pk, ok: pairs.d + 1e-6 >= limits.minSpacing }
+  }
+  const accept = (r: { built: { choreo: Choreo; slot: Int32Array }; pk: ReturnType<typeof choreoPeaks> }, f: number) => {
+    const note = f >= 0.999 && want !== 'ant' ? null
+      : want === 'ant' ? (f > 1 ? `Rows spaced ${f}× wider to keep drones apart.` : null)
+        : f === 0 ? 'Drones fall and rise together (no drip stagger) to keep them apart.'
+          : `${label(want)} softened to ${Math.round(f * 100)}% to keep drones apart.`
+    return done({ ok: true, choreo: r.built.choreo, slot: r.built.slot, min: minDurationFor(r.pk, limits), strength: want === 'ant' ? 1 / f : f, note })
+  }
+  if (want === 'ant') {
+    for (const f of [1, 1.5, 2.2]) {
+      const r = test(f)
+      if (!r) return plain('No room for the ant walk’s arch in the airspace — flying direct.')
+      if (r.ok) return accept(r, f)
+    }
+  } else {
+    const full = test(1)
+    if (full?.ok) return accept(full, 1)
+    // Largest safe stagger by bisection.
+    let lo = 0, hi = 1, best: { f: number; r: NonNullable<ReturnType<typeof test>> } | null = null
+    for (let k = 0; k < 5; k++) {
+      const mid = (lo + hi) / 2
+      const r = test(mid)
+      if (r?.ok) { lo = mid; best = { f: Math.round(mid * 100) / 100, r } } else hi = mid
+    }
+    if (best && best.f >= 0.15) return accept(best.r, best.f)
+    if (want === 'rain') {
+      const sync = test(0)
+      if (sync?.ok) return accept(sync, 0)
+    }
+  }
+  return plain(`${label(want)} would bring drones too close or out of the airspace here — flying direct${route.detour ? ' (with a safe detour)' : ''}.`)
+}
+
+interface WrapPlan { wrap: Wrap | null; min: number; strength: number; note: string | null }
+const wrapCache = new Map<string, WrapPlan>()
+
+interface ChoreoPlan { ok: true; choreo: Choreo; slot: Int32Array; min: number; strength: number; note: string | null }
+const choreoCache = new Map<string, ChoreoPlan>()
+
+function finishChoreo(r: ChoreoPlan, requested: number | null, floor: number, want: TransitionStyle['kind']): PlannedFlight {
+  const d = chooseDuration(r.min, requested)
+  return {
+    slot: r.slot, legs: [], detour: false, T: d.T, min: r.min, auto: d.auto, extended: d.extended, floor,
+    style: { kind: 'choreo', choreo: r.choreo },
+    transition: { requested: want, used: want, strength: r.strength, note: r.note },
+  }
+}
+
+/** Altitude and radius extremes of a choreography (dense sampling). */
+export function choreoExtents(ch: Choreo, n: number, steps = 160): { minY: number; maxY: number; maxR: number } {
+  const p = new Float32Array(n * 3)
+  let minY = Infinity, maxY = -Infinity, maxR = 0
+  for (let k = 0; k <= steps; k++) {
+    for (let i = 0; i < n; i++) choreoPos(ch, i, k / steps, p)
+    for (let i = 0; i < n * 3; i += 3) {
+      minY = Math.min(minY, p[i + 1]!)
+      maxY = Math.max(maxY, p[i + 1]!)
+      maxR = Math.max(maxR, Math.hypot(p[i]!, p[i + 2]!))
+    }
+  }
+  return { minY, maxY, maxR }
+}
+
 /** Vertical takeoff/landing: fastest safe time rounded up to half a second. */
 function planVertical(from: Float32Array, to: Float32Array, limits: Limits, t0: number): Leg {
   const fastest = fastestProfile(moveExtents(from, to), limits)
@@ -429,22 +637,22 @@ export function compile(doc: ShowDoc): Compiled {
 
   for (const cs of scenes) {
     const scene = doc.scenes[cs.index]!
-    // Match the previous point set to this scene's points (detouring if needed).
-    const route = planRoute(curPointsSet, curSpacing, curSlot, cs.points, cs.spacing, limits, null)
-    const slot = route.slot
+    // Match the previous point set to this scene's points (detouring if needed), then apply the transition style.
+    const fd = planFlight(scene.flight.style, curPos, curPointsSet, curSpacing, curSlot, cs.points, cs.spacing, limits, scene.flight.duration, t, null)
+    const slot = fd.slot
     cs.slot = slot
     const target = permute(cs.points, slot)
-    const fd = timeRoute(route.moves, limits, scene.flight.duration, t)
     const dur = fd.T
     const startColors = sceneColors(cs, 0, t + dur, beat)
     segments.push({
-      kind: 'flight', t0: t, t1: t + dur, legs: fd.legs, detour: route.detour, from: curPos, to: target, c0: curColors, c1: startColors,
+      kind: 'flight', t0: t, t1: t + dur, legs: fd.legs, detour: fd.detour, style: fd.style, transition: fd.transition, floor: fd.floor,
+      from: curPos, to: target, c0: curColors, c1: startColors,
       dim: scene.flight.dim, into: cs.index, minDuration: fd.min, auto: fd.auto, extended: fd.extended,
     })
     const flightStart = t
     t += dur
     segments.push({ kind: 'hold', t0: t, t1: t + cs.hold, scene: cs.index })
-    sceneTimes.push({ id: cs.id, flightStart, holdStart: t, holdEnd: t + cs.hold, minFlight: fd.min, auto: fd.auto, extended: fd.extended, detour: route.detour })
+    sceneTimes.push({ id: cs.id, flightStart, holdStart: t, holdEnd: t + cs.hold, minFlight: fd.min, auto: fd.auto, extended: fd.extended, detour: fd.detour, transition: fd.transition })
     curColors = sceneColors(cs, cs.hold, t + cs.hold, beat)
     t += cs.hold
     curPos = permute(cs.endPoints, slot)
@@ -454,15 +662,15 @@ export function compile(doc: ShowDoc): Compiled {
   }
 
   // Return flight to the pads (at altitude), then descend.
-  const back = planRoute(curPointsSet, curSpacing, curSlot, padsHigh, n > 1 ? site.gridSpacing : Infinity, limits, site.landing === 'home' ? identity(n) : null)
-  const landSlot = back.slot
+  const rf = planFlight(site.returnFlight.style, curPos, curPointsSet, curSpacing, curSlot, padsHigh, n > 1 ? site.gridSpacing : Infinity, limits, site.returnFlight.duration, t, site.landing === 'home' ? identity(n) : null)
+  const landSlot = rf.slot
   const above = permute(padsHigh, landSlot)
-  const rf = timeRoute(back.moves, limits, site.returnFlight.duration, t)
   segments.push({
-    kind: 'flight', t0: t, t1: t + rf.T, legs: rf.legs, detour: back.detour, from: curPos, to: above, c0: curColors, c1: constColors(n, GROUND_COLOR),
+    kind: 'flight', t0: t, t1: t + rf.T, legs: rf.legs, detour: rf.detour, style: rf.style, transition: rf.transition, floor: rf.floor,
+    from: curPos, to: above, c0: curColors, c1: constColors(n, GROUND_COLOR),
     dim: site.returnFlight.dim, into: -1, minDuration: rf.min, auto: rf.auto, extended: rf.extended,
   })
-  const returnFlight = { t0: t, t1: t + rf.T, minDuration: rf.min, auto: rf.auto, extended: rf.extended, detour: back.detour }
+  const returnFlight = { t0: t, t1: t + rf.T, minDuration: rf.min, auto: rf.auto, extended: rf.extended, detour: rf.detour, transition: rf.transition }
   t += rf.T
   const landPads = permute(pads, landSlot)
   const landLeg = planVertical(above, landPads, limits, t)
@@ -483,13 +691,28 @@ export function compile(doc: ShowDoc): Compiled {
     ? { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, r: Math.max(1, (maxX - minX) / 2, (maxY - minY) / 2), minX, maxX, minY, maxY }
     : { cx: 0, cy: site.takeoffAltitude, r: 20, minX: -20, maxX: 20, minY: 0, maxY: site.takeoffAltitude + 20 }
 
+  // Camera framing also covers transitions that travel outside the formations (arches, bursts).
+  const view = { minX: stage.minX, maxX: stage.maxX, maxY: stage.maxY }
+  const probe = new Float32Array(n * 3)
+  for (const seg of segments) {
+    if (seg.kind !== 'flight' || !seg.style) continue
+    for (let k = 0; k <= 40; k++) {
+      const u = k / 40
+      if (seg.style.kind === 'choreo') for (let i = 0; i < n; i++) choreoPos(seg.style.choreo, i, u, probe)
+      else wrapPos(seg.legs, seg.style.wrap, seg.t0, seg.t1 - seg.t0, seg.t0 + u * (seg.t1 - seg.t0), probe)
+      for (let i = 0; i < n * 3; i += 3) {
+        view.minX = Math.min(view.minX, probe[i]!); view.maxX = Math.max(view.maxX, probe[i]!); view.maxY = Math.max(view.maxY, probe[i + 1]!)
+      }
+    }
+  }
+
   const cues: CompiledCue[] = (doc.cues ?? [])
     .filter((q) => q.duration > 0)
     .map((q) => ({ id: q.id, t0: q.start, t1: q.start + q.duration, fadeIn: Math.max(0, q.fadeIn), fadeOut: Math.max(0, q.fadeOut), blend: q.blend, effect: q.effect }))
     .sort((a, b) => a.t0 - b.t0)
 
   return {
-    n, duration: t, segments, scenes, pads, landPads, beats, downbeat, limits, cues, stage,
+    n, duration: t, segments, scenes, pads, landPads, beats, downbeat, limits, cues, stage, view,
     takeoff: { t0: 0, t1: takeoffDur }, landing, returnFlight, sceneTimes,
   }
 }
@@ -521,6 +744,7 @@ export function readLook(src: Float32Array, k: number, look: DroneLook): DroneLo
   look.glyphs = src[L + 4]!
   look.uh = src[L + 5]!
   look.vh = src[L + 6]!
+  look.rows = src[L + 7]!
   return look
 }
 

@@ -13,7 +13,8 @@
 // • Flight speed, acceleration and jerk come from the exact S-curve peaks;
 //   hold motion peaks are measured on the closed-form trajectory.
 
-import type { Compiled, CompiledScene, Segment } from './compile'
+import { choreoExtents, type Compiled, type CompiledScene, type Segment } from './compile'
+import { choreoPairs, choreoPeaks, sampledPeaks, scalePeaks, wrapPos, type Choreo, type PairResult, type UPeaks } from './transitions'
 import { NO_MOTION, holdPeaks, holdRange, isMoving, moveExtents, profileInverse, profilePeaks, type HoldRange, type MotionPeaks } from './motion'
 import type { HoldMotion, Limits, ShowDoc } from './types'
 import { DEG } from './math'
@@ -27,6 +28,8 @@ export type FixAction =
   | { kind: 'fit-airspace'; sceneId: string }
   /** Scale down spin and hold motion together. */
   | { kind: 'calm-hold'; sceneId: string; factor: number }
+  /** Change a flight's transition style (sceneId null = the return flight). */
+  | { kind: 'flight-style'; sceneId: string | null; style: 'direct' }
 
 export interface Issue {
   id: string
@@ -61,6 +64,26 @@ export interface Validation {
 }
 
 const EPS = 1e-6
+
+// Choreographies are cached by the compiler, so their (expensive) checks are cached per object.
+const choreoChecks = new WeakMap<Choreo, { pk: UPeaks; ext: { minY: number; maxY: number; maxR: number }; pairs: (minSpacing: number) => PairResult }>()
+function checkChoreo(ch: Choreo, n: number) {
+  let c = choreoChecks.get(ch)
+  if (!c) {
+    const pk = choreoPeaks(ch)
+    const memo = new Map<number, PairResult>()
+    c = {
+      pk, ext: choreoExtents(ch, n),
+      pairs: (ms: number) => {
+        let r = memo.get(ms)
+        if (!r) { r = choreoPairs(ch, n, ms, pk.acc, Math.hypot(pk.h, Math.max(pk.up, pk.down))); memo.set(ms, r) }
+        return r
+      },
+    }
+    choreoChecks.set(ch, c)
+  }
+  return c
+}
 
 export { comfortableSpacing, closestPair, flightClosestApproach } from './separation'
 import { comfortableSpacing, closestPair, flightClosestApproach } from './separation'
@@ -329,9 +352,25 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
     const denser = [from, into].filter((x): x is CompiledScene => !!x && x.spacing + EPS < comfy).sort((a, b) => a.spacing - b.spacing)[0]
     const enlarge = denser ? { label: `Enlarge “${doc.scenes[denser.index]!.name}”`, action: { kind: 'fit-spacing' as const, sceneId: denser.id, target: comfy } } : undefined
 
-    // Dynamics: exact peaks of each leg's S-curve.
+    // Dynamics: exact peaks of each leg's S-curve — or of the transition's own paths.
     const worst = { vh: 0, vu: 0, vd: 0, a: 0, j: 0, aAt: seg.t0, jAt: seg.t0, drone: 0 }
-    for (const leg of seg.legs) {
+    const style = seg.kind === 'flight' ? seg.style : undefined
+    const T = seg.t1 - seg.t0
+    const toDirect = seg.kind === 'flight' && style ? { label: 'Fly direct instead', action: { kind: 'flight-style' as const, sceneId: seg.into >= 0 ? doc.scenes[seg.into]!.id : null, style: 'direct' as const } } : undefined
+    if (seg.kind === 'flight' && style && T > 0) {
+      const sp = style.kind === 'choreo'
+        ? (() => { const cc = checkChoreo(style.choreo, n); return { ...scalePeaks(cc.pk, T), ...cc.ext, minYDrone: 0, maxYDrone: 0, maxRDrone: 0 } })()
+        : (() => { const s0 = sampledPeaks(n, (u, out) => wrapPos(seg.legs, style.wrap, seg.t0, T, seg.t0 + u * T, out), 480); return { ...s0, ...scalePeaks(s0, T) } })()
+      worst.vh = sp.h; worst.vu = sp.up; worst.vd = sp.down; worst.a = sp.acc; worst.j = sp.jerk; worst.drone = sp.drone
+      worst.aAt = worst.jAt = seg.t0 + T / 2
+      stats.maxAltitude = Math.max(stats.maxAltitude, sp.maxY)
+      stats.maxRadius = Math.max(stats.maxRadius, sp.maxR)
+      const what = segmentLabel(seg, sceneName)
+      if (sp.minY + EPS < seg.floor) issues.push({ id: `style-low:${seg.t0}`, severity: 'error', kind: 'altitude', sceneId, title: `${what} dips below the floor`, detail: `A drone reaches ${fmt(sp.minY)} m during the ${seg.transition.used} transition (floor ${fmt(seg.floor)} m).`, time: seg.t0 + T / 2, drones: [sp.minYDrone], fix: toDirect })
+      if (sp.maxY - EPS > L.maxAltitude) issues.push({ id: `style-high:${seg.t0}`, severity: 'error', kind: 'altitude', sceneId, title: `${what} climbs above the ceiling`, detail: `A drone reaches ${fmt(sp.maxY)} m during the ${seg.transition.used} transition (ceiling ${fmt(L.maxAltitude)} m).`, time: seg.t0 + T / 2, drones: [sp.maxYDrone], fix: toDirect })
+      if (sp.maxR - EPS > L.maxRadius) issues.push({ id: `style-fence:${seg.t0}`, severity: 'error', kind: 'geofence', sceneId, title: `${what} leaves the flight area`, detail: `A drone reaches ${fmt(sp.maxR)} m from the centre during the ${seg.transition.used} transition (limit ${fmt(L.maxRadius)} m).`, time: seg.t0 + T / 2, drones: [sp.maxRDrone], fix: toDirect })
+    }
+    for (const leg of style ? [] : seg.legs) {
       const ext = moveExtents(leg.from, leg.to)
       const T = leg.t1 - leg.t0
       if (T > 0) {
@@ -404,9 +443,16 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
     }
 
     // Spacing: takeoff/landing are vertical and synchronised, so spacing equals pad spacing.
+    // Swirl and burst only rotate and enlarge the flying formation, so the plain legs' exact check bounds them;
+    // choreographed transitions are checked on a fine grid with a proven margin.
     if (seg.kind !== 'flight' || n < 2) continue
     let ca = { d: Infinity, s: 0, i: 0, j: 0, pairsBelow: 0 }, at = seg.t0
-    for (const leg of seg.legs) {
+    if (seg.style?.kind === 'choreo') {
+      const r = checkChoreo(seg.style.choreo, n).pairs(L.minSpacing)
+      ca = { d: r.d, s: r.u, i: r.i, j: r.j, pairsBelow: r.pairsBelow }
+      at = seg.t0 + r.u * T
+    }
+    for (const leg of seg.style?.kind === 'choreo' ? [] : seg.legs) {
       const r = flightClosestApproach(leg.from, leg.to, L.minSpacing)
       if (r.d < ca.d) { ca = r; at = leg.t0 + profileInverse(leg.profile, r.s) }
     }
@@ -417,7 +463,7 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
         title: `${label}: drones pass too close`,
         detail: `${ca.pairsBelow} pair${ca.pairsBelow === 1 ? '' : 's'} come closer than ${fmt(L.minSpacing)} m (closest ${fmt(ca.d, 2)} m at ${formatTime(at)}). Formations spaced ≥ ${fmt(comfy)} m always fly clear.`,
         time: at, drones: [ca.i, ca.j],
-        fix: enlarge,
+        fix: seg.style ? toDirect : enlarge,
       })
     }
   }

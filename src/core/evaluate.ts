@@ -4,6 +4,7 @@
 import type { Compiled, Leg, Segment } from './compile'
 import { GROUND_COLOR, LOOK, beatPhaseFn, pointColor, readLook } from './compile'
 import { holdPose, profileS } from './motion'
+import { choreoPos, choreoProgress, wrapPos } from './transitions'
 import type { RGB } from './color'
 import { TEXT_EFFECTS, blankLook, effectColor, type BeatPhase, type DroneLook } from './effects'
 import { hash01 } from './math'
@@ -51,6 +52,28 @@ export function evaluate(c: Compiled, t: number, pos: Float32Array, col: Float32
     case 'flight': {
       const len = seg.t1 - seg.t0
       const tau = len > 0 ? (t - seg.t0) / len : 1
+      if (seg.style?.kind === 'choreo') {
+        // Every drone on its own path and schedule; colours change as each drone moves.
+        const ch = seg.style.choreo
+        for (let i = 0; i < n; i++) choreoPos(ch, i, tau, pos)
+        if (col) {
+          for (let i = 0; i < n; i++) {
+            const m = choreoProgress(ch, i, tau)
+            const k = seg.dim ? dimFactor(m) : 1
+            for (let a = 0; a < 3; a++) col[i * 3 + a] = (seg.c0[i * 3 + a]! + (seg.c1[i * 3 + a]! - seg.c0[i * 3 + a]!) * m) * k
+          }
+        }
+        break
+      }
+      if (seg.style?.kind === 'wrap') {
+        wrapPos(seg.legs, seg.style.wrap, seg.t0, len, t, pos)
+        if (col) {
+          const m = tau * tau * (3 - 2 * tau)
+          const k = seg.dim ? dimFactor(tau) : 1
+          for (let i = 0; i < n * 3; i++) col[i] = (seg.c0[i]! + (seg.c1[i]! - seg.c0[i]!) * m) * k
+        }
+        break
+      }
       const leg = legAt(seg.legs, t)
       const s = profileS(leg.profile, t - leg.t0)
       lerpInto(leg.from, leg.to, s, pos)
@@ -123,6 +146,7 @@ function applyCues(c: Compiled, seg: Segment, t: number, pos: Float32Array, col:
         cueLook.order = cs ? cs.look[cs.slot[i]! * LOOK + 2]! : n > 1 ? i / (n - 1) : 0
         cueLook.rand = hash01(i, 4242)
         cueLook.glyphs = 0
+        cueLook.rows = 0
         cueLook.uh = Math.max(Math.abs(maxX - cx), Math.abs(minX - cx)) / r
         cueLook.vh = Math.max(Math.abs(maxY - cy), Math.abs(minY - cy)) / r
       }

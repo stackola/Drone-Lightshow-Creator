@@ -277,6 +277,12 @@ function sunflower(n: number): Float32Array {
 }
 
 /** Rows × cols lattice with width 1; the last row is centred. */
+/** Rows a filled grid of n drones has (as laid out by grid()). */
+export function gridRows(n: number, aspect: number): number {
+  const cols = Math.max(1, Math.round(Math.sqrt(n * aspect)))
+  return Math.ceil(n / cols)
+}
+
 /** A grid; `scatter` (0–0.45) jitters each point within its cell for a natural, starry look. */
 function grid(n: number, aspect: number, scatter = 0): Float32Array {
   const cols = Math.max(1, Math.round(Math.sqrt(n * aspect)))

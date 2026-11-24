@@ -148,3 +148,43 @@ describe('LED sign', () => {
     expect(count(t0 + 3.5)).toBe(150)
   })
 })
+
+describe('small LED panels', () => {
+  const lit = (doc: ReturnType<typeof newShow>) => {
+    const c = compile(doc)
+    const pos = new Float32Array(c.n * 3), col = new Float32Array(c.n * 3)
+    evaluate(c, c.sceneTimes[0]!.holdStart + 0.5, pos, col)
+    const on: [number, number][] = []
+    for (let i = 0; i < c.n; i++) if (col[i * 3]! > 0.5) on.push([pos[i * 3]!, pos[i * 3 + 1]!])
+    return on
+  }
+
+  it('a 3×5 font fits a 5-drone-tall panel exactly', () => {
+    const doc = newShow(60)
+    doc.scenes.push(newLedSign(doc, 'HI', { font: 5, speed: 0 }))
+    const bmp = textBitmap('HI', 5)
+    let on = 0
+    for (let k = 0; k < bmp.on.length; k++) on += bmp.on[k]!
+    expect(lit(doc).length).toBe(on)
+    expect(validate(doc, compile(doc)).issues).toEqual([])
+  })
+
+  it('an 8 × 10 panel shows 5×7 letters crisply, centred vertically', () => {
+    const doc = newShow(80)
+    const sc = newLedSign(doc, 'I', { speed: 0 })
+    sc.layers = [{ ...sc.layers[0]!, weight: 1, shape: { kind: 'grid', size: 7 * 3, aspect: 0.8, scatter: 0, fill: 'filled' } }]
+    doc.scenes.push(sc)
+    const on = lit(doc)
+    const rows = new Set(on.map(([, y]) => Math.round(y * 10)))
+    expect(rows.size).toBe(7) // the 7 font rows, not stretched over 10
+    expect(on.length).toBe(11) // the I glyph has 11 dots
+  })
+
+  it('panel width can be set; the rest of the fleet parks', () => {
+    const doc = newShow(200)
+    const sc = newLedSign(doc, 'GO', { columns: 12 })
+    const counts = sc.layers.map((l) => l.weight)
+    expect(counts[0]).toBe(84)
+    expect(sc.layers[1]!.role).toBe('park')
+  })
+})
