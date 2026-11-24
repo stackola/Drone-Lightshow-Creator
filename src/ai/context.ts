@@ -19,7 +19,9 @@ export function describeEffect(e: Effect): string {
     case 'twinkle': return `twinkle ${e.a} with ${e.b} sparkles at ${e.rate} Hz`
     case 'chase': return `chase ${e.b} over ${e.a} (speed ${e.speed}, width ${e.width})`
     case 'wave': return `wave ${e.b} band over ${e.a} (angle ${e.angle}°, speed ${e.speed})`
-    case 'flash': return `flash ${e.color} ${e.beatSync ? `every ${e.every} beat${e.every > 1 ? 's' : ''}` : 'once'} (decay ${e.decay}s)`
+    case 'flash': return `flash ${e.color} ${e.beatSync ? (e.onAccents ? 'on the music’s accents' : `every ${e.every} beat${e.every > 1 ? 's' : ''}`) : 'once'} (decay ${e.decay}s)`
+    case 'react': return `${e.color} pulsing with the music's loudness (floor ${Math.round(e.floor * 100)}%)`
+    case 'meter': return `level meter ${e.a}→${e.b} following the music's loudness`
     case 'strobe': return `strobe ${e.color} at ${e.rate} Hz`
     case 'off': return 'lights off'
     case 'image': return 'image colours'
@@ -88,14 +90,21 @@ export function summarizeShow(doc: ShowDoc, compiled: Compiled = compile(doc), v
 export function describeMusic(doc: ShowDoc): string {
   const m = summarizeMusic(doc)
   if (!m) return 'No music is loaded (or no beat was detected).'
+  const songEnd = m.offset + m.duration
+  const c = compile(doc)
+  const showEnd = c.sceneTimes.length ? c.sceneTimes[c.sceneTimes.length - 1]!.holdEnd : 0
+  const onScreen = (s: { start: number; end: number }) =>
+    doc.scenes.filter((_, i) => { const t = c.sceneTimes[i]; return t && t.holdStart < s.end && t.holdEnd > s.start }).map((sc) => `"${sc.name}"`).join(', ')
   const lines = [
-    `${Math.round(m.bpm)} BPM, bar length ${m.barLength.toFixed(2)} s, music plays ${formatTime(m.offset)}–${formatTime(m.offset + m.duration)} in show time.`,
-    'Sections by loudness:',
-    ...m.sections.map((s) => `- ${formatTime(s.start)}–${formatTime(s.end)}: ${s.level}`),
+    `${Math.round(m.bpm)} BPM, bar length ${m.barLength.toFixed(2)} s. The song plays ${formatTime(m.offset)}–${formatTime(songEnd)} in show time (${formatTime(m.duration)} long); the last formation currently ends at ${formatTime(showEnd)}${Math.abs(showEnd - songEnd) > m.barLength ? (showEnd < songEnd ? ` — ${Math.round(songEnd - showEnd)} s before the song ends` : ` — ${Math.round(showEnd - songEnd)} s after the song ends`) : ' (with the song)'}.`,
+    'Sections (1-based index · label · show time · bars · loudness · formations held during it):',
+    ...m.sections.map((s, i) => `${i + 1}. ${s.label} · ${formatTime(s.start)}–${formatTime(s.end)} · ${s.bars} bars · ${Math.round(s.energy * 100)}% · ${onScreen(s) || '—'}`),
+    m.accents.length ? `Accents (stand-out hits, show time): ${m.accents.slice(0, 40).map((t) => t.toFixed(1)).join(', ')}${m.accents.length > 40 ? ` … (${m.accents.length} in all)` : ''}` : 'No accents detected.',
     'Bars (show time:loudness 0–9):',
     m.bars.map((b) => `${b.t.toFixed(1)}:${b.energy}`).join(' '),
   ]
   if (!doc.audio?.energy) lines.push('(Loudness was not analysed for this song; reload the music to get it.)')
+  if (!doc.audio?.sections) lines.push('(Sections were estimated from loudness; reload the music for full analysis.)')
   return lines.join('\n')
 }
 

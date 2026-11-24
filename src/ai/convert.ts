@@ -13,6 +13,7 @@ import { comfortableSpacing, type Validation } from '@/core/validate'
 import { compile } from '@/core/compile'
 import { ceilTo } from '@/core/math'
 import { alignScenesToBars } from '@/core/music'
+import { arriveAt, fitToSong, lightTheMusic, musicMoment } from '@/core/musicTools'
 import { autoFix } from '@/core/fixes'
 
 const clamp = (v: number | undefined, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d)
@@ -44,7 +45,9 @@ export function effectFromInput(l: LightInput, fallbackColor = '#38bdf8'): Effec
     case 'twinkle': return { kind: 'twinkle', a: color, b: normalizeHex(l.color2, '#ffffff'), rate: clamp(l.rate, 0, 20, 1.5), brightness }
     case 'chase': return { kind: 'chase', a: color, b: normalizeHex(l.color2, '#ffffff'), speed: clamp(l.speed, -5, 5, 0.4), width: clamp(l.width, 0.01, 1, 0.2), brightness }
     case 'wave': return { kind: 'wave', a: color, b: normalizeHex(l.color2, '#ffffff'), angle, speed: clamp(l.speed, -5, 5, 0.5), width: clamp(l.width, 0.02, 1, 0.3), brightness }
-    case 'flash': return { kind: 'flash', color: normalizeHex(l.color, '#ffffff'), decay: clamp(l.decay, 0.02, 10, 0.4), beatSync: l.beat_sync ?? false, every: Math.round(clamp(l.every, 1, 64, 1)), brightness }
+    case 'flash': return { kind: 'flash', color: normalizeHex(l.color, '#ffffff'), decay: clamp(l.decay, 0.02, 10, 0.4), beatSync: (l.beat_sync ?? false) || !!l.on_accents, every: Math.round(clamp(l.every, 1, 64, 1)), onAccents: !!l.on_accents, brightness }
+    case 'react': return { kind: 'react', color, floor: clamp(l.floor, 0, 1, 0.25), brightness }
+    case 'meter': return { kind: 'meter', a: normalizeHex(l.color, '#22c55e'), b: normalizeHex(l.color2, '#ff3b3b'), brightness }
     case 'strobe': return { kind: 'strobe', color: normalizeHex(l.color, '#ffffff'), rate: clamp(l.rate, 0.5, 25, 8), brightness }
     case 'off': return defaultEffect('off')
     case 'image': return { kind: 'image', brightness }
@@ -167,8 +170,20 @@ export function buildShowFromPlan(plan: ShowPlan, base: ShowDoc, custom: Map<num
   plan.scenes.slice(0, 30).forEach((s, i) => {
     doc = { ...doc, scenes: [...doc.scenes, sceneFromInput(doc, s, { custom: custom.get(i) })] }
   })
+  const music = opts.alignToMusic !== false && !!doc.audio
+  // With music: land every arrival on a bar, put the chosen formations on their sections
+  // (earliest first), then fit the rest of the show so the finale ends with the song.
   const aligned = opts.alignToMusic === false ? { doc, aligned: 0 } : alignScenesToBars(doc)
   doc = aligned.doc
+  if (music) {
+    const targets = plan.scenes.slice(0, 30).map((s, i) => ({ i, sec: s.arrive_at_section })).filter((x) => x.sec !== undefined)
+    let lastLanded = -1
+    for (const { i, sec } of targets) {
+      const t = musicMoment(doc, { section: Math.round(sec!) - 1 })
+      if (t !== null && i < doc.scenes.length && i > lastLanded) { doc = arriveAt(doc, i, t).doc; lastLanded = i }
+    }
+    if (plan.fit_to_song !== false) doc = (lastLanded >= 0 ? fitToSong(doc, { from: lastLanded }) : fitToSong(doc)).doc
+  }
   const times = compile(doc).sceneTimes
   const cues = plan.cues.slice(0, 80).flatMap((q) => {
     const st = times[Math.round(q.scene_index)]
@@ -176,6 +191,7 @@ export function buildShowFromPlan(plan: ShowPlan, base: ShowDoc, custom: Map<num
     return [cueFromInput(st.holdStart + q.offset_seconds, q.light, q)]
   })
   doc = { ...doc, cues }
+  if (music && plan.music_lighting !== 'none') doc = lightTheMusic(doc, plan.music_lighting === 'subtle' ? 'subtle' : 'bold').doc
   const fixed = autoFix(doc)
   return { doc: fixed.doc, validation: fixed.validation, alignedToMusic: aligned.aligned, fixesApplied: fixed.applied }
 }

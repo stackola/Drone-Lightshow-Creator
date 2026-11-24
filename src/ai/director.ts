@@ -32,7 +32,7 @@ Good shows
 - Open with something simple and striking, build through contrast (shape, colour, scale, motion), and finish with the biggest, brightest moment.
 - Tell the brief's story in a few clear beats rather than many small ones. Favour fewer, stronger scenes over many short ones.
 - Use the client's colours and words where the brief gives them.
-- With music: hold formations for whole bars (hold_seconds = bars × bar length), save big shapes and beat-synced flashes (pulse or flash with beat_sync) for loud sections, use slow twinkles and dimmed flights in quiet passages. The engine lands every arrival exactly on a downbeat.`
+- With music: the song is the backbone. Read its sections and shape the show to them: quiet intro → calm, simple formations (text written on, slow breathing); builds → a transition that rises (cascade, swirl) arriving on the drop; drops → the biggest, brightest formations (use arrive_at_section to land your hero formation exactly on the biggest drop's start); breaks → something tender or a spare starfield; outro → the farewell text and a gentle finale. Hold for whole bars (hold_seconds = bars × bar length). Keep music_lighting on (bold for energetic songs, subtle for gentle ones) — it adds breathing, sweeps and flashes on every hit, so your own cues can focus on a few signature moments. The engine fits the show to the song, lands arrivals on downbeats and on the sections you choose.`
 
 export interface DirectorRequest {
   brief: string

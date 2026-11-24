@@ -207,6 +207,7 @@ function cue(q: Obj): LightCue {
     fadeOut: num(q.fadeOut, 0, 0, 600),
     blend: q.blend === 'multiply' || q.blend === 'add' ? q.blend : 'replace',
     effect: effect(q.effect),
+    ...(typeof q.tag === 'string' ? { tag: q.tag.slice(0, 40) } : {}),
   }
 }
 
@@ -220,5 +221,18 @@ function audioMeta(v: unknown): AudioMeta | null {
     downbeat: Math.round(num(v.downbeat, 0, 0)),
     bpm: num(v.bpm, 0, 0),
     ...(Array.isArray(v.energy) ? { energy: v.energy.map((e) => num(e, 0, 0, 1)) } : {}),
+    ...(Array.isArray(v.bass) ? { bass: v.bass.map((e) => num(e, 0, 0, 1)) } : {}),
+    ...(Array.isArray(v.bright) ? { bright: v.bright.map((e) => num(e, 0, 0, 1)) } : {}),
+    ...(Array.isArray(v.accents) ? { accents: v.accents.filter((b): b is number => typeof b === 'number' && Number.isFinite(b)) } : {}),
+    ...(Array.isArray(v.sections)
+      ? {
+          sections: v.sections.filter(isObj).map((x) => ({
+            start: num(x.start, 0, 0), end: num(x.end, 0, 0),
+            label: (['intro', 'verse', 'build', 'drop', 'break', 'outro'].includes(x.label as string) ? x.label : 'verse') as 'verse',
+            energy: num(x.energy, 0.5, 0, 1),
+          })).filter((x) => x.end > x.start),
+        }
+      : {}),
+    ...(typeof v.generated === 'string' ? { generated: v.generated.slice(0, 60) } : {}),
   }
 }

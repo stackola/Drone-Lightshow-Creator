@@ -4,7 +4,8 @@ import { ShowPlan, type ShowPlan as Plan } from './schemas'
 import { newScene, newShow } from '@/core/defaults'
 import { compile } from '@/core/compile'
 import { validate } from '@/core/validate'
-import { alignScenesToBars, barTimes, summarizeMusic } from '@/core/music'
+import { alignScenesToBars, barTimes, songSections, summarizeMusic } from '@/core/music'
+import { describeMusic } from './context'
 import { autoFix } from '@/core/fixes'
 import { beatEnergy } from '@/core/beats'
 import type { ShowDoc } from '@/core/types'
@@ -136,5 +137,40 @@ describe('beat energy', () => {
     const e = beatEnergy(x, sr, [0, 1, 2, 3])
     expect(e[3]).toBe(1)
     expect(e[0]!).toBeLessThan(0.2)
+  })
+})
+
+describe('music-first plans', () => {
+  it('fits the song, lands the chosen formation on its section, and lights the music', () => {
+    const base = withMusic(newShow(120), 120, 150, 0)
+    // A longer intro (60 s), then the drop, then a medium outro.
+    base.audio!.energy = base.audio!.beats.map((_, i) => (i < 120 ? 0.2 : i < 240 ? 0.95 : 0.55))
+    const plan: Plan = {
+      title: 'Drop', concept: 'Calm intro, hero on the drop.',
+      scenes: [
+        { name: 'Hello', shape: { kind: 'circle' }, light: { effect: 'solid', color: '#ffffff' }, hold_seconds: 8 },
+        { name: 'Hero', shape: { kind: 'heart' }, light: { effect: 'solid', color: '#ff3366' }, hold_seconds: 8, arrive_at_section: 2 },
+        { name: 'Bye', shape: { kind: 'star' }, light: { effect: 'solid', color: '#ffd36e' }, hold_seconds: 8 },
+      ],
+      cues: [],
+      music_lighting: 'bold',
+    }
+    const built = buildShowFromPlan(plan, base)
+    const sections = songSections(built.doc)
+    const c = compile(built.doc)
+    expect(c.sceneTimes[1]!.holdStart).toBeCloseTo(sections[1]!.start, 1)
+    expect(built.doc.cues.some((q) => q.tag === 'music')).toBe(true)
+    expect(built.validation.issues).toEqual([])
+    // The finale ends with the song (within a bar).
+    expect(Math.abs(c.sceneTimes[2]!.holdEnd - 150)).toBeLessThanOrEqual(2.01)
+  })
+
+  it('describes the song for the model: numbered sections and accents', () => {
+    const doc = withMusic(newShow(40), 120, 150, 0)
+    doc.audio!.accents = [32.1, 96.4]
+    const text = describeMusic(doc)
+    expect(text).toMatch(/1\. intro/)
+    expect(text).toMatch(/drop|verse/)
+    expect(text).toMatch(/Accents.*32\.1/)
   })
 })

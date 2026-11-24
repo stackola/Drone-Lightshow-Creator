@@ -5,6 +5,10 @@
 // 3. Beats: dynamic-programming tracker (Ellis, 2007) that balances onset
 //    strength against keeping a steady tempo.
 // 4. Downbeat: the beat phase (of 4) with the strongest onsets.
+// 5. Character per beat (loudness, bass, brightness), accents (the hits that
+//    stand out) and sections (see sections.ts).
+
+import { findSections, type Section } from './sections'
 
 export interface BeatResult {
   bpm: number
@@ -14,6 +18,14 @@ export interface BeatResult {
   downbeat: number
   /** Loudness of each beat (RMS from this beat to the next), normalised so the loudest is 1. */
   energy: number[]
+  /** Low-frequency (kick/bass, < ~150 Hz) loudness per beat, normalised. */
+  bass: number[]
+  /** Share of high-frequency content per beat (hats, cymbals, brightness), normalised. */
+  bright: number[]
+  /** Times (s) of accents: hits that stand clearly above their surroundings. */
+  accents: number[]
+  /** Song structure: intro, verse, build, drop, break, outro. */
+  sections: Section[]
 }
 
 const TARGET_SR = 11025
@@ -33,7 +45,7 @@ export function detectBeats(samples: Float32Array, sampleRate: number): BeatResu
   }
   const env = onsetEnvelope(x)
   const hopTime = HOP / sr
-  if (env.length < 64) return { bpm: 0, beats: [], downbeat: 0, energy: [] }
+  if (env.length < 64) return { bpm: 0, beats: [], downbeat: 0, energy: [], bass: [], bright: [], accents: [], sections: [] }
 
   const period = estimatePeriod(env, hopTime)
   const frames = trackBeats(env, period)
@@ -47,7 +59,94 @@ export function detectBeats(samples: Float32Array, sampleRate: number): BeatResu
     const score = c ? s / c : 0
     if (score > bestScore) { bestScore = score; bestPhase = ph }
   }
-  return { bpm: 60 / (period * hopTime), beats, downbeat: Math.min(bestPhase, Math.max(0, beats.length - 1)), energy: beatEnergy(x, sr, beats) }
+  const downbeat = Math.min(bestPhase, Math.max(0, beats.length - 1))
+  const energy = beatEnergy(x, sr, beats)
+  const { bass, bright } = beatCharacter(x, sr, beats)
+  const accents = findAccents(env, hopTime, FRAME / 2 / sr, period * hopTime)
+  const duration = x.length / sr
+  const sections = findSections({ beats, downbeat, energy, bass, bright, accents, duration })
+  // Where the music steps up (a drop, a chorus), the first hit is an accent too.
+  for (let i = 1; i < sections.length; i++) {
+    const a = sections[i - 1]!, b = sections[i]!
+    if (b.energy < a.energy * 1.3 + 0.05 || accents.some((t) => Math.abs(t - b.start) < 0.3)) continue
+    // Snap to the strongest onset within ±0.25 s of the boundary.
+    const f0 = Math.max(0, Math.round((b.start - 0.25 - FRAME / 2 / sr) / hopTime)), f1 = Math.min(env.length - 1, Math.round((b.start + 0.25 - FRAME / 2 / sr) / hopTime))
+    let bf = f0
+    for (let f = f0; f <= f1; f++) if (env[f]! > env[bf]!) bf = f
+    accents.push(Math.round((bf * hopTime + FRAME / 2 / sr) * 1000) / 1000)
+  }
+  accents.sort((p, q) => p - q)
+  return { bpm: 60 / (period * hopTime), beats, downbeat, energy, bass, bright, accents, sections }
+}
+
+/** One-pole low-pass, in place on a copy. */
+function lowpass(x: Float32Array, sr: number, fc: number): Float32Array {
+  const a = Math.exp((-2 * Math.PI * fc) / sr)
+  const out = new Float32Array(x.length)
+  let y = 0
+  for (let i = 0; i < x.length; i++) { y = (1 - a) * x[i]! + a * y; out[i] = y }
+  return out
+}
+
+/** Per-beat bass loudness and brightness (high-band share), each normalised to its maximum. */
+export function beatCharacter(x: Float32Array, sr: number, beats: number[]): { bass: number[]; bright: number[] } {
+  if (!beats.length) return { bass: [], bright: [] }
+  // Two passes of a one-pole filter ≈ a gentle 12 dB/octave slope.
+  const low = lowpass(lowpass(x, sr, 150), sr, 150)
+  const mid = lowpass(lowpass(x, sr, 2000), sr, 2000)
+  const bass: number[] = [], bright: number[] = []
+  beats.forEach((b, i) => {
+    const a = Math.max(0, Math.floor(b * sr))
+    const next = beats[i + 1] ?? b + (i > 0 ? b - beats[i - 1]! : 0.5)
+    const e = Math.min(x.length, Math.max(a + 1, Math.floor(next * sr)))
+    let sl = 0, sh = 0, st = 0
+    for (let k = a; k < e; k++) {
+      sl += low[k]! * low[k]!
+      const h = x[k]! - mid[k]!
+      sh += h * h
+      st += x[k]! * x[k]!
+    }
+    const m = Math.max(1, e - a)
+    bass.push(Math.sqrt(sl / m))
+    bright.push(st > 1e-12 ? Math.sqrt(sh / st) : 0)
+  })
+  const nb = Math.max(...bass, 1e-9), nh = Math.max(...bright, 1e-9)
+  return { bass: bass.map((v) => Math.round((v / nb) * 100) / 100), bright: bright.map((v) => Math.round((v / nh) * 100) / 100) }
+}
+
+/**
+ * Accents: onset peaks that stand well above the typical hits just before
+ * them (70th percentile of peaks in the previous 4 s) and are at least as
+ * strong as those just after — a crash opening a drop, a hit after a quiet
+ * bar — not the last kicks before a break. At most one every two beats.
+ */
+export function findAccents(env: Float32Array, hopTime: number, offset: number, beatLen: number): number[] {
+  const n = env.length
+  const peaks: { f: number; v: number }[] = []
+  for (let f = 1; f < n - 1; f++) if (env[f]! >= env[f - 1]! && env[f]! > env[f + 1]! && env[f]! > 0.5) peaks.push({ f, v: env[f]! })
+  const w = Math.max(8, Math.round(4 / hopTime))
+  // Only the song's strongest onsets qualify (top 10% of peaks, and well above the noise).
+  const sorted = peaks.map((p) => p.v).sort((a, b) => a - b)
+  const strong = Math.max(4, sorted[Math.floor(sorted.length * 0.9)] ?? 4)
+  const cands: { f: number; v: number }[] = []
+  let lo = 0
+  for (let i = 0; i < peaks.length; i++) {
+    const p = peaks[i]!
+    while (peaks[lo]!.f < p.f - w) lo++
+    const before: number[] = [], after: number[] = []
+    for (let k = lo; k < peaks.length && peaks[k]!.f <= p.f + w; k++) {
+      if (k < i) before.push(peaks[k]!.v)
+      else if (k > i) after.push(peaks[k]!.v)
+    }
+    const pct = (a: number[]) => { if (!a.length) return 0; a.sort((x, y) => x - y); return a[Math.floor(a.length * 0.7)]! }
+    if (p.v > strong && p.v > 2.2 * pct(before) && p.v > 1.1 * pct(after)) cands.push(p)
+  }
+  // Strongest first, at most one every two beats.
+  cands.sort((p, q) => q.v - p.v)
+  const minGap = Math.max(1, Math.round((beatLen * 1.9) / hopTime))
+  const taken: number[] = []
+  for (const c of cands) if (taken.every((t) => Math.abs(t - c.f) >= minGap)) taken.push(c.f)
+  return taken.sort((p, q) => p - q).map((f) => Math.round((f * hopTime + offset) * 1000) / 1000)
 }
 
 /** RMS of the signal between consecutive beats, normalised to the loudest beat. */

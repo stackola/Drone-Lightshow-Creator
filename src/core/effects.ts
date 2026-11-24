@@ -47,6 +47,8 @@ export const EFFECTS: EffectDef[] = [
   { kind: 'wave', label: 'Wave' },
   { kind: 'image', label: 'Shape colours' },
   { kind: 'flash', label: 'Flash' },
+  { kind: 'react', label: 'React to music' },
+  { kind: 'meter', label: 'Level meter' },
   { kind: 'strobe', label: 'Strobe' },
   { kind: 'off', label: 'Lights off' },
   { kind: 'write', label: 'Write on' },
@@ -65,7 +67,9 @@ export function defaultEffect(kind: EffectKind, base = '#38bdf8'): Effect {
     case 'chase': return { kind, a: '#1e293b', b: base, speed: 0.4, width: 0.15, brightness: 1 }
     case 'wave': return { kind, a: base, b: '#ffffff', angle: 0, speed: 0.5, width: 0.3, brightness: 1 }
     case 'image': return { kind, brightness: 1 }
-    case 'flash': return { kind, color: '#ffffff', decay: 0.35, beatSync: true, every: 1, brightness: 1 }
+    case 'flash': return { kind, color: '#ffffff', decay: 0.35, beatSync: true, every: 1, onAccents: false, brightness: 1 }
+    case 'react': return { kind, color: base, floor: 0.25, brightness: 1 }
+    case 'meter': return { kind, a: '#22c55e', b: '#ff3b3b', brightness: 1 }
     case 'strobe': return { kind, color: '#ffffff', rate: 8, brightness: 1 }
     case 'off': return { kind, brightness: 0 }
     case 'write': return { kind, a: base, b: '#000000', pen: '#ffffff', duration: 4, brightness: 1 }
@@ -79,7 +83,15 @@ export function defaultEffect(kind: EffectKind, base = '#38bdf8'): Effect {
  * Beat clock at show time t: phase within the current beat (0..1), the beat's
  * index, and seconds since it started — or null outside the music.
  */
-export type BeatPhase = (t: number) => { phase: number; index: number; since: number } | null
+export type BeatPhase = (t: number) => {
+  phase: number
+  index: number
+  since: number
+  /** Music loudness 0..1 at t (interpolated between beats; 0.5 if not analysed). */
+  energy: number
+  /** Seconds since the last accent (a stand-out hit), Infinity if none yet. */
+  accentSince: number
+} | null
 
 const WHITE: RGB = [1, 1, 1]
 
@@ -176,7 +188,11 @@ export function effectColor(e: Effect, d: DroneLook, tau: number, t: number, bea
     case 'flash': {
       // Flash on every Nth beat when synced (and music is playing), else once at the start.
       let since = tau
-      if (e.beatSync) {
+      if (e.beatSync && e.onAccents) {
+        // On the music's accents (its stand-out hits) instead of every beat.
+        const b = beat(t)
+        since = b && Number.isFinite(b.accentSince) ? b.accentSince : Infinity
+      } else if (e.beatSync) {
         const b = beat(t)
         if (b) {
           const every = Math.max(1, Math.round(e.every))
@@ -189,6 +205,26 @@ export function effectColor(e: Effect, d: DroneLook, tau: number, t: number, bea
       const k = since >= 0 ? Math.exp(-since / Math.max(0.02, e.decay)) : 0
       const c = hexToRgb(e.color)
       out[0] = c[0] * k; out[1] = c[1] * k; out[2] = c[2] * k
+      break
+    }
+    case 'react': {
+      // Loudness → brightness, with a floor so quiet passages don't go black.
+      const b = beat(t)
+      const e2 = b ? b.energy : 1
+      const k = e.floor + (1 - e.floor) * Math.pow(Math.max(0, Math.min(1, e2)), 1.4)
+      const c = hexToRgb(e.color)
+      out[0] = c[0] * k; out[1] = c[1] * k; out[2] = c[2] * k
+      break
+    }
+    case 'meter': {
+      // Bottom-up fill to the current loudness, green to red like a VU meter; soft top edge.
+      const b = beat(t)
+      const level = b ? b.energy : 0
+      const vh = d.vh > 1e-6 ? d.vh : 1
+      const y = Math.max(0, Math.min(1, (d.v + vh) / (2 * vh)))
+      const on = Math.max(0, Math.min(1, (level - y) * 12 + 0.5))
+      mix(hexToRgb(e.a), hexToRgb(e.b), y, out)
+      out[0] *= on; out[1] *= on; out[2] *= on
       break
     }
     case 'strobe': {
@@ -283,6 +319,8 @@ export function effectSwatch(e: Effect): string {
     case 'chase': return `linear-gradient(90deg, ${e.a}, ${e.b})`
     case 'wave': return `linear-gradient(90deg, ${e.a}, ${e.b}, ${e.a})`
     case 'image': return 'linear-gradient(90deg,#f87171,#38bdf8)'
+    case 'react': return `linear-gradient(90deg, #000, ${e.color}, #000, ${e.color})`
+    case 'meter': return `linear-gradient(0deg, ${e.a}, ${e.b})`
     case 'write': return `linear-gradient(90deg, ${e.a} 0 60%, ${e.pen} 60% 70%, ${e.b} 70%)`
     case 'type': return `linear-gradient(90deg, ${e.a} 0 55%, ${e.cursor} 55% 65%, ${e.b} 65%)`
     case 'flip': return `repeating-linear-gradient(90deg, ${e.a} 0 5px, ${e.b} 5px 7px)`

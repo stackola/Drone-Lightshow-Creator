@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Music, Pause, Play, Plus, Repeat, Magnet, ZoomIn, ZoomOut, Maximize2, AlertTriangle, X, Drum } from 'lucide-react'
-import { alignScenesToBars } from '@/core/music'
+import { ChevronLeft, ChevronRight, Music, Pause, Play, Plus, Repeat, Magnet, ZoomIn, ZoomOut, Maximize2, AlertTriangle, X, Drum, Sparkle } from 'lucide-react'
+import { alignScenesToBars, songAccents, songSections } from '@/core/music'
+import { MUSIC_TAG, fitToSong, lightTheMusic, type LightingStyle } from '@/core/musicTools'
+import { SECTION_COLORS } from '@/core/sections'
 import { getState, useStore } from '@/state/store'
 import { pause, play, seek, setRate, togglePlay } from '@/state/playback'
 import { CUE_PRESETS, addCue, focusIssue, seekToScene, stepScene, updateCue, updateScene } from '@/state/actions'
@@ -15,7 +17,7 @@ import type { Scene } from '@/core/types'
 const trLabel = (k: string) => TRANSITIONS.find((x) => x.kind === k)?.label ?? k
 
 const PAD = 14
-const LANES = { ruler: 24, scenes: 46, lights: 34, music: 42 }
+const LANES = { ruler: 24, scenes: 46, lights: 34, music: 58 }
 
 function fmtTime(t: number) {
   const m = Math.floor(t / 60)
@@ -296,6 +298,7 @@ export function Timeline() {
 
   const totalH = LANES.ruler + LANES.scenes + LANES.lights + LANES.music
   const bpm = doc.audio?.bpm
+  const sections = useMemo(() => songSections(doc), [doc.audio]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="timeline">
@@ -358,16 +361,35 @@ export function Timeline() {
           </div>
           <div className="tl-label" style={{ ['--h' as string]: `${LANES.music}px` }}>
             Music
-            <MenuButton className="btn ghost icon sm" title="Music" button={<Music size={13} />} width={200}>
+            <MenuButton className="btn ghost icon sm" title="Music" button={<Music size={13} />} width={250}>
               {(close) => (
                 <>
                   <button className="menu-item" onClick={async () => { close(); const f = await pickFile('audio/*'); if (f) await loadMusic(await f.arrayBuffer(), f.type || 'audio/mpeg', f.name) }}>
                     {doc.audio ? 'Replace music…' : 'Load music…'}
                   </button>
                   {doc.audio && (
-                    <button className="menu-item" onClick={() => { close(); void removeMusic() }}>
-                      <X size={13} /> Remove music
-                    </button>
+                    <>
+                      <div className="menu-sep" />
+                      <div className="menu-label">Use the music</div>
+                      <button className="menu-item" title="Cues that follow the song: breathing in quiet parts, sweeps into drops, flashes on every hit" onClick={() => { close(); runLightTheMusic('bold') }}>
+                        <Sparkle size={13} /> Light the music — bold
+                      </button>
+                      <button className="menu-item" onClick={() => { close(); runLightTheMusic('subtle') }}>
+                        <Sparkle size={13} /> Light the music — subtle
+                      </button>
+                      {doc.cues.some((q) => q.tag === MUSIC_TAG) && (
+                        <button className="menu-item" onClick={() => { close(); getState().update((d) => { d.cues = d.cues.filter((q) => q.tag !== MUSIC_TAG) }, 'Remove music lighting') }}>
+                          <X size={13} /> Remove music lighting
+                        </button>
+                      )}
+                      <button className="menu-item" title="Every arrival on a bar line, and the show stretched or tightened so the finale ends with the song" onClick={() => { close(); runFitToSong() }}>
+                        <Drum size={13} /> Fit show to song
+                      </button>
+                      <div className="menu-sep" />
+                      <button className="menu-item" onClick={() => { close(); void removeMusic() }}>
+                        <X size={13} /> Remove music
+                      </button>
+                    </>
                   )}
                 </>
               )}
@@ -407,8 +429,21 @@ export function Timeline() {
               {doc.cues.length === 0 && <div className="lane-empty" style={{ left: toX(0) }}>Double-click to add a light cue — flashes, sweeps and washes that play over the formations</div>}
             </div>
             <div className="tl-lane" style={{ ['--h' as string]: `${LANES.music}px` }}>
+              {doc.audio && sections.map((sec, i) => (
+                <button
+                  key={i}
+                  className="sec-band"
+                  style={{ left: toX(sec.start), width: Math.max(2, (sec.end - sec.start) * pps - 1), ['--c' as string]: SECTION_COLORS[sec.label] }}
+                  title={`${sec.label[0]!.toUpperCase() + sec.label.slice(1)} · ${fmtTime(sec.start)}–${fmtTime(sec.end)} · loudness ${Math.round(sec.energy * 100)}% — click to jump here`}
+                  onClick={() => seek(sec.start)}
+                >
+                  {(sec.end - sec.start) * pps > 36 ? sec.label : ''}
+                </button>
+              ))}
+              {doc.audio && songAccents(doc).map((a, i) => <div key={i} className="accent-tick" style={{ left: toX(a) }} title={`Accent at ${fmtTime(a)}`} />)}
               {doc.audio ? (
                 <MusicClip left={toX(doc.audio.offset)} width={doc.audio.duration * pps} name={doc.audio.name} peaks={audio?.peaks ?? null} missing={!audio}
+                  energy={doc.audio.energy ?? null} beats={doc.audio.beats} duration={doc.audio.duration}
                   onPointerDown={(e) => {
                     const o0 = doc.audio!.offset
                     drag(e, (_t, ev, dt) => {
@@ -434,8 +469,25 @@ export function Timeline() {
   )
 }
 
+export function runLightTheMusic(style: LightingStyle) {
+  const s = getState()
+  const { doc, added } = lightTheMusic(s.doc, style)
+  if (!added) { s.toast('No song structure to light — load music first.', 'err'); return }
+  s.replaceDoc(doc, `Light the music (${style})`)
+  s.toast(`${added} light cues now follow the music`)
+}
+
+export function runFitToSong() {
+  const s = getState()
+  if (!s.doc.audio) { s.toast('Load music first.', 'err'); return }
+  const { doc, endGap } = fitToSong(s.doc)
+  s.replaceDoc(doc, 'Fit show to song')
+  const bar = 240 / Math.max(1, s.doc.audio.bpm)
+  s.toast(Math.abs(endGap) <= bar + 0.01 ? 'The show now lands on the bars and ends with the song' : endGap < 0 ? `The show runs ${Math.round(-endGap)} s past the song even at minimum holds` : `Fitted — the song continues ${Math.round(endGap)} s after the finale`)
+}
+
 function cueLabel(kind: string): string {
-  return { solid: 'Wash', gradient: 'Gradient', rainbow: 'Rainbow', pulse: 'Pulse', twinkle: 'Twinkle', chase: 'Chase', wave: 'Sweep', image: 'Image', flash: 'Flash', strobe: 'Strobe', off: 'Blackout' }[kind] ?? kind
+  return { solid: 'Wash', gradient: 'Gradient', rainbow: 'Rainbow', pulse: 'Pulse', twinkle: 'Twinkle', chase: 'Chase', wave: 'Sweep', image: 'Image', flash: 'Flash', strobe: 'Strobe', off: 'Blackout', react: 'Breathe', meter: 'Meter', write: 'Write', type: 'Type', flip: 'Flip', matrix: 'LED' }[kind] ?? kind
 }
 
 function TimeCode({ duration }: { duration: number }) {
@@ -460,29 +512,47 @@ function Playhead({ toX, scrollRef }: { toX: (t: number) => number; scrollRef: R
   return <div className="playhead" style={{ left: x - 1 }} />
 }
 
-function MusicClip({ left, width, name, peaks, missing, onPointerDown }: { left: number; width: number; name: string; peaks: Float32Array | null; missing: boolean; onPointerDown: (e: React.PointerEvent) => void }) {
+function MusicClip({ left, width, name, peaks, missing, energy, beats, duration, onPointerDown }: {
+  left: number; width: number; name: string; peaks: Float32Array | null; missing: boolean
+  energy: number[] | null; beats: number[]; duration: number
+  onPointerDown: (e: React.PointerEvent) => void
+}) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const cv = ref.current
-    if (!cv || !peaks) return
+    if (!cv || (!peaks && !energy)) return
     const w = Math.max(1, Math.min(16000, Math.round(width)))
-    const h = 32
+    const h = 34
     cv.width = w
     cv.height = h
     const ctx = cv.getContext('2d')!
     ctx.clearRect(0, 0, w, h)
-    ctx.fillStyle = 'rgba(120, 180, 255, 0.55)'
-    for (let x = 0; x < w; x++) {
-      const a = Math.floor((x / w) * peaks.length), b = Math.max(a + 1, Math.floor(((x + 1) / w) * peaks.length))
-      let m = 0
-      for (let i = a; i < b; i++) m = Math.max(m, peaks[i]!)
-      const ph = Math.max(1, m * h * 0.95)
-      ctx.fillRect(x, (h - ph) / 2, 1, ph)
+    if (peaks) {
+      ctx.fillStyle = 'rgba(120, 180, 255, 0.45)'
+      for (let x = 0; x < w; x++) {
+        const a = Math.floor((x / w) * peaks.length), b = Math.max(a + 1, Math.floor(((x + 1) / w) * peaks.length))
+        let m = 0
+        for (let i = a; i < b; i++) m = Math.max(m, peaks[i]!)
+        const ph = Math.max(1, m * h * 0.95)
+        ctx.fillRect(x, (h - ph) / 2, 1, ph)
+      }
     }
-  }, [peaks, width])
+    // Loudness curve (per beat) — the shape of the song at a glance.
+    if (energy && beats.length > 1 && duration > 0) {
+      ctx.strokeStyle = 'rgba(255, 214, 102, 0.9)'
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      beats.forEach((b, i) => {
+        const x = (b / duration) * w, y = h - 2 - (energy[i] ?? 0) * (h - 6)
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      })
+      ctx.stroke()
+    }
+  }, [peaks, width, energy, beats, duration])
   return (
     <div className="music-clip" style={{ left, width: Math.max(4, width) }} onPointerDown={onPointerDown} title="Drag to move the music">
-      {peaks && <canvas ref={ref} />}
+      {(peaks || energy) && <canvas ref={ref} />}
       <span className="mname">{name}{missing ? ' — file not loaded (use the Music menu to re-attach)' : ''}</span>
     </div>
   )

@@ -3,6 +3,37 @@
 
 import type { ShowDoc } from './types'
 import { autoFlightDuration, compile, showBeats } from './compile'
+import { findSections, type Section } from './sections'
+
+/**
+ * The song's sections in show time: from the analysis, or (for music added
+ * before sections were detected) derived from the per-beat loudness.
+ */
+export function songSections(doc: ShowDoc): Section[] {
+  const a = doc.audio
+  if (!a || a.beats.length < 8) return []
+  const secs = a.sections?.length ? a.sections : findSections({ beats: a.beats, downbeat: a.downbeat, energy: a.energy ?? a.beats.map(() => 0.5), duration: a.duration })
+  return secs.map((x) => ({ ...x, start: x.start + a.offset, end: x.end + a.offset }))
+}
+
+/** Accents (stand-out hits) in show time. */
+export function songAccents(doc: ShowDoc): number[] {
+  const a = doc.audio
+  return a?.accents ? a.accents.map((t) => t + a.offset) : []
+}
+
+/** Music loudness at show time t, 0..1 (interpolated between beats), or null outside the music. */
+export function energyAt(doc: ShowDoc, t: number): number | null {
+  const a = doc.audio
+  if (!a?.energy?.length) return null
+  const beats = showBeats(doc)
+  if (t < beats[0]! || t > beats[beats.length - 1]!) return null
+  let lo = 0, hi = beats.length - 1
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (beats[mid]! <= t) lo = mid; else hi = mid - 1 }
+  const e0 = a.energy[lo] ?? 0, e1 = a.energy[lo + 1] ?? e0
+  const span = (beats[lo + 1] ?? beats[lo]! + 0.5) - beats[lo]!
+  return e0 + (e1 - e0) * Math.max(0, Math.min(1, (t - beats[lo]!) / span))
+}
 
 /** Bar start times in show time (every 4th beat from the downbeat). */
 export function barTimes(doc: ShowDoc): number[] {
@@ -67,8 +98,10 @@ export interface MusicSummary {
   barLength: number
   /** Per bar: start time (show time) and loudness 0..9. */
   bars: { t: number; energy: number }[]
-  /** Contiguous stretches of similar loudness. */
-  sections: { start: number; end: number; level: 'quiet' | 'medium' | 'loud' }[]
+  /** Song structure (show time), with a loudness level for each part. */
+  sections: { start: number; end: number; level: 'quiet' | 'medium' | 'loud'; label: Section['label']; energy: number; bars: number }[]
+  /** Accents in show time. */
+  accents: number[]
 }
 
 export function summarizeMusic(doc: ShowDoc): MusicSummary | null {
@@ -82,34 +115,12 @@ export function summarizeMusic(doc: ShowDoc): MusicSummary | null {
     const e = slice.length ? slice.reduce((x, y) => x + y, 0) / slice.length : 0.5
     return { t: Math.round(t * 100) / 100, energy: Math.min(9, Math.round(e * 9)) }
   })
-  // Smooth over 2 bars either side, then split into quiet/medium/loud runs.
-  const smooth = perBar.map((_, i) => {
-    const w = perBar.slice(Math.max(0, i - 2), i + 3)
-    return w.reduce((x, y) => x + y.energy, 0) / w.length
-  })
-  const level = (v: number): 'quiet' | 'medium' | 'loud' => (v < 3.5 ? 'quiet' : v < 6.5 ? 'medium' : 'loud')
-  const sections: MusicSummary['sections'] = []
-  perBar.forEach((b, i) => {
-    const l = level(smooth[i]!)
-    const last = sections[sections.length - 1]
-    const end = perBar[i + 1]?.t ?? a.offset + a.duration
-    if (last && last.level === l) last.end = end
-    else sections.push({ start: b.t, end, level: l })
-  })
-  // Fold runs of two bars or less into a neighbour (the 5-bar smoothing creates short ramps).
   const barLength = bars.length > 1 ? (bars[bars.length - 1]! - bars[0]!) / (bars.length - 1) : 240 / Math.max(1, a.bpm)
-  for (let i = 0; i < sections.length; i++) {
-    const sec = sections[i]!
-    if (sections.length > 1 && sec.end - sec.start < barLength * 3 - 1e-6) {
-      const prev = sections[i - 1], next = sections[i + 1]
-      if (prev) prev.end = sec.end
-      else if (next) next.start = sec.start
-      sections.splice(i--, 1)
-      // Re-join neighbours that now share a level.
-      const a2 = sections[i], b2 = sections[i + 1]
-      if (a2 && b2 && a2.level === b2.level) { a2.end = b2.end; sections.splice(i + 1, 1) }
-    }
-  }
+  const level = (v: number): 'quiet' | 'medium' | 'loud' => (v < 0.38 ? 'quiet' : v < 0.7 ? 'medium' : 'loud')
+  const sections = songSections(doc).map((x) => ({
+    start: Math.round(x.start * 100) / 100, end: Math.round(x.end * 100) / 100, label: x.label, energy: x.energy,
+    level: level(x.energy), bars: Math.max(1, Math.round((x.end - x.start) / barLength)),
+  }))
   return {
     bpm: a.bpm,
     duration: a.duration,
@@ -117,5 +128,6 @@ export function summarizeMusic(doc: ShowDoc): MusicSummary | null {
     barLength,
     bars: perBar,
     sections,
+    accents: songAccents(doc).map((t) => Math.round(t * 100) / 100),
   }
 }

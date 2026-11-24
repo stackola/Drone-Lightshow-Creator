@@ -8,7 +8,8 @@ function baseColor(e: Effect): string {
     case 'flash': case 'strobe': return e.color
     case 'gradient': case 'pulse': case 'twinkle': case 'wave': return e.a
     case 'chase': return e.b
-    case 'write': case 'type': case 'flip': case 'matrix': return e.a
+    case 'write': case 'type': case 'flip': case 'matrix': case 'meter': return e.a
+    case 'react': return e.color
     default: return '#38bdf8'
   }
 }
@@ -60,7 +61,27 @@ export function EffectEditor({ effect, onChange, allowImage, keyPrefix, hasBeats
           <Row label="Timing">
             <Toggle checked={effect.beatSync} onChange={(v) => set('beatSync', v)} label={hasBeats ? 'On the beat' : 'On the beat (load music)'} />
           </Row>
-          {effect.beatSync && num('every', 'Every', 1, 'beats', 1, 64)}
+          {effect.beatSync && (
+            <Row label="">
+              <Toggle checked={!!effect.onAccents} onChange={(v) => set('onAccents', v)} label="On the music’s accents (big hits)" />
+            </Row>
+          )}
+          {effect.beatSync && !effect.onAccents && num('every', 'Every', 1, 'beats', 1, 64)}
+        </>
+      )}
+      {effect.kind === 'react' && (
+        <>
+          {color('color', 'Colour')}
+          <Row label="In silence" title="Brightness when the music is quiet">
+            <NumberField value={Math.round(effect.floor * 100)} step={5} unit="%" min={0} max={100} onChange={(v) => set('floor', v / 100)} />
+          </Row>
+          <div className="hint">{hasBeats ? 'Brightness follows the music’s loudness. As a “tint” cue it makes the whole show breathe with the song.' : 'Load music to see it react.'}</div>
+        </>
+      )}
+      {effect.kind === 'meter' && (
+        <>
+          {color('a', 'Low')}{color('b', 'Peak')}
+          <div className="hint">{hasBeats ? 'Drones fill from the bottom up to the music’s current loudness.' : 'Load music to see it move.'}</div>
         </>
       )}
       {effect.kind === 'strobe' && (<>{color('color', 'Colour')}{num('rate', 'Rate', 0.5, 'Hz', 0.5, 25)}</>)}

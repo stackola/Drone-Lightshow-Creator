@@ -116,6 +116,10 @@ export interface Compiled {
   beats: number[]
   /** Index into `beats` of the first downbeat. */
   downbeat: number
+  /** Music loudness per beat (aligned with `beats`). */
+  musicEnergy: number[]
+  /** Accents (stand-out hits) in show time. */
+  accents: number[]
   limits: Limits
   /** Light cues, sorted by start. */
   cues: CompiledCue[]
@@ -258,7 +262,14 @@ export function showBeats(doc: ShowDoc): number[] {
   return doc.audio.beats.map((b) => b + doc.audio!.offset)
 }
 
-export function beatPhaseFn(beats: number[], downbeat = 0): BeatPhase {
+/** Show-time accents of the doc's music. */
+export function showAccents(doc: ShowDoc): number[] {
+  const a = doc.audio
+  return a?.accents ? a.accents.map((t) => t + a.offset) : []
+}
+
+/** The music clock: beat phase, loudness and time since the last accent at any show time. */
+export function beatPhaseFn(beats: number[], downbeat = 0, energy: number[] = [], accents: number[] = []): BeatPhase {
   if (beats.length < 2) return () => null
   return (t: number) => {
     if (t < beats[0]! || t > beats[beats.length - 1]! + 2) return null
@@ -270,7 +281,15 @@ export function beatPhaseFn(beats: number[], downbeat = 0): BeatPhase {
     }
     const a = beats[lo]!
     const b = beats[lo + 1] ?? a + (a - beats[lo - 1]!)
-    return { phase: Math.max(0, Math.min(1, (t - a) / Math.max(1e-3, b - a))), index: lo - downbeat, since: t - a }
+    const phase = Math.max(0, Math.min(1, (t - a) / Math.max(1e-3, b - a)))
+    const e0 = energy[lo], e1 = energy[lo + 1] ?? e0
+    let accentSince = Infinity
+    if (accents.length && t >= accents[0]!) {
+      let l = 0, h = accents.length - 1
+      while (l < h) { const m = (l + h + 1) >> 1; if (accents[m]! <= t) l = m; else h = m - 1 }
+      accentSince = t - accents[l]!
+    }
+    return { phase, index: lo - downbeat, since: t - a, energy: e0 === undefined ? 0.5 : e0 + ((e1 ?? e0) - e0) * phase, accentSince }
   }
 }
 
@@ -598,7 +617,9 @@ export function compile(doc: ShowDoc): Compiled {
   const { limits, site } = doc
   const beats = showBeats(doc)
   const downbeat = doc.audio?.downbeat ?? 0
-  const beat = beatPhaseFn(beats, downbeat)
+  const musicEnergy = doc.audio?.energy ?? []
+  const accents = showAccents(doc)
+  const beat = beatPhaseFn(beats, downbeat, musicEnergy, accents)
 
   // Geometry for every scene.
   const scenes: CompiledScene[] = doc.scenes.map((scene, index) => {
@@ -712,7 +733,7 @@ export function compile(doc: ShowDoc): Compiled {
     .sort((a, b) => a.t0 - b.t0)
 
   return {
-    n, duration: t, segments, scenes, pads, landPads, beats, downbeat, limits, cues, stage, view,
+    n, duration: t, segments, scenes, pads, landPads, beats, downbeat, musicEnergy, accents, limits, cues, stage, view,
     takeoff: { t0: 0, t1: takeoffDur }, landing, returnFlight, sceneTimes,
   }
 }

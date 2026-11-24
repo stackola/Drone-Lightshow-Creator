@@ -38,7 +38,7 @@ export function evaluate(c: Compiled, t: number, pos: Float32Array, col: Float32
   const n = c.n
   let beat = beatCache.get(c)
   if (!beat) {
-    beat = beatPhaseFn(c.beats, c.downbeat)
+    beat = beatPhaseFn(c.beats, c.downbeat, c.musicEnergy, c.accents)
     beatCache.set(c, beat)
   }
   switch (seg.kind) {

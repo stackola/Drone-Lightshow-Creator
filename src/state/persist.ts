@@ -111,9 +111,11 @@ export async function loadMusic(bytes: ArrayBuffer, mime: string, name: string) 
       name, duration: decoded.buffer.duration, offset,
       beats: result.beats.map((b) => Math.round(b * 1000) / 1000),
       downbeat: result.downbeat, bpm: Math.round(result.bpm * 10) / 10, energy: result.energy,
+      bass: result.bass, bright: result.bright, accents: result.accents, sections: result.sections,
     }
   }, 'Add music')
-  getState().toast(result.beats.length ? `Music added · ${Math.round(result.bpm)} BPM, ${result.beats.length} beats` : 'Music added (no clear beat found)')
+  const parts = result.sections.length > 1 ? `, ${result.sections.length} sections (${result.sections.map((x) => x.label).join(' · ')})` : ''
+  getState().toast(result.beats.length ? `Music added · ${Math.round(result.bpm)} BPM, ${result.beats.length} beats${parts}` : 'Music added (no clear beat found)')
   void idbPut('audio', { bytes, mime, name }).catch(() => {})
 }
 

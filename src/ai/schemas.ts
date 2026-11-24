@@ -5,7 +5,7 @@
 import { z } from 'zod'
 
 export const SHAPE_KINDS = ['circle', 'heart', 'star', 'polygon', 'grid', 'spiral', 'wave', 'sphere', 'torus', 'cube', 'helix', 'cone', 'text'] as const
-export const EFFECT_KINDS = ['solid', 'gradient', 'rainbow', 'pulse', 'twinkle', 'chase', 'wave', 'flash', 'strobe', 'off', 'image', 'write', 'type', 'flip', 'matrix'] as const
+export const EFFECT_KINDS = ['solid', 'gradient', 'rainbow', 'pulse', 'twinkle', 'chase', 'wave', 'flash', 'strobe', 'off', 'image', 'react', 'meter', 'write', 'type', 'flip', 'matrix'] as const
 
 const hex = z.string().describe('Hex colour, e.g. "#ff3366"')
 
@@ -15,6 +15,7 @@ export const LightInput = z.object({
       'twinkle: color with random color2 sparkles. chase: color2 highlight running along the shape over a color base. ' +
       'wave: color2 band sweeping across a color base. flash: color flash (on every N beats when beat_sync). strobe: color strobe. ' +
       'off: lights off (parked drones). image: colours of an imported image (image formations only). ' +
+      'Music-reactive (need music): react: color whose brightness follows the music\'s loudness (floor = brightness in silence; as a multiply cue it makes the whole show breathe with the song). meter: a level meter filling bottom-up with the loudness, color (low) to color2 (peak). flash with on_accents: flashes on the music\'s stand-out hits. ' +
       'Text reveals (best on text formations, over `duration` seconds from when the formation arrives or the cue starts): ' +
       'write: the text is written stroke by stroke with a glowing pen (color, pen colour color2); also draws outlines of other shapes. ' +
       'type: typewriter, one letter at a time with a blinking cursor. flip: split-flap board, letters flicker then settle left to right. ' +
@@ -28,6 +29,8 @@ export const LightInput = z.object({
   period: z.number().optional().describe('pulse period in seconds when not beat-synced'),
   beat_sync: z.boolean().optional().describe('pulse/flash on the music beat (requires music)'),
   every: z.number().optional().describe('flash every N beats: 1 = every beat, 4 = every bar'),
+  on_accents: z.boolean().optional().describe('flash on the music\'s accents (big hits) instead of every N beats (requires beat_sync)'),
+  floor: z.number().optional().describe('react: brightness 0–1 when the music is silent (default 0.25)'),
   decay: z.number().optional().describe('flash fade-out time in seconds (0.2–1)'),
   width: z.number().optional().describe('chase/wave band width as a fraction of the shape (0.1–0.5)'),
   brightness: z.number().optional().describe('0–1, default 1'),
@@ -98,6 +101,7 @@ export const SceneInput = z.object({
   spare_role: SpareRoleInput.optional().describe('What the spare drones do (default park).'),
   idle_motion: IdleMotionInput.optional().describe('Gentle motion while held, to keep a long hold alive. Optional; spacing never shrinks.'),
   transition: TransitionInput.optional().describe('How the drones travel into this formation (default direct). Use spectacle transitions on a few key moments.'),
+  arrive_at_section: z.number().optional().describe('With music: 1-based index of the song section this formation should arrive at the start of (e.g. the hero formation on the biggest drop). Leave out for formations that simply follow on.'),
 })
 export type SceneInput = z.infer<typeof SceneInput>
 
@@ -120,6 +124,8 @@ export const ShowPlan = z.object({
   concept: z.string().describe('One or two sentences describing the show’s story and look'),
   scenes: z.array(SceneInput).describe('The formations in order'),
   cues: z.array(DirectorCue).describe('Light cues layered over the formations (accents, flashes, washes)'),
+  music_lighting: z.enum(['none', 'subtle', 'bold']).optional().describe('With music: automatically light the music on top of your cues — breathing in quiet parts, sweeps into drops, flashes on every hit (bold) or gentler (subtle). Default bold when there is music.'),
+  fit_to_song: z.boolean().optional().describe('With music: stretch or tighten holds (in whole bars) so the finale ends with the song. Default true.'),
 })
 export type ShowPlan = z.infer<typeof ShowPlan>
 

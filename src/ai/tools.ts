@@ -11,6 +11,7 @@ import { validate } from '@/core/validate'
 import { comfortableSpacing } from '@/core/validate'
 import { fitScene, fitToAirspace, newId } from '@/core/defaults'
 import { alignScenesToBars } from '@/core/music'
+import { MUSIC_TAG, arriveAt, fitToSong, lightTheMusic, musicMoment } from '@/core/musicTools'
 import { autoFix } from '@/core/fixes'
 import { ceilTo } from '@/core/math'
 import { defaultEffect } from '@/core/effects'
@@ -100,7 +101,7 @@ export const TOOLS = [
   }),
   tool({
     name: 'get_music',
-    description: 'Get the music structure: tempo, bar start times in show time with loudness (0–9), and quiet/medium/loud sections. Call it before timing scenes or light cues to the music.',
+    description: 'Get the music structure: tempo, the song’s sections (intro, verse, build, drop, break, outro — numbered, with show times, bars, loudness and which formations are held during each), accents (stand-out hits), bar times with loudness, and how the show length compares to the song. Call it before timing scenes or light cues to the music.',
     schema: z.object({}),
     label: () => 'Listening to the music',
     run: () => ({ summary: 'Read the music structure', content: describeMusic(doc()) }),
@@ -407,6 +408,56 @@ export const TOOLS = [
       if (!aligned) return ok('No formations could be aligned (they arrive after the music ends?)')
       getState().replaceDoc(next, 'Align to music')
       return ok(`Landed ${aligned} formation${aligned > 1 ? 's' : ''} on downbeats`)
+    },
+  }),
+  tool({
+    name: 'light_the_music',
+    description: 'Automatically light the show from the music’s structure: breathing with the loudness in quiet parts, a sweep and beat flashes building into each drop, flashes on every accent in drops, sparkle in breaks, a fade in the outro. Re-running replaces the previous automatic cues; hand-made cues stay. style "remove" deletes them.',
+    schema: z.object({ style: z.enum(['bold', 'subtle', 'remove']).describe('bold: big flashes and pulses; subtle: gentler; remove: delete the automatic music cues') }),
+    label: (i) => (i.style === 'remove' ? 'Removing music lighting' : `Lighting the music (${i.style})`),
+    run: (i) => {
+      if (!doc().audio) throw new ToolError('No music is loaded.')
+      if (i.style === 'remove') {
+        const before = doc().cues.length
+        getState().update((d) => { d.cues = d.cues.filter((q) => q.tag !== MUSIC_TAG) }, 'Remove music lighting')
+        return ok(`Removed ${before - doc().cues.length} automatic music cue(s)`)
+      }
+      const { doc: next, added } = lightTheMusic(doc(), i.style)
+      if (!added) throw new ToolError('The song has no detectable structure to light.')
+      getState().replaceDoc(next, `Light the music (${i.style})`)
+      return ok(`Added ${added} cues that follow the music (${i.style})`)
+    },
+  }),
+  tool({
+    name: 'fit_to_song',
+    description: 'Fit the show to the song: every formation arrives on a bar line, holds are whole bars, and holds are stretched or tightened (bar by bar) so the final formation ends with the music. Flights never get faster than safe.',
+    schema: z.object({}),
+    label: () => 'Fitting the show to the song',
+    run: () => {
+      if (!doc().audio) throw new ToolError('No music is loaded.')
+      const { doc: next, endGap } = fitToSong(doc())
+      getState().replaceDoc(next, 'Fit show to song')
+      return ok(Math.abs(endGap) < 2.5 ? 'The show now ends with the song' : endGap > 0 ? `Fitted; the song continues ${Math.round(endGap)} s after the finale (add a scene or longer holds)` : `The show still runs ${Math.round(-endGap)} s past the song (remove a scene or shorten flights' extra time)`)
+    },
+  }),
+  tool({
+    name: 'land_on_music',
+    description: 'Make a formation arrive exactly at a moment in the music: the start of a section (1-based index from get_music), a bar (1-based), or a show time. Adjusts the previous formation’s hold (and this flight’s length if needed, never faster than safe); later formations shift with it. Reports the arrival actually achieved.',
+    schema: z.object({
+      scene_id: sceneRef,
+      section: z.number().optional().describe('1-based section index from get_music'),
+      bar: z.number().optional().describe('1-based bar number'),
+      time: z.number().optional().describe('Show time in seconds'),
+    }),
+    label: () => 'Landing a formation on the music',
+    run: (i) => {
+      const { index, scene } = findScene(i.scene_id)
+      const t = musicMoment(doc(), { section: i.section !== undefined ? Math.round(i.section) - 1 : undefined, bar: i.bar, time: i.time })
+      if (t === null) throw new ToolError('That section or bar does not exist (call get_music for the list).')
+      const { doc: next, arrival } = arriveAt(doc(), index, t)
+      getState().replaceDoc(next, `Land ${scene.name} on the music`)
+      const off = arrival - t
+      return ok(Math.abs(off) < 0.05 ? `“${scene.name}” now arrives at ${t.toFixed(1)} s` : `“${scene.name}” arrives at ${arrival.toFixed(1)} s — ${off.toFixed(1)} s ${off > 0 ? 'late (its flight cannot be faster safely; move it to a later moment or shorten earlier holds)' : 'early'}`)
     },
   }),
   tool({

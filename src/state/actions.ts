@@ -325,6 +325,9 @@ export const CUE_PRESETS: { label: string; make: () => Omit<LightCue, 'id' | 'st
   { label: 'Light sweep', make: () => ({ duration: 4, fadeIn: 0.3, fadeOut: 0.3, blend: 'add', effect: { kind: 'wave', a: '#000000', b: '#ffffff', angle: 0, speed: 0.35, width: 0.25, brightness: 1 } }) },
   { label: 'Strobe', make: () => ({ duration: 2, fadeIn: 0, fadeOut: 0, blend: 'replace', effect: defaultEffect('strobe') }) },
   { label: 'Blackout', make: () => ({ duration: 2, fadeIn: 0.5, fadeOut: 0.5, blend: 'replace', effect: defaultEffect('off') }) },
+  { label: 'Flash on the music’s hits', make: () => ({ duration: 16, fadeIn: 0, fadeOut: 0.5, blend: 'add', effect: { ...(defaultEffect('flash') as Extract<Effect, { kind: 'flash' }>), onAccents: true, decay: 0.45 } }) },
+  { label: 'Breathe with the music', make: () => ({ duration: 16, fadeIn: 1, fadeOut: 1, blend: 'multiply', effect: { kind: 'react', color: '#ffffff', floor: 0.3, brightness: 1 } }) },
+  { label: 'Level meter', make: () => ({ duration: 8, fadeIn: 0.5, fadeOut: 0.5, blend: 'replace', effect: defaultEffect('meter') }) },
 ]
 
 export function addCue(start: number, preset = 0) {
