@@ -6,6 +6,13 @@ import { DEMOS } from '@/app/demos'
 import { newShow } from '@/core/defaults'
 import { exportCsv } from '@/state/persist'
 import { formatTime } from '@/core/validate'
+import { Suspense, lazy } from 'react'
+
+// AI dialogs load the Claude SDK, so they are fetched only when first opened.
+const AiSettingsDialog = lazy(() => import('./ai/AiSettings').then((m) => ({ default: m.AiSettingsDialog })))
+const DirectorDialog = lazy(() => import('./ai/DirectorDialog').then((m) => ({ default: m.DirectorDialog })))
+const DescribeDialog = lazy(() => import('./ai/DescribeDialog').then((m) => ({ default: m.DescribeDialog })))
+const PitchDialog = lazy(() => import('./ai/PitchDialog').then((m) => ({ default: m.PitchDialog })))
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog)
@@ -13,6 +20,13 @@ export function Dialogs() {
   if (dialog === 'new') return <NewShowDialog onClose={close} />
   if (dialog === 'export') return <ExportDialog onClose={close} />
   if (dialog === 'shortcuts') return <ShortcutsDialog onClose={close} />
+  const ai =
+    dialog === 'ai-settings' ? <AiSettingsDialog onClose={close} />
+    : dialog === 'director' ? <DirectorDialog onClose={close} />
+    : dialog === 'describe' ? <DescribeDialog onClose={close} />
+    : dialog === 'pitch' ? <PitchDialog onClose={close} />
+    : null
+  if (ai) return <Suspense fallback={null}>{ai}</Suspense>
   return null
 }
 
@@ -89,6 +103,7 @@ const SHORTCUTS: [string, string][] = [
   ['1 / 2 / 3', 'Audience / orbit / top view'],
   ['P', 'Present fullscreen'],
   ['Ctrl S', 'Save project'],
+  ['Ctrl K', 'Ask the AI copilot'],
   ['Drag a label', 'Scrub any number (Shift ×10, Alt ×0.1)'],
   ['Alt while dragging', 'Bypass beat snapping on the timeline'],
 ]

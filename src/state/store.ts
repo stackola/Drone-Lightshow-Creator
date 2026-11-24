@@ -52,7 +52,9 @@ interface State {
   snap: boolean
   audio: AudioRuntime | null
   toasts: Toast[]
-  dialog: null | 'new' | 'export' | 'shortcuts'
+  dialog: null | 'new' | 'export' | 'shortcuts' | 'ai-settings' | 'director' | 'describe' | 'pitch'
+  /** Which tool the right-hand panel shows. */
+  rightTab: 'inspector' | 'copilot'
 }
 
 interface Actions {
@@ -62,6 +64,8 @@ interface Actions {
   loadDoc(doc: ShowDoc): void
   undo(): void
   redo(): void
+  /** Collapse every history entry recorded since `fromLength` into one undo step. */
+  squashHistory(fromLength: number, label: string): void
   select(sel: Selection): void
   setTime(t: number): void
   setPlaying(p: boolean): void
@@ -97,6 +101,7 @@ export const useStore = create<State & Actions>()((set, get) => ({
   audio: null,
   toasts: [],
   dialog: null,
+  rightTab: 'inspector',
 
   update(recipe, label = 'Edit', key) {
     const { doc, past, lastKey, lastAt } = get()
@@ -136,6 +141,13 @@ export const useStore = create<State & Actions>()((set, get) => ({
     if (!next) return
     set({ doc: next.doc, future: future.slice(1), past: [...past, { doc, label: next.label }], lastKey: null })
     get().toast(`Redo: ${next.label}`)
+  },
+
+  squashHistory(fromLength, label) {
+    const { past } = get()
+    if (past.length <= fromLength) return
+    const first = past[fromLength]!
+    set({ past: [...past.slice(0, fromLength), { doc: first.doc, label }], future: [], lastKey: null })
   },
 
   select(selection) {

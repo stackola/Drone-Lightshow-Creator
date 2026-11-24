@@ -231,12 +231,17 @@ export function beatPhaseFn(beats: number[], downbeat = 0): BeatPhase {
 
 interface Timed { profile: Profile; min: number; auto: boolean; extended: boolean }
 
+/** Automatic flight duration: the fastest safe time plus a comfort margin, rounded up to 0.5 s. */
+export function autoFlightDuration(min: number): number {
+  return min <= 1e-9 ? 0 : Math.max(MIN_AUTO_FLIGHT, ceilTo(min * AUTO_FLIGHT_MARGIN, 0.5))
+}
+
 /** Pick the flight profile: automatic (fastest × comfort margin) or the requested duration, never faster than safe. */
 function planMove(from: Float32Array, to: Float32Array, limits: Limits, requested: number | null): Timed {
   const fastest = fastestProfile(moveExtents(from, to), limits)
   const min = fastest.T
   if (requested === null) {
-    const T = min <= 1e-9 ? 0 : Math.max(MIN_AUTO_FLIGHT, ceilTo(min * AUTO_FLIGHT_MARGIN, 0.5))
+    const T = autoFlightDuration(min)
     return { profile: stretchProfile(fastest, T), min, auto: true, extended: false }
   }
   const floor = ceilTo(min, 0.1)

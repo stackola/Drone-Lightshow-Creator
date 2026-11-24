@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
+
+const CopilotPanel = lazy(() => import('./ai/CopilotPanel').then((m) => ({ default: m.CopilotPanel })))
 import { Users, Orbit, Map as MapIcon, AlertTriangle } from 'lucide-react'
 import { TopBar } from './TopBar'
 import { ScenesPanel } from './panels/ScenesPanel'
 import { Inspector } from './panels/Inspector'
+import { openCopilot } from './ai/openCopilot'
+import { Sparkles, SlidersHorizontal } from 'lucide-react'
 import { Timeline } from './timeline/Timeline'
 import { Viewport } from './viewport/Viewport'
 import { Present } from './Present'
@@ -10,6 +14,9 @@ import { Dialogs } from './Dialogs'
 import { Segmented } from './components/controls'
 import { getState, useStore, type CameraMode } from '@/state/store'
 import { useShallow } from 'zustand/react/shallow'
+import { useCopilot } from '@/ai/copilotStore'
+
+const useCopilotRunning = () => useCopilot((s) => s.running)
 import { seek, togglePlay } from '@/state/playback'
 import { addCue, addScene, deleteCue, deleteScene, duplicateCue, duplicateScene, stepScene } from '@/state/actions'
 import { loadMusic, openProjectFile, saveProject } from '@/state/persist'
@@ -94,6 +101,32 @@ function FirstRunHint() {
   )
 }
 
+function RightPanel() {
+  const tab = useStore((s) => s.rightTab)
+  const running = useCopilotRunning()
+  return (
+    <aside className="panel right">
+      <div className="right-tabs" role="tablist">
+        <button role="tab" aria-selected={tab === 'inspector'} className={tab === 'inspector' ? 'on' : ''} onClick={() => getState().set({ rightTab: 'inspector' })}>
+          <SlidersHorizontal size={13} /> Inspector
+        </button>
+        <button role="tab" aria-selected={tab === 'copilot'} className={`ai-tab ${tab === 'copilot' ? 'on' : ''}`} onClick={() => getState().set({ rightTab: 'copilot' })} title="Edit the show by conversation (Ctrl+K)">
+          <Sparkles size={13} className="ai-mark" /> Copilot {running && <span className="spinner" style={{ width: 10, height: 10 }} />}
+        </button>
+      </div>
+      <div className="right-body">
+        {tab === 'copilot' ? (
+          <Suspense fallback={<div className="computing" style={{ padding: 12 }}><span className="spinner" /> Loading copilot…</div>}>
+            <CopilotPanel />
+          </Suspense>
+        ) : (
+          <Inspector />
+        )}
+      </div>
+    </aside>
+  )
+}
+
 function isTyping(e: KeyboardEvent): boolean {
   const t = e.target as HTMLElement | null
   if (!t) return false
@@ -119,6 +152,7 @@ export function App() {
       }
       if (mod && e.key.toLowerCase() === 'y') { if (isTyping(e)) return; e.preventDefault(); s.redo(); return }
       if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); saveProject(); return }
+      if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); openCopilot(); return }
       if (isTyping(e) || s.dialog) return
       const sel = s.selection
       if (mod && e.key.toLowerCase() === 'd') {
@@ -183,7 +217,7 @@ export function App() {
           <StageOverlay />
           <FirstRunHint />
         </main>
-        <Inspector />
+        <RightPanel />
         <Timeline />
       </div>
       {presenting && <Present onExit={() => setPresenting(false)} />}

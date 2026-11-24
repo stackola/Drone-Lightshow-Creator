@@ -178,5 +178,6 @@ function audioMeta(v: unknown): AudioMeta | null {
     beats: Array.isArray(v.beats) ? v.beats.filter((b): b is number => typeof b === 'number' && Number.isFinite(b)) : [],
     downbeat: Math.round(num(v.downbeat, 0, 0)),
     bpm: num(v.bpm, 0, 0),
+    ...(Array.isArray(v.energy) ? { energy: v.energy.map((e) => num(e, 0, 0, 1)) } : {}),
   }
 }

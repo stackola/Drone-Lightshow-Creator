@@ -20,6 +20,8 @@ export type FixAction =
   | { kind: 'set-spin'; sceneId: string; value: number }
   | { kind: 'move'; sceneId: string; delta: [number, number, number] }
   | { kind: 'grid-spacing'; value: number }
+  /** The formation is bigger than the airspace: use fewer drones (park the rest) or a filled style. */
+  | { kind: 'fit-airspace'; sceneId: string }
 
 export interface Issue {
   id: string
@@ -187,6 +189,9 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
       if (y > maxY) { maxY = y; highK = k }
     }
     stats.maxAltitude = Math.max(stats.maxAltitude, maxY)
+    // Moving can't help a formation taller than the airspace — it needs fewer drones.
+    const tooTall = maxY - minY > L.maxAltitude - L.minAltitude - 2
+    const shrink = { label: 'Shrink to fit (park spare drones)', action: { kind: 'fit-airspace' as const, sceneId: cs.id } }
     if (minY + EPS < L.minAltitude) {
       const dy = Math.ceil((L.minAltitude - minY) * 2) / 2
       issues.push({
@@ -194,7 +199,7 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
         title: `“${scene.name}” is too low`,
         detail: `Lowest drone at ${fmt(minY)} m; formations must stay above ${fmt(L.minAltitude)} m.`,
         time: ts.holdStart, drones: [droneOfPoint[lowK]!],
-        fix: { label: `Raise ${fmt(dy)} m`, action: { kind: 'move', sceneId: cs.id, delta: [0, dy, 0] } },
+        fix: tooTall ? shrink : { label: `Raise ${fmt(dy)} m`, action: { kind: 'move', sceneId: cs.id, delta: [0, dy, 0] } },
       })
     }
     if (maxY - EPS > L.maxAltitude) {
@@ -204,7 +209,7 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
         title: `“${scene.name}” is too high`,
         detail: `Highest drone at ${fmt(maxY)} m; the ceiling is ${fmt(L.maxAltitude)} m.`,
         time: ts.holdStart, drones: [droneOfPoint[highK]!],
-        fix: { label: `Lower ${fmt(dy)} m`, action: { kind: 'move', sceneId: cs.id, delta: [0, -dy, 0] } },
+        fix: tooTall ? shrink : { label: `Lower ${fmt(dy)} m`, action: { kind: 'move', sceneId: cs.id, delta: [0, -dy, 0] } },
       })
     }
 
@@ -212,11 +217,18 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
     const { r, k: farK } = maxRadius(cs)
     stats.maxRadius = Math.max(stats.maxRadius, r)
     if (r - EPS > L.maxRadius) {
+      // If the formation itself fits inside the circle, move it toward the centre; otherwise shrink it.
+      const ch = Math.hypot(cs.center[0], cs.center[2])
+      const excess = Math.ceil((r - L.maxRadius + 1) * 2) / 2
+      const canMove = cs.spinRadius < L.maxRadius - 2 && ch > excess
       issues.push({
         id: `fence:${cs.id}`, severity: 'error', kind: 'geofence', sceneId: cs.id,
         title: `“${scene.name}” leaves the flight area`,
         detail: `A drone reaches ${fmt(r)} m from the centre; the limit is ${fmt(L.maxRadius)} m.`,
         time: ts.holdStart, drones: [droneOfPoint[farK]!],
+        fix: canMove
+          ? { label: `Move ${fmt(excess)} m toward the centre`, action: { kind: 'move', sceneId: cs.id, delta: [(-cs.center[0] / ch) * excess, 0, (-cs.center[2] / ch) * excess] } }
+          : shrink,
       })
     }
 

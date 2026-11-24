@@ -1,7 +1,8 @@
 import type { Draft } from 'immer'
 import type { Effect, LightCue, Scene, ShapeKind, ShapeSpec, ShowDoc } from '@/core/types'
-import { fitScene, newId, newLayer, newScene, newShape, placeAboveFloor } from '@/core/defaults'
+import { fitScene, fitToAirspace, newId, newLayer, newScene, newShape } from '@/core/defaults'
 import { comfortableSpacing, type FixAction, type Issue } from '@/core/validate'
+import { applyFixToDoc, autoFix } from '@/core/fixes'
 import { defaultEffect } from '@/core/effects'
 import { getState } from './store'
 import { seek } from './playback'
@@ -65,7 +66,7 @@ export function setLayerShape(sceneId: string, layerId: string, shape: ShapeSpec
   const scene = s.doc.scenes.find((x) => x.id === sceneId)
   if (!scene) return
   const draft: Scene = { ...scene, layers: scene.layers.map((l) => (l.id === layerId ? { ...l, shape } : l)) }
-  const fitted = placeAboveFloor(fitScene(draft, s.doc.droneCount, comfortableSpacing(s.doc.limits.minSpacing), 'grow'), s.doc)
+  const fitted = fitToAirspace(fitScene(draft, s.doc.droneCount, comfortableSpacing(s.doc.limits.minSpacing), 'grow'), s.doc)
   s.update((d) => {
     const i = d.scenes.findIndex((x) => x.id === sceneId)
     if (i >= 0) d.scenes[i] = fitted as Draft<Scene>
@@ -79,7 +80,7 @@ export function changeLayerKind(sceneId: string, layerId: string, kind: ShapeKin
   if (!scene || !layer || layer.shape.kind === kind) return
   const next = newShape(kind)
   const s2: Scene = { ...scene, layers: scene.layers.map((l) => (l.id === layerId ? { ...l, shape: next } : l)) }
-  const fitted = placeAboveFloor(fitScene(s2, s.doc.droneCount, comfortableSpacing(s.doc.limits.minSpacing), 'exact'), s.doc)
+  const fitted = fitToAirspace(fitScene(s2, s.doc.droneCount, comfortableSpacing(s.doc.limits.minSpacing), 'exact'), s.doc)
   s.update((d) => {
     const i = d.scenes.findIndex((x) => x.id === sceneId)
     if (i < 0) return
@@ -99,7 +100,7 @@ export function addLayer(sceneId: string, kind: ShapeKind | 'spare') {
     layer.weight = 0.3
   }
   const s2: Scene = { ...scene, layers: [...scene.layers, layer] }
-  const fitted = placeAboveFloor(fitScene(s2, s.doc.droneCount, comfortableSpacing(s.doc.limits.minSpacing), 'grow'), s.doc)
+  const fitted = fitToAirspace(fitScene(s2, s.doc.droneCount, comfortableSpacing(s.doc.limits.minSpacing), 'grow'), s.doc)
   s.update((d) => {
     const i = d.scenes.findIndex((x) => x.id === sceneId)
     if (i >= 0) d.scenes[i] = fitted as Draft<Scene>
@@ -132,7 +133,7 @@ export function fitSceneToSpacing(sceneId: string, mode: 'exact' | 'grow' = 'exa
   const scene = s.doc.scenes.find((x) => x.id === sceneId)
   if (!scene) return
   const t = target ?? comfortableSpacing(s.doc.limits.minSpacing)
-  const fitted = placeAboveFloor(fitScene(scene, s.doc.droneCount, t, mode), s.doc)
+  const fitted = fitToAirspace(fitScene(scene, s.doc.droneCount, t, mode), s.doc)
   s.update((d) => {
     const i = d.scenes.findIndex((x) => x.id === sceneId)
     if (i >= 0) d.scenes[i] = fitted as Draft<Scene>
@@ -141,32 +142,22 @@ export function fitSceneToSpacing(sceneId: string, mode: 'exact' | 'grow' = 'exa
 
 export function applyFix(action: FixAction) {
   const s = getState()
-  switch (action.kind) {
-    case 'fit-spacing':
-      fitSceneToSpacing(action.sceneId, 'grow', action.target)
-      break
-    case 'set-spin':
-      updateScene(action.sceneId, (sc) => { sc.spin = action.value }, 'Slow spin')
-      break
-    case 'move':
-      updateScene(action.sceneId, (sc) => {
-        sc.position = [sc.position[0] + action.delta[0], sc.position[1] + action.delta[1], sc.position[2] + action.delta[2]]
-      }, 'Move scene')
-      break
-    case 'grid-spacing':
-      s.update((d) => { d.site.gridSpacing = action.value }, 'Pad spacing')
-      break
-  }
+  const labels: Record<FixAction['kind'], string> = { 'fit-spacing': 'Fit to safe spacing', 'set-spin': 'Slow spin', move: 'Move scene', 'grid-spacing': 'Pad spacing', 'fit-airspace': 'Shrink to fit airspace' }
+  s.replaceDoc(applyFixToDoc(s.doc, action), labels[action.kind])
   s.set({ focus: null })
 }
 
-/** Fix every issue that has an automatic fix, repeatedly until nothing changes. */
+/**
+ * Fix every issue that has an automatic fix, as one undo step. Validation is
+ * re-run synchronously between passes, so a fix is never applied twice.
+ */
 export function fixAll() {
-  for (let pass = 0; pass < 3; pass++) {
-    const issues = getState().validation?.issues.filter((i) => i.fix) ?? []
-    if (!issues.length) return
-    for (const i of issues) applyFix(i.fix!.action)
-  }
+  const s = getState()
+  const { doc, applied, validation } = autoFix(s.doc)
+  if (applied) s.replaceDoc(doc, 'Fix safety issues')
+  s.set({ focus: null })
+  const left = validation.issues.length
+  s.toast(left ? `Fixed what could be fixed automatically — ${left} issue${left > 1 ? 's' : ''} need a decision` : 'All safety issues fixed')
 }
 
 export function focusIssue(issue: Issue) {

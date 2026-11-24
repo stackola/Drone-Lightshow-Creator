@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Copy, Plus, Trash2, PlaneTakeoff, PlaneLanding, AlertTriangle, Type, ImageUp } from 'lucide-react'
+import { Copy, Plus, Trash2, PlaneTakeoff, PlaneLanding, AlertTriangle, Type, ImageUp, Sparkles } from 'lucide-react'
 import { getState, useStore } from '@/state/store'
 import { addScene, deleteScene, duplicateScene, moveScene, seekToScene } from '@/state/actions'
 import { seek } from '@/state/playback'
@@ -42,7 +42,7 @@ export async function addImageScene() {
   }
 }
 
-export function ShapePicker({ onPick }: { onPick: (kind: ShapeKind) => void }) {
+export function ShapePicker({ onPick }: { onPick: (kind: ShapeKind | 'describe') => void }) {
   const groups: ('2D' | '3D' | 'Content')[] = ['2D', '3D', 'Content']
   return (
     <div>
@@ -62,6 +62,12 @@ export function ShapePicker({ onPick }: { onPick: (kind: ShapeKind) => void }) {
                 {s.label}
               </button>
             ))}
+            {g === 'Content' && (
+              <button className="shape-tile" onClick={() => onPick('describe')} title="Describe any picture and Claude draws it in drones">
+                <Sparkles size={26} style={{ margin: '7px 0' }} className="ai-mark" />
+                Describe…
+              </button>
+            )}
           </div>
         </div>
       ))}
@@ -69,8 +75,9 @@ export function ShapePicker({ onPick }: { onPick: (kind: ShapeKind) => void }) {
   )
 }
 
-export function pickAndAdd(kind: ShapeKind) {
-  if (kind === 'image') void addImageScene()
+export function pickAndAdd(kind: ShapeKind | 'describe') {
+  if (kind === 'describe') getState().set({ dialog: 'describe' })
+  else if (kind === 'image') void addImageScene()
   else addScene(kind)
 }
 

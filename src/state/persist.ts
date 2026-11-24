@@ -107,7 +107,11 @@ export async function loadMusic(bytes: ArrayBuffer, mime: string, name: string) 
   const result = await detectBeatsAsync(decoded.mono, decoded.buffer.sampleRate)
   const offset = getState().doc.audio?.offset ?? 0
   getState().update((d) => {
-    d.audio = { name, duration: decoded.buffer.duration, offset, beats: result.beats.map((b) => Math.round(b * 1000) / 1000), downbeat: result.downbeat, bpm: Math.round(result.bpm * 10) / 10 }
+    d.audio = {
+      name, duration: decoded.buffer.duration, offset,
+      beats: result.beats.map((b) => Math.round(b * 1000) / 1000),
+      downbeat: result.downbeat, bpm: Math.round(result.bpm * 10) / 10, energy: result.energy,
+    }
   }, 'Add music')
   getState().toast(result.beats.length ? `Music added · ${Math.round(result.bpm)} BPM, ${result.beats.length} beats` : 'Music added (no clear beat found)')
   void idbPut('audio', { bytes, mime, name }).catch(() => {})

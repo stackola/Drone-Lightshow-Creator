@@ -2,8 +2,7 @@
 // every demo to pass validation with zero issues.
 
 import type { Effect, LightCue, Scene, ShapeSpec, ShowDoc, TextFont } from '@/core/types'
-import { fitScene, newId, newLayer, newScene, newShape, newShow, placeAboveFloor, rasterizeText } from '@/core/defaults'
-import { comfortableSpacing } from '@/core/validate'
+import { newId, newScene, newShape, newShow, placeAboveFloor, rasterizeText, withSpareDrones } from '@/core/defaults'
 import { defaultEffect } from '@/core/effects'
 import { compile } from '@/core/compile'
 
@@ -26,14 +25,8 @@ function text(doc: ShowDoc, value: string, name: string, effect: Effect, font: T
   return placeAboveFloor({ ...newScene(doc, 'text', { name, effect, shape }), ...patch }, doc)
 }
 
-/** Give a fraction of the drones to a dark "parking" grid behind the formation. */
 function withSpare(doc: ShowDoc, sc: Scene, fraction: number): Scene {
-  const main = sc.layers[0]!
-  const spare = newLayer(newShape('grid'), defaultEffect('off'))
-  spare.offset = [0, 0, -25]
-  const layers = [{ ...main, weight: 1 - fraction }, { ...spare, weight: fraction }]
-  const fitted = fitScene({ ...sc, layers }, doc.droneCount, comfortableSpacing(doc.limits.minSpacing), 'exact')
-  return placeAboveFloor(fitted, doc)
+  return withSpareDrones(sc, doc, fraction)
 }
 
 /** Place cues relative to scene arrival times (requires a compile pass). */

@@ -10,7 +10,7 @@ import {
 import { SHAPES, SHAPE_BY_KIND, sizeLabel } from '@/core/shapes'
 import { allocate } from '@/core/compile'
 import { comfortableSpacing, maxSafeSpin, formatTime, type Issue } from '@/core/validate'
-import { fitScene, rasterizeText, unitSpacing, placeAboveFloor } from '@/core/defaults'
+import { fitScene, fitToAirspace, rasterizeText, unitSpacing } from '@/core/defaults'
 import type { Layer, LightCue, Scene, ShapeKind, ShapeSpec, TextFont, Vec3 } from '@/core/types'
 import { NumberField, Row, Segmented, Toggle, MenuButton } from '@/ui/components/controls'
 import { EffectEditor } from './EffectEditor'
@@ -26,11 +26,7 @@ export function Inspector() {
   else if (sel.kind === 'takeoff') body = <TakeoffInspector />
   else if (sel.kind === 'landing') body = <LandingInspector />
   else body = <ShowInspector />
-  return (
-    <aside className="panel right" aria-label="Inspector">
-      <div className="scroll">{body}</div>
-    </aside>
-  )
+  return <div className="scroll" aria-label="Inspector">{body}</div>
 }
 
 // --- Shared bits -----------------------------------------------------------------
@@ -148,7 +144,7 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
                   <span className="effect-chip" style={{ background: '#05070d' }} /> Park spare drones (lights off)
                 </button>
                 <div className="menu-sep" />
-                <ShapePicker onPick={(k) => { close(); if (k !== 'image') addLayer(id, k) }} />
+                <ShapePicker onPick={(k) => { close(); if (k === 'describe') getState().set({ dialog: 'describe' }); else if (k !== 'image') addLayer(id, k) }} />
               </>
             )}
           </MenuButton>
@@ -197,7 +193,7 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
     const sc = st.doc.scenes.find((x) => x.id === scene.id)
     if (!sc) return
     const next: Scene = { ...sc, layers: sc.layers.map((l) => (l.id === layer.id ? { ...l, shape: { ...(l.shape as Extract<ShapeSpec, { kind: 'text' }>), text, font, mask: rasterizeText(text || ' ', font) } } : l)) }
-    const fitted = placeAboveFloor(fitScene(next, st.doc.droneCount, target, 'grow'), st.doc)
+    const fitted = fitToAirspace(fitScene(next, st.doc.droneCount, target, 'grow'), st.doc)
     st.update((d) => {
       const i = d.scenes.findIndex((x) => x.id === scene.id)
       if (i >= 0) d.scenes[i] = fitted as Draft<Scene>

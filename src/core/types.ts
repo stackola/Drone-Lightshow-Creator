@@ -160,6 +160,8 @@ export interface AudioMeta {
   /** Index into `beats` of the first downbeat (bar start). */
   downbeat: number
   bpm: number
+  /** Loudness per beat, 0..1 (absent for music added before this was tracked). */
+  energy?: number[]
 }
 
 export interface ShowDoc {

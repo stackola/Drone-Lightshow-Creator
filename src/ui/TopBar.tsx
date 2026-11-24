@@ -1,4 +1,6 @@
-import { Undo2, Redo2, MonitorPlay, Menu, ShieldCheck, ShieldAlert, Wrench, Settings2, FilePlus2, FolderOpen, Save, Download, Music, Keyboard } from 'lucide-react'
+import { Undo2, Redo2, MonitorPlay, Menu, ShieldCheck, ShieldAlert, Wrench, Settings2, FilePlus2, FolderOpen, Save, Download, Music, Keyboard, Sparkles, Wand2, PenLine, MessageSquareText, FileText, KeyRound } from 'lucide-react'
+import { openCopilot } from './ai/openCopilot'
+import { STARTERS } from '@/ai/copilotStore'
 import { getState, useStore } from '@/state/store'
 import { fixAll } from '@/state/actions'
 import { loadMusic, openProjectFile, pickFile, saveProject } from '@/state/persist'
@@ -27,6 +29,19 @@ export function TopBar({ onPresent }: { onPresent: () => void }) {
       <button className="btn ghost icon" disabled={!canRedo} onClick={() => getState().redo()} title={canRedo ? `Redo ${redoLabel} (Ctrl+Shift+Z)` : 'Nothing to redo'} aria-label="Redo"><Redo2 size={15} /></button>
       <div className="divider-v" />
       <SafetyStatus />
+      <MenuButton className="btn ai" title="AI features" align="right" width={280} button={<><Sparkles size={14} /> AI</>}>
+        {(close) => (
+          <>
+            <button className="menu-item" onClick={() => { close(); getState().set({ dialog: 'director' }) }}><Wand2 size={14} className="ai-mark" /> Generate a show from a brief…</button>
+            <button className="menu-item" onClick={() => { close(); getState().set({ dialog: 'describe' }) }}><PenLine size={14} className="ai-mark" /> Describe a formation…</button>
+            <button className="menu-item" onClick={() => { close(); openCopilot() }}><MessageSquareText size={14} className="ai-mark" /> Ask the copilot <span className="kbd">Ctrl K</span></button>
+            <button className="menu-item" onClick={() => { close(); openCopilot(); void import('@/ai/copilot').then((m) => m.sendToCopilot(STARTERS[0]!.prompt)) }}><Sparkles size={14} className="ai-mark" /> Review my show</button>
+            <button className="menu-item" onClick={() => { close(); getState().set({ dialog: 'pitch' }) }}><FileText size={14} className="ai-mark" /> Write a client pitch…</button>
+            <div className="menu-sep" />
+            <button className="menu-item" onClick={() => { close(); getState().set({ dialog: 'ai-settings' }) }}><KeyRound size={14} /> AI settings…</button>
+          </>
+        )}
+      </MenuButton>
       <button className="btn ghost icon" title="Show settings & safety limits" aria-label="Show settings" onClick={() => getState().select({ kind: 'show' })}><Settings2 size={15} /></button>
       <MenuButton className="btn ghost icon" title="File" align="right" width={240} button={<Menu size={16} />}>
         {(close) => (

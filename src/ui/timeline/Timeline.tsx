@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Music, Pause, Play, Plus, Repeat, Magnet, ZoomIn, ZoomOut, Maximize2, AlertTriangle, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Music, Pause, Play, Plus, Repeat, Magnet, ZoomIn, ZoomOut, Maximize2, AlertTriangle, X, Drum } from 'lucide-react'
+import { alignScenesToBars } from '@/core/music'
 import { getState, useStore } from '@/state/store'
 import { pause, play, seek, setRate, togglePlay } from '@/state/playback'
 import { CUE_PRESETS, addCue, focusIssue, seekToScene, stepScene, updateCue, updateScene } from '@/state/actions'
@@ -309,6 +310,21 @@ export function Timeline() {
         <div className="spacer" />
         {validation && validation.issues.length > 0 && (
           <span className="badge-err" style={{ marginRight: 6 }}><AlertTriangle size={12} /> {validation.issues.length} on timeline</span>
+        )}
+        {beats.length > 0 && doc.scenes.length > 0 && (
+          <button
+            className="btn sm ghost"
+            title="Retime the show so every formation arrives exactly on a downbeat and holds for whole bars (flights only get longer, never unsafe)"
+            onClick={() => {
+              const { doc: next, aligned } = alignScenesToBars(getState().doc)
+              if (aligned) {
+                getState().replaceDoc(next, 'Land on the beat')
+                getState().toast(`${aligned} formation${aligned > 1 ? 's' : ''} now land on downbeats`)
+              } else getState().toast('No formations arrive while the music plays')
+            }}
+          >
+            <Drum size={13} /> On the beat
+          </button>
         )}
         <button className={`btn sm ghost${snap ? ' on' : ''}`} onClick={() => getState().set({ snap: !snap })} title="Snap edits to beats (hold Alt to bypass)" aria-pressed={snap}>
           <Magnet size={13} /> {beats.length ? `Snap · ${Math.round(bpm ?? 0)} BPM` : 'Snap'}

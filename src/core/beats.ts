@@ -12,6 +12,8 @@ export interface BeatResult {
   beats: number[]
   /** Index of the first downbeat in `beats`. */
   downbeat: number
+  /** Loudness of each beat (RMS from this beat to the next), normalised so the loudest is 1. */
+  energy: number[]
 }
 
 const TARGET_SR = 11025
@@ -31,7 +33,7 @@ export function detectBeats(samples: Float32Array, sampleRate: number): BeatResu
   }
   const env = onsetEnvelope(x)
   const hopTime = HOP / sr
-  if (env.length < 64) return { bpm: 0, beats: [], downbeat: 0 }
+  if (env.length < 64) return { bpm: 0, beats: [], downbeat: 0, energy: [] }
 
   const period = estimatePeriod(env, hopTime)
   const frames = trackBeats(env, period)
@@ -45,7 +47,22 @@ export function detectBeats(samples: Float32Array, sampleRate: number): BeatResu
     const score = c ? s / c : 0
     if (score > bestScore) { bestScore = score; bestPhase = ph }
   }
-  return { bpm: 60 / (period * hopTime), beats, downbeat: Math.min(bestPhase, Math.max(0, beats.length - 1)) }
+  return { bpm: 60 / (period * hopTime), beats, downbeat: Math.min(bestPhase, Math.max(0, beats.length - 1)), energy: beatEnergy(x, sr, beats) }
+}
+
+/** RMS of the signal between consecutive beats, normalised to the loudest beat. */
+export function beatEnergy(x: Float32Array, sr: number, beats: number[]): number[] {
+  if (!beats.length) return []
+  const out = beats.map((b, i) => {
+    const a = Math.max(0, Math.floor(b * sr))
+    const next = beats[i + 1] ?? b + (i > 0 ? b - beats[i - 1]! : 0.5)
+    const e = Math.min(x.length, Math.max(a + 1, Math.floor(next * sr)))
+    let s = 0
+    for (let k = a; k < e; k++) s += x[k]! * x[k]!
+    return Math.sqrt(s / Math.max(1, e - a))
+  })
+  const max = Math.max(...out, 1e-9)
+  return out.map((v) => Math.round((v / max) * 100) / 100)
 }
 
 function onsetEnvelope(x: Float32Array): Float32Array {

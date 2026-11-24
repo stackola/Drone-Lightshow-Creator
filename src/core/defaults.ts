@@ -127,7 +127,78 @@ export function newScene(doc: ShowDoc, kind: ShapeKind, opts: { name?: string; p
     spin: 0,
     layers: [newLayer(shape, effect)],
   }
-  return placeAboveFloor(fitScene(scene, doc.droneCount, comfortableSpacing(doc.limits.minSpacing), 'exact'), doc)
+  // New formations are valid from the start: safe spacing, inside the airspace.
+  return fitToAirspace(fitScene(scene, doc.droneCount, comfortableSpacing(doc.limits.minSpacing), 'exact'), doc)
+}
+
+/**
+ * Give a fraction of the drones to a dark "parking" grid 25 m behind the main
+ * shape — for formations that look best with fewer drones (digits, short text).
+ */
+export function withSpareDrones(scene: Scene, doc: ShowDoc, fraction: number): Scene {
+  const f = Math.max(0, Math.min(0.85, fraction))
+  const main = scene.layers[0]!
+  if (f < 0.01) return scene
+  const spare = newLayer(newShape('grid'), defaultEffect('off'))
+  spare.offset = [0, 0, -25]
+  const layers = [{ ...main, weight: 1 - f }, { ...spare, weight: f }]
+  const fitted = fitScene({ ...scene, layers }, doc.droneCount, comfortableSpacing(doc.limits.minSpacing), 'exact')
+  return placeAboveFloor(fitted, doc)
+}
+
+function extent(scene: Scene, doc: ShowDoc): { minY: number; maxY: number; reach: number } {
+  const pts = sceneGeometry(scene, doc.droneCount).points
+  let minY = Infinity, maxY = -Infinity, reach = 0
+  for (let i = 0; i < pts.length; i += 3) {
+    minY = Math.min(minY, pts[i + 1]!)
+    maxY = Math.max(maxY, pts[i + 1]!)
+    // Spin can sweep any point around the vertical axis, so count the swept circle.
+    const r = Math.hypot(pts[i]! - scene.position[0], pts[i + 2]! - scene.position[2])
+    reach = Math.max(reach, Math.hypot(scene.position[0], scene.position[2]) + r)
+  }
+  return { minY, maxY, reach }
+}
+
+/**
+ * Make a formation fit the airspace: switch an outline to a filled shape, then
+ * park more and more drones dark until it is short and narrow enough; finally
+ * place it between the floor and the ceiling.
+ */
+export function fitToAirspace(scene: Scene, doc: ShowDoc): Scene {
+  const L = doc.limits
+  const fits = (s: Scene) => {
+    const e = extent(s, doc)
+    return e.maxY - e.minY <= L.maxAltitude - L.minAltitude - 6 && e.reach <= L.maxRadius - 2
+  }
+  const target = comfortableSpacing(L.minSpacing)
+  let s = scene
+  const main = s.layers[0]!
+  if (!fits(s) && 'fill' in main.shape && main.shape.fill === 'outline') {
+    s = fitScene({ ...s, layers: [{ ...main, shape: { ...main.shape, fill: 'filled' } as ShapeSpec }, ...s.layers.slice(1)] }, doc.droneCount, target, 'exact')
+  }
+  if (!fits(s) && s.layers.length <= 2) {
+    const single = { ...s, layers: [s.layers[0]!] }
+    const current = s.layers.length === 2 ? s.layers[1]!.weight / (s.layers[0]!.weight + s.layers[1]!.weight) : 0
+    for (const f of [0.2, 0.35, 0.5, 0.6, 0.7, 0.8]) {
+      if (f <= current) continue
+      s = withSpareDrones(single, doc, f)
+      if (fits(s)) break
+    }
+  }
+  return placeInAirspace(s, doc)
+}
+
+/** Raise above the floor (with margin), then lower below the ceiling if needed. */
+export function placeInAirspace(scene: Scene, doc: ShowDoc): Scene {
+  let s = placeAboveFloor(scene, doc)
+  const e = extent(s, doc)
+  const over = e.maxY - (doc.limits.maxAltitude - 2)
+  if (over > 0) {
+    const room = e.minY - doc.limits.minAltitude
+    const dy = Math.min(Math.ceil(over), Math.max(0, Math.floor(room)))
+    s = { ...s, position: [s.position[0], s.position[1] - dy, s.position[2]] }
+  }
+  return s
 }
 
 /** Raise a scene so its lowest drone clears the minimum altitude with a margin. */
