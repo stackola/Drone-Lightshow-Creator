@@ -2,7 +2,8 @@
 // on the origin, in the XY "picture plane" (facing the audience) unless the
 // shape is 3D. Every generator is linear in `size`.
 
-import type { Fill, ShapeKind, ShapeSpec } from './types'
+import type { Fill, ModelPart, ShapeKind, ShapeSpec } from './types'
+import { sampleModel } from './model3d'
 import {
   base64ToBytes, gather, maskCandidates, polygonCandidates, readingOrder, sampleCurve,
   samplePolygonOutline, spreadPick,
@@ -98,9 +99,23 @@ export const SHAPES: ShapeDef[] = [
     create: () => ({ kind: 'text', size: 1, text: 'HELLO', font: 'sans', mask: { w: 0, h: 0, bits: '' } }),
   },
   {
+    kind: 'model', label: '3D model', group: 'Content', hasFill: false, params: [],
+    create: () => ({ kind: 'model', size: 1, name: 'Rocket', parts: SAMPLE_MODEL.map((p) => ({ ...p })) }),
+  },
+  {
     kind: 'image', label: 'Image / logo', group: 'Content', hasFill: false, params: [],
     create: () => ({ kind: 'image', size: 1, name: '', mask: { w: 0, h: 0, bits: '' }, colors: null, cw: 0, ch: 0 }),
   },
+]
+
+/** A small rocket — the default 3D model before AI generates one. */
+export const SAMPLE_MODEL: ModelPart[] = [
+  { type: 'cylinder', from: [0, -0.5, 0], to: [0, 0.6, 0], radius: 0.22, color: '#e8eef8' },
+  { type: 'cone', from: [0, 0.6, 0], to: [0, 1.15, 0], radius: 0.22, radiusTop: 0, color: '#ff4d4d' },
+  { type: 'box', center: [0.3, -0.35, 0], size: [0.28, 0.4, 0.06], rotation: [0, 0, -20], color: '#ff4d4d' },
+  { type: 'box', center: [-0.3, -0.35, 0], size: [0.28, 0.4, 0.06], rotation: [0, 0, 20], color: '#ff4d4d' },
+  { type: 'sphere', center: [0, 0.25, 0.2], radius: 0.09, color: '#38bdf8' },
+  { type: 'cone', from: [0, -0.5, 0], to: [0, -0.95, 0], radius: 0.18, radiusTop: 0.02, color: '#ffb02e' },
 ]
 
 export const SHAPE_BY_KIND = Object.fromEntries(SHAPES.map((s) => [s.kind, s])) as Record<ShapeKind, ShapeDef>
@@ -110,6 +125,7 @@ export function sizeLabel(kind: ShapeKind): string {
   switch (kind) {
     case 'grid': case 'wave': case 'image': return 'Width'
     case 'text': case 'helix': case 'cone': return 'Height'
+    case 'model': return 'Size'
     case 'cube': return 'Edge'
     default: return 'Diameter'
   }
@@ -223,6 +239,10 @@ function generateUnit(spec: ShapeSpec, n: number): ShapePoints {
       return textShape(spec.mask, n)
     case 'image':
       return imageShape(spec, n)
+    case 'model': {
+      const m = sampleModel(spec.parts, n)
+      return m ? { points: m.points, colors: m.colors } : plain(fibonacciSphere(n))
+    }
   }
 }
 

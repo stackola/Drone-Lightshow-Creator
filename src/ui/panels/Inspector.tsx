@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { AlertTriangle, ChevronDown, ChevronRight, Copy, Maximize, Plus, Trash2, Wrench, CheckCircle2, ImageUp, Crosshair } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Copy, Maximize, Plus, Trash2, Wrench, CheckCircle2, ImageUp, Crosshair, Sparkles } from 'lucide-react'
 import type { Draft } from 'immer'
 import { getState, useStore } from '@/state/store'
 import { useShallow } from 'zustand/react/shallow'
@@ -204,7 +204,7 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
     <div className="layer-card">
       <div className="layer-head">
         <select className="select" style={{ flex: 1 }} value={shape.kind} aria-label="Shape" onChange={(e) => changeLayerKind(scene.id, layer.id, e.target.value as ShapeKind)}>
-          {SHAPES.filter((s) => s.kind !== 'image' || shape.kind === 'image').map((s) => <option key={s.kind} value={s.kind}>{s.label}</option>)}
+          {SHAPES.filter((s) => (s.kind !== 'image' && s.kind !== 'model') || shape.kind === s.kind).map((s) => <option key={s.kind} value={s.kind}>{s.label}</option>)}
         </select>
         {multi ? (
           <div style={{ width: 92 }}>
@@ -232,6 +232,14 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
               if (!f) return
               try { setLayerShape(scene.id, layer.id, await imageShape(f, shape.size), 'Replace image') } catch { getState().toast('Could not read that image.', 'err') }
             }}><ImageUp size={12} /> Replace</button>
+          </Row>
+        )}
+        {shape.kind === 'model' && (
+          <Row label="3D model">
+            <span className="hint" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{shape.name} · {shape.parts.length} parts</span>
+            <button className="btn sm ai" title="Claude looks at it from four angles and fixes it — or tell it what to change" onClick={() => getState().set({ dialog: 'model3d', aiTarget: { sceneId: scene.id, layerId: layer.id } })}>
+              <Sparkles size={12} /> Improve
+            </button>
           </Row>
         )}
         <Row label={sizeLabel(shape.kind)}>
@@ -270,7 +278,7 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
           </>
         )}
         <div className="subhead">Light</div>
-        <EffectEditor effect={layer.effect} allowImage={shape.kind === 'image'} keyPrefix={`fx:${k}`} hasBeats={hasBeats} onChange={(e, label, key) => upLayer((l) => { l.effect = e }, label, key)} />
+        <EffectEditor effect={layer.effect} allowImage={shape.kind === 'image' || shape.kind === 'model'} keyPrefix={`fx:${k}`} hasBeats={hasBeats} onChange={(e, label, key) => upLayer((l) => { l.effect = e }, label, key)} />
       </div>
     </div>
   )

@@ -13,6 +13,7 @@ const AiSettingsDialog = lazy(() => import('./ai/AiSettings').then((m) => ({ def
 const DirectorDialog = lazy(() => import('./ai/DirectorDialog').then((m) => ({ default: m.DirectorDialog })))
 const DescribeDialog = lazy(() => import('./ai/DescribeDialog').then((m) => ({ default: m.DescribeDialog })))
 const PitchDialog = lazy(() => import('./ai/PitchDialog').then((m) => ({ default: m.PitchDialog })))
+const Model3DDialog = lazy(() => import('./ai/Model3DDialog').then((m) => ({ default: m.Model3DDialog })))
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog)
@@ -25,6 +26,7 @@ export function Dialogs() {
     : dialog === 'director' ? <DirectorDialog onClose={close} />
     : dialog === 'describe' ? <DescribeDialog onClose={close} />
     : dialog === 'pitch' ? <PitchDialog onClose={close} />
+    : dialog === 'model3d' ? <Model3DDialog onClose={close} />
     : null
   if (ai) return <Suspense fallback={null}>{ai}</Suspense>
   return null

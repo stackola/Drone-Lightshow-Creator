@@ -17,7 +17,10 @@ import { defaultEffect } from '@/core/effects'
 import { CueTiming, LightInput, SceneInput, ShapeInput } from './schemas'
 import { cueFromInput, effectFromInput, sceneFromInput, shapeFromInput } from './convert'
 import { describeMusic, summarizeShow } from './context'
-import { contactSheet } from './render'
+import { contactSheet, fourViews } from './render'
+import { createModel, lookAndFix, modelShape } from './model3d'
+import { sampleModel } from '@/core/model3d'
+import { allocate, scenePointColors } from '@/core/compile'
 import { describeToShape } from './shapeGen'
 
 export type ToolContent = BetaToolResultBlockParam['content']
@@ -74,9 +77,12 @@ function ok(summary: string, detail?: string): ToolOutcome {
 }
 
 async function resolveCustom(shape: z.infer<typeof ShapeInput>, signal?: AbortSignal): Promise<ShapeSpec | null> {
-  if (shape.kind !== 'custom') return null
-  if (!shape.description?.trim()) throw new ToolError('A custom shape needs a description.')
-  return (await describeToShape(shape.description, signal)).shape
+  if (shape.kind !== 'custom' && shape.kind !== 'model3d') return null
+  if (!shape.description?.trim()) throw new ToolError(`A ${shape.kind} shape needs a description.`)
+  if (shape.kind === 'custom') return (await describeToShape(shape.description, signal)).shape
+  // 3D: generate, then one look-and-fix round.
+  const attempts = await createModel(shape.description, { n: doc().droneCount, rounds: 1, render: fourViews, signal })
+  return modelShape(attempts[attempts.length - 1]!)
 }
 
 const sceneRef = z.string().describe('Scene id, e.g. "scene_abc123" (from get_show or <show_state>)')
@@ -101,11 +107,26 @@ export const TOOLS = [
   tool({
     name: 'look_at_scenes',
     description: 'See formations as images: front view (as the audience sees them) in their opening colours; grey dots are drones with lights off. Use it to judge readability of text, how a custom shape came out, colour choices, or before giving a creative review.',
-    schema: z.object({ scene_ids: z.array(z.string()).optional().describe('Scenes to look at (default: all, up to 12)') }),
-    label: (i) => (i.scene_ids?.length ? `Looking at ${i.scene_ids.length} scene${i.scene_ids.length > 1 ? 's' : ''}` : 'Looking at the scenes'),
+    schema: z.object({
+      scene_ids: z.array(z.string()).optional().describe('Scenes to look at (default: all, up to 12)'),
+      all_angles: z.boolean().optional().describe('Also show front, side, top and three-quarter views (up to 3 scenes) — use for 3D formations'),
+    }),
+    label: (i) => (i.scene_ids?.length ? `Looking at ${i.scene_ids.length} scene${i.scene_ids.length > 1 ? 's' : ''}${i.all_angles ? ' from all sides' : ''}` : 'Looking at the scenes'),
     run: (i) => {
       const d = doc()
-      const sheet = contactSheet(d, compile(d), i.scene_ids)
+      const compiled = compile(d)
+      if (i.all_angles) {
+        const list = compiled.scenes.filter((cs) => !i.scene_ids?.length || i.scene_ids.includes(cs.id)).slice(0, 3)
+        if (!list.length) throw new ToolError('There are no scenes to look at.')
+        return {
+          summary: `Looked at ${list.length} scene${list.length > 1 ? 's' : ''} from all sides`,
+          content: list.flatMap((cs) => [
+            { type: 'text' as const, text: `Scene ${cs.index + 1} "${d.scenes[cs.index]!.name}" from four angles (dimmer = further away):` },
+            { type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/png' as const, data: fourViews(cs.points, scenePointColors(cs), d.scenes[cs.index]!.name) } },
+          ]),
+        }
+      }
+      const sheet = contactSheet(d, compiled, i.scene_ids)
       if (!sheet) throw new ToolError('There are no scenes to look at.')
       return {
         summary: `Looked at ${sheet.count} scene${sheet.count > 1 ? 's' : ''}`,
@@ -215,10 +236,40 @@ export const TOOLS = [
       const li = Math.round(i.layer_index ?? 0)
       const layer = scene.layers[li]
       if (!layer) throw new ToolError(`Scene has ${scene.layers.length} layer(s); layer_index ${li} doesn't exist.`)
-      if (i.light.effect === 'image' && layer.shape.kind !== 'image') throw new ToolError('The image effect only works on image/custom formations.')
+      if (i.light.effect === 'image' && layer.shape.kind !== 'image' && layer.shape.kind !== 'model') throw new ToolError('Shape colours (effect "image") only work on image, custom and 3D model formations.')
       const effect = effectFromInput(i.light)
       replaceScene(index, { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, effect } : l)) }, `Light for ${scene.name}`)
       return ok(`Set “${scene.name}” light: ${i.light.effect}`)
+    },
+  }),
+  tool({
+    name: 'improve_3d_model',
+    description: 'Look at a 3D model formation from four angles and fix what doesn’t read — optionally following the designer’s feedback (e.g. "make the wings bigger"). Only for scenes whose shape is a 3D model.',
+    schema: z.object({ scene_id: sceneRef, layer_index: z.number().optional(), feedback: z.string().optional().describe('What the designer wants changed') }),
+    label: (i) => (i.feedback ? `Improving the 3D model: ${i.feedback}` : 'Looking at the 3D model and fixing it'),
+    run: async (i, ctx) => {
+      const { scene, index } = findScene(i.scene_id)
+      const li = Math.round(i.layer_index ?? 0)
+      const layer = scene.layers[li]
+      if (!layer || layer.shape.kind !== 'model') throw new ToolError('That layer is not a 3D model. Use set_shape with kind "model3d" to create one.')
+      const shape = layer.shape
+      const count = allocate(doc().droneCount, scene.layers.map((l) => l.weight))[li]!
+      const current = sampleModel(shape.parts, count)
+      if (!current) throw new ToolError('The current model has no usable parts.')
+      const attempt = { name: shape.name, parts: shape.parts, image: fourViews(current.points, current.colors, shape.name), hiddenParts: current.hiddenParts }
+      const { critique, next } = await lookAndFix(shape.name, attempt, count, fourViews, { feedback: i.feedback, signal: ctx.signal })
+      if (!next) return { summary: `Looks right: ${critique}`, content: `No change needed. ${critique}\n${safetyLine()}` }
+      let s: Scene = { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, shape: { ...shape, name: next.name, parts: next.parts } } : l)) }
+      s = fitToAirspace(fitScene(s, doc().droneCount, comfortableSpacing(doc().limits.minSpacing), 'exact'), doc())
+      replaceScene(index, s, `Improve ${shape.name}`)
+      return {
+        summary: `Improved the 3D model: ${critique}`,
+        content: [
+          { type: 'text', text: `Critique of the previous version: ${critique}\nApplied an improved model (${next.parts.length} parts). The new version from four angles:` },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: next.image } },
+          { type: 'text', text: safetyLine() },
+        ],
+      }
     },
   }),
   tool({

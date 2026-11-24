@@ -32,6 +32,7 @@ function describeShape(shape: ShowDoc['scenes'][number]['layers'][number]['shape
   if ('fill' in shape) extras.unshift(shape.fill)
   if (shape.kind === 'text') extras.unshift(`"${shape.text.replace(/\n/g, '\\n')}"`, shape.font)
   if (shape.kind === 'image') extras.unshift(`image "${shape.name}"`)
+  if (shape.kind === 'model') extras.unshift(`3D model "${shape.name}", ${shape.parts.length} parts`)
   return `${def.label.toLowerCase()}${extras.length ? ` (${extras.join(', ')})` : ''}, ${sizeLabel(shape.kind).toLowerCase()} ${f1(shape.size)} m`
 }
 

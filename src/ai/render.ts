@@ -79,3 +79,92 @@ export function shapePreview(points: Float32Array, colors: Float32Array | null, 
   drawTile(ctx, 0, 0, points, cols, label, `${n} drones`)
   return canvas.toDataURL('image/png').split(',')[1]!
 }
+
+// --- Four views of a 3D formation -----------------------------------------------------
+
+export interface View {
+  label: string
+  /** Rotation about the vertical axis, then tilt about the horizontal axis (radians). */
+  yaw: number
+  pitch: number
+}
+
+export const FOUR_VIEWS: View[] = [
+  { label: 'Front (audience view)', yaw: 0, pitch: 0 },
+  { label: 'Right side', yaw: -Math.PI / 2, pitch: 0 },
+  { label: 'Top (audience at bottom)', yaw: 0, pitch: Math.PI / 2 },
+  { label: 'Three-quarter, from above', yaw: -0.6, pitch: 0.35 },
+]
+
+/** Project points for a view: screen x, screen y (up), depth (toward the viewer). */
+export function projectView(points: Float32Array, v: View): Float32Array {
+  const n = points.length / 3
+  const out = new Float32Array(n * 3)
+  const cy = Math.cos(v.yaw), sy = Math.sin(v.yaw), cp = Math.cos(v.pitch), sp = Math.sin(v.pitch)
+  for (let i = 0; i < n; i++) {
+    const x = points[i * 3]!, y = points[i * 3 + 1]!, z = points[i * 3 + 2]!
+    const x1 = x * cy + z * sy
+    const z1 = -x * sy + z * cy
+    out[i * 3] = x1
+    out[i * 3 + 1] = y * cp - z1 * sp
+    out[i * 3 + 2] = y * sp + z1 * cp
+  }
+  return out
+}
+
+function drawDepthTile(ctx: CanvasRenderingContext2D, x0: number, y0: number, w: number, h: number, points: Float32Array, colors: Float32Array, view: View, scale: number, center: [number, number]) {
+  ctx.fillStyle = '#04060b'
+  ctx.fillRect(x0, y0, w, h)
+  const p = projectView(points, view)
+  const n = p.length / 3
+  let zMin = Infinity, zMax = -Infinity
+  for (let i = 0; i < n; i++) { zMin = Math.min(zMin, p[i * 3 + 2]!); zMax = Math.max(zMax, p[i * 3 + 2]!) }
+  const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => p[a * 3 + 2]! - p[b * 3 + 2]!)
+  const r = Math.max(1.4, Math.min(3.4, 100 / Math.sqrt(Math.max(1, n))))
+  for (const i of order) {
+    const depth = zMax > zMin ? (p[i * 3 + 2]! - zMin) / (zMax - zMin) : 1
+    const k = 0.35 + 0.65 * depth // far drones dimmer and smaller
+    const R = colors[i * 3]!, G = colors[i * 3 + 1]!, B = colors[i * 3 + 2]!
+    const dark = R + G + B < 0.03
+    ctx.fillStyle = dark ? `rgba(90,100,120,${0.25 + 0.3 * depth})` : `rgb(${Math.round(R * 255 * k)},${Math.round(G * 255 * k)},${Math.round(B * 255 * k)})`
+    ctx.beginPath()
+    ctx.arc(x0 + w / 2 + (p[i * 3]! - center[0]) * scale, y0 + 30 + (h - 40) / 2 - (p[i * 3 + 1]! - center[1]) * scale, r * (0.7 + 0.3 * depth), 0, Math.PI * 2)
+    ctx.fill()
+  }
+  ctx.fillStyle = '#c7cede'
+  ctx.font = '600 13px system-ui, sans-serif'
+  ctx.fillText(view.label, x0 + 10, y0 + 19)
+  ctx.strokeStyle = '#222836'
+  ctx.strokeRect(x0 + 0.5, y0 + 0.5, w - 1, h - 1)
+}
+
+/**
+ * A 2×2 sheet of the same formation from the front, side, top and a
+ * three-quarter angle (PNG base64). Drones further away are drawn dimmer.
+ */
+export function fourViews(points: Float32Array, colors: Float32Array | null, title: string): string {
+  const W = 360, H = 300
+  const canvas = document.createElement('canvas')
+  canvas.width = W * 2
+  canvas.height = H * 2 + 34
+  const ctx = canvas.getContext('2d')!
+  ctx.fillStyle = '#0b0e15'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  ctx.fillStyle = '#e8ebf1'
+  ctx.font = '600 15px system-ui, sans-serif'
+  ctx.fillText(`${title} — ${points.length / 3} drones`, 10, 22)
+  const n = points.length / 3
+  const cols = colors ?? new Float32Array(n * 3).fill(1)
+  // One scale for all views so proportions compare across them.
+  let ext = 1e-6
+  const cx = [0, 0, 0]
+  for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) cx[k]! += points[i * 3 + k]! / n
+  const centred = new Float32Array(points.length)
+  for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) {
+    centred[i * 3 + k] = points[i * 3 + k]! - cx[k]!
+    ext = Math.max(ext, Math.abs(centred[i * 3 + k]!))
+  }
+  const scale = (Math.min(W, H - 40) / 2 - 12) / ext
+  FOUR_VIEWS.forEach((v, k) => drawDepthTile(ctx, (k % 2) * W, 34 + Math.floor(k / 2) * H, W, H, centred, cols, v, scale, [0, 0]))
+  return canvas.toDataURL('image/png').split(',')[1]!
+}

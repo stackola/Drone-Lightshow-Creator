@@ -51,7 +51,7 @@ export function effectFromInput(l: LightInput, fallbackColor = '#38bdf8'): Effec
 
 /** Shape spec at unit size (it is fitted to safe spacing afterwards). Custom shapes are resolved by the caller. */
 export function shapeFromInput(s: ShapeInput): ShapeSpec {
-  if (s.kind === 'custom') throw new Error('custom shapes must be resolved before conversion')
+  if (s.kind === 'custom' || s.kind === 'model3d') throw new Error('custom and 3D model shapes must be resolved before conversion')
   if (s.kind === 'text') {
     const font = s.font ?? 'sans'
     const text = (s.text ?? '').trim().slice(0, 60) || 'HELLO'
@@ -74,10 +74,10 @@ export function shapeFromInput(s: ShapeInput): ShapeSpec {
 export function sceneFromInput(doc: ShowDoc, input: SceneInput, opts: { custom?: ShapeSpec | null; position?: Vec3 } = {}): Scene {
   const shapeIn = input.shape
   let shape: ShapeSpec
-  if (shapeIn.kind === 'custom') shape = opts.custom ?? newShape('sphere')
+  if (shapeIn.kind === 'custom' || shapeIn.kind === 'model3d') shape = opts.custom ?? newShape(shapeIn.kind === 'model3d' ? 'model' : 'sphere')
   else shape = shapeFromInput(shapeIn)
   const fallbackColor = ['#38bdf8', '#f472b6', '#facc15', '#a78bfa', '#34d399', '#fb923c'][doc.scenes.length % 6]!
-  const wantsImage = input.light.effect === 'image' && shape.kind === 'image'
+  const wantsImage = input.light.effect === 'image' && (shape.kind === 'image' || shape.kind === 'model')
   const effect = effectFromInput(wantsImage || input.light.effect !== 'image' ? input.light : { ...input.light, effect: 'solid' }, fallbackColor)
   const position: Vec3 = opts.position ?? [DEFAULT_CENTER[0], clamp(input.altitude, 10, 1000, DEFAULT_CENTER[1]), DEFAULT_CENTER[2]]
   let scene = newScene(doc, shape.kind, { name: input.name.slice(0, 60) || SHAPE_BY_KIND[shape.kind].label, shape, effect, position })

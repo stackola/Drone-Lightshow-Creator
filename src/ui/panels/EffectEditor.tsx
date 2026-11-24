@@ -63,7 +63,7 @@ export function EffectEditor({ effect, onChange, allowImage, keyPrefix, hasBeats
         </>
       )}
       {effect.kind === 'strobe' && (<>{color('color', 'Colour')}{num('rate', 'Rate', 0.5, 'Hz', 0.5, 25)}</>)}
-      {effect.kind === 'image' && <div className="hint">Each drone shows the colour of the image pixel it sits on.</div>}
+      {effect.kind === 'image' && <div className="hint">Each drone shows the colour of its part of the shape (image pixel or 3D model part).</div>}
       {effect.kind === 'off' && <div className="hint">These drones fly with lights off — handy for parking spare drones out of sight.</div>}
       {effect.kind !== 'off' && (
         <Row label="Brightness">

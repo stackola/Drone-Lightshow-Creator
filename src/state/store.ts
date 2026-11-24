@@ -52,7 +52,9 @@ interface State {
   snap: boolean
   audio: AudioRuntime | null
   toasts: Toast[]
-  dialog: null | 'new' | 'export' | 'shortcuts' | 'ai-settings' | 'director' | 'describe' | 'pitch'
+  dialog: null | 'new' | 'export' | 'shortcuts' | 'ai-settings' | 'director' | 'describe' | 'pitch' | 'model3d'
+  /** Layer an AI dialog is improving (e.g. an existing 3D model). */
+  aiTarget: { sceneId: string; layerId: string } | null
   /** Which tool the right-hand panel shows. */
   rightTab: 'inspector' | 'copilot'
 }
@@ -102,6 +104,7 @@ export const useStore = create<State & Actions>()((set, get) => ({
   toasts: [],
   dialog: null,
   rightTab: 'inspector',
+  aiTarget: null,
 
   update(recipe, label = 'Edit', key) {
     const { doc, past, lastKey, lastAt } = get()

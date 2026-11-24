@@ -31,13 +31,14 @@ export const LightInput = z.object({
 export type LightInput = z.infer<typeof LightInput>
 
 export const ShapeInput = z.object({
-  kind: z.enum([...SHAPE_KINDS, 'custom']).describe(
+  kind: z.enum([...SHAPE_KINDS, 'custom', 'model3d']).describe(
     '2D (face the audience): circle, heart, star, polygon, grid, spiral, wave. 3D: sphere, torus, cube, helix (double helix), cone (tree). ' +
-      'text: letters/numbers. custom: any other picture, drawn from `description` (logos, animals, objects, symbols).',
+      'text: letters/numbers. custom: any other flat picture, drawn from `description` (logos, symbols, silhouettes). ' +
+      'model3d: any other 3D object, built from `description` and checked visually from four angles (a rocket, a trophy, a globe on a stand) — slower, best for hero moments and spinning.',
   ),
   text: z.string().optional().describe('For text: the words. Keep it short (1–12 characters per line); use \\n for a second line.'),
   font: z.enum(['sans', 'serif', 'pixel']).optional().describe('For text. pixel = dot-matrix, great for digits'),
-  description: z.string().optional().describe('For custom: a concise visual description, e.g. "a rocket launching upward with flame"'),
+  description: z.string().optional().describe('For custom and model3d: a concise visual description, e.g. "a rocket launching upward with flame"'),
   fill: z.enum(['filled', 'outline']).optional().describe('circle/heart/star/polygon: filled area or just the outline'),
   points: z.number().optional().describe('star points (3–12)'),
   inner: z.number().optional().describe('star inner radius ratio (0.2–0.9)'),

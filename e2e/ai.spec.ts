@@ -214,3 +214,70 @@ test('without a key the copilot asks to connect, and the key can be tested', asy
   await page.keyboard.press('Control+k')
   await expect(page.getByLabel('Message the copilot')).toBeVisible()
 })
+
+// --- 3D models with look and fix -------------------------------------------------------
+
+const SNOWMAN = {
+  name: 'Snowman',
+  parts: [
+    { type: 'sphere', center: [0, -0.5, 0], radius: 0.5, color: '#ffffff' },
+    { type: 'sphere', center: [0, 0.25, 0], radius: 0.35, color: '#e8f1ff' },
+    { type: 'cone', from: [0, 0.25, 0.3], to: [0, 0.25, 0.7], radius: 0.08, radius_top: 0, color: '#ff8a00' },
+  ],
+}
+const SNOWMAN_HAT = { ...SNOWMAN, parts: [...SNOWMAN.parts, { type: 'cylinder', from: [0, 0.55, 0], to: [0, 0.9, 0], radius: 0.22, color: '#ff3366' }] }
+const isReview = (body: Record<string, unknown>) => JSON.stringify((body.output_config as { format?: unknown })?.format ?? {}).includes('"critique"')
+
+test('3D model: built, looked at from four angles, fixed until right, added to the show', async ({ page }) => {
+  let reviews = 0
+  const seen = await mockClaude(page, (body) => {
+    if (!isReview(body)) return { blocks: [{ type: 'text', text: JSON.stringify(SNOWMAN) }], stop: 'end_turn' }
+    reviews++
+    const reply = reviews === 1
+      ? { critique: 'Reads as a snowman, but it needs the hat from the brief.', done: false, model: SNOWMAN_HAT }
+      : { critique: 'A clear snowman with a red hat.', done: true, model: SNOWMAN_HAT }
+    return { blocks: [{ type: 'text', text: JSON.stringify(reply) }], stop: 'end_turn' }
+  })
+  await open(page)
+  await page.getByRole('button', { name: 'AI', exact: true }).click()
+  await page.getByText('Create a 3D model…').click()
+  await page.getByLabel('What 3D object should the drones form?').fill('a snowman with a hat')
+  await page.getByRole('button', { name: 'Build' }).click()
+  await expect(page.getByText('A clear snowman with a red hat.')).toBeVisible({ timeout: 20000 })
+  await expect(page.locator('.m3d-attempt')).toHaveCount(2)
+  await expect(page.getByText('it needs the hat from the brief')).toBeVisible()
+  // Each review looked at a real four-view render of the drones.
+  const review = (seen[1]!.body.messages as Msg[])[0]!.content as { type: string; source?: { data: string } }[]
+  expect(review.find((b) => b.type === 'image')?.source?.data.startsWith('iVBOR')).toBe(true)
+  await page.getByRole('button', { name: 'Add as new scene' }).click()
+  await expect(page.locator('.srow', { hasText: 'Snowman' })).toBeVisible()
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 15000 })
+  await expect(page.locator('.layer-card').getByText('Snowman · 4 parts')).toBeVisible()
+})
+
+test('3D model: improve an existing model with designer feedback', async ({ page }) => {
+  let feedbackSeen = ''
+  await mockClaude(page, (body) => {
+    if (!isReview(body)) return { blocks: [{ type: 'text', text: JSON.stringify(SNOWMAN) }], stop: 'end_turn' }
+    feedbackSeen = JSON.stringify(body.messages)
+    return { blocks: [{ type: 'text', text: JSON.stringify({ critique: 'Added the hat you asked for.', done: false, model: SNOWMAN_HAT }) }], stop: 'end_turn' }
+  })
+  await open(page)
+  // Build without look-and-fix rounds, add it, then improve from the inspector.
+  await page.getByRole('button', { name: 'AI', exact: true }).click()
+  await page.getByText('Create a 3D model…').click()
+  await page.getByLabel('What 3D object should the drones form?').fill('a snowman')
+  await page.getByRole('radio', { name: 'None' }).click()
+  await page.getByRole('button', { name: 'Build' }).click()
+  await page.getByRole('button', { name: 'Add as new scene' }).click()
+  await expect(page.locator('.layer-card').getByText('Snowman · 3 parts')).toBeVisible()
+  await page.locator('.layer-card').getByRole('button', { name: 'Improve' }).click()
+  await expect(page.locator('.m3d-attempt')).toHaveCount(1) // the current model, as seen now
+  await page.getByLabel('Tell Claude what to change').fill('give it a red top hat')
+  await page.getByRole('button', { name: 'Fix', exact: true }).click()
+  await expect(page.getByText('Added the hat you asked for.')).toBeVisible({ timeout: 15000 })
+  expect(feedbackSeen).toContain('give it a red top hat')
+  await page.getByRole('button', { name: 'Apply to scene' }).click()
+  await expect(page.locator('.layer-card').getByText('Snowman · 4 parts')).toBeVisible()
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 15000 })
+})

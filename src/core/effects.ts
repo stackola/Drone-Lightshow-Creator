@@ -30,7 +30,7 @@ export const EFFECTS: EffectDef[] = [
   { kind: 'twinkle', label: 'Twinkle' },
   { kind: 'chase', label: 'Chase' },
   { kind: 'wave', label: 'Wave' },
-  { kind: 'image', label: 'Image colours' },
+  { kind: 'image', label: 'Shape colours' },
   { kind: 'flash', label: 'Flash' },
   { kind: 'strobe', label: 'Strobe' },
   { kind: 'off', label: 'Lights off' },
@@ -123,6 +123,7 @@ export function effectColor(e: Effect, d: DroneLook, tau: number, t: number, bea
       break
     }
     case 'image': {
+      // Colours carried by the shape itself (images and 3D models).
       const c = d.image ?? [1, 1, 1]
       out[0] = c[0]; out[1] = c[1]; out[2] = c[2]
       break

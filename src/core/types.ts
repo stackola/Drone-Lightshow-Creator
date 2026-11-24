@@ -120,8 +120,29 @@ export type ShapeSpec =
   | { kind: 'cone'; size: number; radius: number }
   | { kind: 'text'; size: number; text: string; font: TextFont; mask: Mask }
   | { kind: 'image'; size: number; name: string; mask: Mask; colors: string | null; cw: number; ch: number }
+  | { kind: 'model'; size: number; name: string; parts: ModelPart[] }
 
 export type ShapeKind = ShapeSpec['kind']
+
+// --- 3D models ---------------------------------------------------------------------
+// A model is a union of solid parts in model space (y up, z toward the audience,
+// any units — it is normalised so its largest extent is 1, then scaled by `size`).
+// Drones are spread evenly over the outer surface of the union.
+
+export type ModelPart =
+  | { type: 'sphere'; center: Vec3; radius: number; color: Hex }
+  | { type: 'ellipsoid'; center: Vec3; radii: Vec3; rotation: Vec3; color: Hex }
+  | { type: 'box'; center: Vec3; size: Vec3; rotation: Vec3; color: Hex }
+  /** Solid cylinder between two points. */
+  | { type: 'cylinder'; from: Vec3; to: Vec3; radius: number; color: Hex }
+  /** Cone or frustum: `radius` at `from`, `radiusTop` at `to` (0 = pointed). */
+  | { type: 'cone'; from: Vec3; to: Vec3; radius: number; radiusTop: number; color: Hex }
+  /** Rounded rod between two points (limbs, stems, handles). */
+  | { type: 'capsule'; from: Vec3; to: Vec3; radius: number; color: Hex }
+  /** Ring lying in its local XZ plane (rotate [90,0,0] to face the audience). */
+  | { type: 'torus'; center: Vec3; radius: number; tube: number; rotation: Vec3; color: Hex }
+
+export type ModelPartType = ModelPart['type']
 
 export interface Layer {
   id: string

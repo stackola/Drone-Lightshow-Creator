@@ -22,8 +22,9 @@ A show is a sequence: **takeoff → scene → scene → … → return & land**.
 Optional, powered by Claude Opus 5.5. Open **AI** in the top bar or press **Ctrl K**.
 
 - **Generate a show from a brief.** Describe the occasion, story, colours and words. Claude writes a structured plan (scenes, lights and cues). The engine builds it, lands every formation on a downbeat of your music, and applies automatic safety fixes. You preview the result before it replaces your show, and it's one undo step.
-- **Copilot.** Edit by conversation: "make the heart pink and slow the globe", "add flashes on the drop", "review my show". It works through 16 tools that edit the show the same way the UI does. Each tool reports the safety status back, so the model sees the consequences of its own edits. It can *look* at rendered formations (vision) to judge readability and colour. Everything it does for one request is a single undo step.
+- **Copilot.** Edit by conversation: "make the heart pink and slow the globe", "add flashes on the drop", "review my show". It works through 17 tools that edit the show the same way the UI does. Each tool reports the safety status back, so the model sees the consequences of its own edits. It can *look* at rendered formations (vision) to judge readability and colour. Everything it does for one request is a single undo step.
 - **Describe a formation.** Words become a bold SVG drawing, which becomes drones in the drawing's colours. "Refine" shows Claude how its drawing actually came out as drones, so it can fix what doesn't read.
+- **Create a 3D model — with look and fix.** Describe an object ("a hot-air balloon with a basket"). Claude builds it from solid parts (spheres, ellipsoids, boxes, cylinders, cones, capsules, tori, each with its own colour), and the engine spreads the drones evenly over the outer surface. Then Claude *looks* at the actual drones from the front, side, top and a three-quarter angle, says what doesn't read (a part that's too thin, a missing feature, wrong proportions), and fixes the model. It repeats until it's satisfied or the round limit (1–3) is reached. You can add your own feedback for more rounds, and reopen any 3D model from the inspector with **Improve**. The copilot and the show generator can create 3D models too, and the copilot can look at any scene from all four angles.
 - **Write a client pitch.** A proposal written from the real show: its formations (as images), timeline, music and exact safety figures. Unknowns like dates and prices become `[placeholders]`.
 
 **The model proposes; the engine decides.** Model output never bypasses the safety engine. Every number is clamped, every colour validated, and every formation goes through the same sizing, airspace and validation path as a manual edit. Tool inputs are schema-checked before they run, and a response cut off mid-tool-call is never executed.
@@ -89,7 +90,8 @@ src/
   state/     Zustand store (document + undo history), playback clock, actions, autosave & files
   ui/        React: scene list, 3D viewport (react-three-fiber), timeline, inspector, present mode
   ai/        Claude features: client, copilot agent loop + tools, director, formation drawing,
-             pitch writer; schemas and converters that route model output through the engine
+             3D models with look-and-fix, pitch writer; schemas and converters that route model
+             output through the engine
   app/       Built-in demo shows (CI requires every demo to pass every check)
 ```
 

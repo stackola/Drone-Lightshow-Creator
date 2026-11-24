@@ -245,7 +245,7 @@ export function MenuButton({ button, children, align, width, className = 'btn', 
   )
 }
 
-export function Modal({ title, onClose, children, footer }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
+export function Modal({ title, onClose, children, footer, wide }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', onKey)
@@ -253,7 +253,7 @@ export function Modal({ title, onClose, children, footer }: { title: string; onC
   }, [onClose])
   return createPortal(
     <div className="modal-back" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-label={title}>
+      <div className={`modal${wide ? ' wide' : ''}`} role="dialog" aria-label={title}>
         <div className="modal-head">
           <h2>{title}</h2>
           <button className="btn ghost icon sm" onClick={onClose} aria-label="Close">

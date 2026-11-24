@@ -9,6 +9,8 @@ import { RefusalError, baseParams, getClient, recordUsage } from './client'
 import { describeMusic, estimateTimings } from './context'
 import { buildShowFromPlan, type BuiltShow } from './convert'
 import { describeToShape } from './shapeGen'
+import { createModel, modelShape } from './model3d'
+import { fourViews } from './render'
 import { newShow } from '@/core/defaults'
 import { formatTime } from '@/core/validate'
 import { getState } from '@/state/store'
@@ -19,7 +21,7 @@ The medium
 - Every drone takes part in every scene. Drones are points of coloured light a few metres apart, seen from hundreds of metres away. Bold, recognisable shapes read; fine detail and long words don't.
 - The engine sizes each formation automatically to the smallest safe size and keeps it inside the airspace; use shape.scale only to make a formation deliberately bigger. Flights between scenes are planned and timed by the engine for safety — you can't make them faster.
 - Text: keep it short (about 1 character per 15–25 drones for crisp letters). For digits or short words use spare_fraction (0.3–0.6) so the text stays compact while the remaining drones wait dark behind it.
-- For pictures that aren't built-in shapes (logos, animals, objects, symbols), use shape kind "custom" with a clear visual description. Use at most 4 custom shapes per show, for the moments that matter most.
+- For flat pictures that aren't built-in shapes (logos, symbols, silhouettes), use shape kind "custom" with a clear visual description. For 3D objects (a rocket, a trophy, a globe on a stand, an animal), use "model3d" — it is built from solid parts, checked visually from four angles, and looks best spinning. Use at most 4 custom or model3d shapes per show, for the moments that matter most.
 - 3D shapes (sphere, torus, cube, helix, cone) look best spinning slowly (spin 10–25 °/s). 2D shapes face the audience; tilt or turn them only for effect.
 - Light: each scene has a base light; cues add accents over time (flashes, washes, sweeps, blackouts), anchored to a scene's arrival. Use cues sparingly and with intent.
 
@@ -114,13 +116,20 @@ export async function directShow(req: DirectorRequest, onProgress: (p: DirectorP
   if (!parsed.success || !parsed.data.scenes.length) throw new Error('The plan was incomplete. Try again.')
   const plan = parsed.data
 
-  // Draw custom formations in parallel (capped).
-  const customIdx = plan.scenes.flatMap((s, i) => (s.shape.kind === 'custom' && s.shape.description ? [i] : [])).slice(0, 4)
+  // Draw custom formations and build 3D models in parallel (capped).
+  const customIdx = plan.scenes.flatMap((s, i) => ((s.shape.kind === 'custom' || s.shape.kind === 'model3d') && s.shape.description ? [i] : [])).slice(0, 4)
   const custom = new Map<number, ShapeSpec>()
   let customFailures = 0
   if (customIdx.length) {
-    onProgress({ phase: 'drawing', scenes: plan.scenes.map((s) => s.name), note: `Drawing ${customIdx.length} custom formation${customIdx.length > 1 ? 's' : ''}…` })
-    const results = await Promise.allSettled(customIdx.map((i) => describeToShape(plan.scenes[i]!.shape.description!, signal)))
+    onProgress({ phase: 'drawing', scenes: plan.scenes.map((s) => s.name), note: `Drawing ${customIdx.length} custom formation${customIdx.length > 1 ? 's' : ''} (3D models are checked from four angles)…` })
+    const results = await Promise.allSettled(
+      customIdx.map(async (i): Promise<{ shape: ShapeSpec }> => {
+        const s = plan.scenes[i]!.shape
+        if (s.kind === 'custom') return describeToShape(s.description!, signal)
+        const attempts = await createModel(s.description!, { n: req.droneCount, rounds: 1, render: fourViews, signal })
+        return { shape: modelShape(attempts[attempts.length - 1]!) }
+      }),
+    )
     results.forEach((r, k) => {
       if (r.status === 'fulfilled') custom.set(customIdx[k]!, r.value.shape)
       else customFailures++

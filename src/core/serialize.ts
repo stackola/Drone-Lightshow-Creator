@@ -1,7 +1,8 @@
 // Project files: versioned JSON. Loading is defensive — any missing or
 // malformed field falls back to a sane default instead of crashing the editor.
 
-import type { AudioMeta, Effect, FlightSpec, Layer, LightCue, Limits, Scene, ShapeSpec, ShowDoc, Site, Vec3 } from './types'
+import type { AudioMeta, Effect, FlightSpec, Layer, LightCue, Limits, ModelPart, Scene, ShapeSpec, ShowDoc, Site, Vec3 } from './types'
+import { MAX_PARTS } from './model3d'
 import { DEFAULT_LIMITS, DEFAULT_SITE, newId } from './defaults'
 import { SHAPE_BY_KIND } from './shapes'
 import { EFFECTS, defaultEffect } from './effects'
@@ -138,9 +139,28 @@ function shapeSpec(v: unknown): ShapeSpec | null {
     else if (k === 'colors') out[k] = typeof x === 'string' ? x : null
   }
   out.size = num(v.size, 30, 0.1, 5000)
+  if (v.kind === 'model') out.parts = Array.isArray(v.parts) ? v.parts.map(modelPart).filter((x): x is ModelPart => !!x).slice(0, MAX_PARTS) : []
   if ('fill' in base) out.fill = v.fill === 'outline' ? 'outline' : 'filled'
   if ('font' in base) out.font = v.font === 'serif' || v.font === 'pixel' ? v.font : 'sans'
   return out as unknown as ShapeSpec
+}
+
+/** Validate one 3D model part; malformed parts are dropped rather than crashing the editor. */
+export function modelPart(v: unknown): ModelPart | null {
+  if (!isObj(v) || typeof v.type !== 'string') return null
+  const pos = (x: unknown, d: number) => num(x, d, 1e-4, 1e4)
+  const color = hex(v.color, '#ffffff')
+  const rot = vec(v.rotation, [0, 0, 0])
+  switch (v.type) {
+    case 'sphere': return { type: 'sphere', center: vec(v.center, [0, 0, 0]), radius: pos(v.radius, 0.5), color }
+    case 'ellipsoid': { const r = vec(v.radii, [0.5, 0.5, 0.5]); return { type: 'ellipsoid', center: vec(v.center, [0, 0, 0]), radii: [pos(r[0], 0.5), pos(r[1], 0.5), pos(r[2], 0.5)], rotation: rot, color } }
+    case 'box': { const z = vec(v.size, [1, 1, 1]); return { type: 'box', center: vec(v.center, [0, 0, 0]), size: [pos(z[0], 1), pos(z[1], 1), pos(z[2], 1)], rotation: rot, color } }
+    case 'cylinder': return { type: 'cylinder', from: vec(v.from, [0, 0, 0]), to: vec(v.to, [0, 1, 0]), radius: pos(v.radius, 0.2), color }
+    case 'capsule': return { type: 'capsule', from: vec(v.from, [0, 0, 0]), to: vec(v.to, [0, 1, 0]), radius: pos(v.radius, 0.2), color }
+    case 'cone': return { type: 'cone', from: vec(v.from, [0, 0, 0]), to: vec(v.to, [0, 1, 0]), radius: num(v.radius, 0.3, 0, 1e4), radiusTop: num(v.radiusTop, 0, 0, 1e4), color }
+    case 'torus': return { type: 'torus', center: vec(v.center, [0, 0, 0]), radius: pos(v.radius, 0.5), tube: pos(v.tube, 0.15), rotation: rot, color }
+    default: return null
+  }
 }
 
 function effect(v: unknown): Effect {

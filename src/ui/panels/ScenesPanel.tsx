@@ -51,7 +51,7 @@ export function ShapePicker({ onPick }: { onPick: (kind: ShapeKind | 'describe')
           <div className="menu-label">{g === 'Content' ? 'Text & images' : `${g} shapes`}</div>
           <div className="shape-grid">
             {SHAPES.filter((s) => s.group === g).map((s) => (
-              <button key={s.kind} className="shape-tile" onClick={() => onPick(s.kind)} title={`Add ${s.label}`}>
+              <button key={s.kind} className="shape-tile" onClick={() => onPick(s.kind)} title={s.kind === 'model' ? 'Describe a 3D object; Claude builds it and checks it from four angles' : `Add ${s.label}`}>
                 {s.kind === 'text' ? (
                   <Type size={26} style={{ margin: '7px 0' }} />
                 ) : s.kind === 'image' ? (
@@ -77,6 +77,7 @@ export function ShapePicker({ onPick }: { onPick: (kind: ShapeKind | 'describe')
 
 export function pickAndAdd(kind: ShapeKind | 'describe') {
   if (kind === 'describe') getState().set({ dialog: 'describe' })
+  else if (kind === 'model') getState().set({ dialog: 'model3d', aiTarget: null })
   else if (kind === 'image') void addImageScene()
   else addScene(kind)
 }
