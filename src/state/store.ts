@@ -167,10 +167,3 @@ export const useStore = create<State & Actions>()((set, get) => ({
 }))
 
 export const getState = useStore.getState
-
-/** Look up the selected scene (if any). */
-export function selectedScene(s: State) {
-  const sel = s.selection
-  if (sel.kind !== 'scene' && sel.kind !== 'flight') return null
-  return s.doc.scenes.find((x) => x.id === sel.id) ?? null
-}

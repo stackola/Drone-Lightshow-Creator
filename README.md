@@ -1,113 +1,89 @@
 # Drone Show Designer
 
-A browser-based, node-based editor for designing aerial drone light shows — built from the graph model up, with a live 3D viewport, a deterministic export pipeline, and an in-app AI agent that can author and modify shows through tool calls.
+Design drone light shows in the browser: arrange formations on a timeline, sync them to music, layer light cues on top, and preview the result from the audience's seat. Every edit is checked for safety, and the checks are exact.
 
-**Live: [drones.prototyp.ms](https://drones.prototyp.ms)** — actively developed (work in progress).
+Built for small agencies and operators who need to go from an idea to a convincing client preview quickly, without giving up a show that can actually fly.
 
-> **Stack:** TypeScript · React 18 · Three.js / React Three Fiber · React Flow · Zustand · Vite · Vitest · Playwright · Web Workers · Tailwind
+![Editor: scene list, audience view, inspector, and a timeline with scenes, light cues and music](docs/screenshot.png)
 
-![Drone Show Designer — 3D preview, timeline and node graph mid-show](docs/media/screenshot.png)
+## How it works
 
----
+A show is a sequence: **takeoff → scene → scene → … → return & land**. Each scene is a formation that the drones hold for a while. Between scenes, the drones fly.
 
-## Why it's interesting
+- **Formations come from shapes, text, or images.** There are 2D shapes (circle, heart, star, polygon, grid, spiral, wave), 3D shapes (sphere, torus, cube, double helix, cone), text in sans, serif or dot-matrix fonts, and image/logo import where each drone takes its pixel's colour. A scene can combine several shapes and share the drones between them, including parking spare drones dark behind the formation.
+- **New formations are safe by default.** Each one is sized so that drones sit at least √2 × the minimum spacing apart, and it is lifted above the airspace floor.
+- **Flights are planned for you.** Drones are matched to their next positions by an optimal assignment (Hungarian algorithm, minimising total squared distance). They all fly straight lines on one shared S-curve timing profile: ease in, cruise, ease out. The duration is computed from your speed and acceleration limits. You can make a flight longer, but never unsafely short.
+- **Lights are first-class.** Each shape has a base look: solid, gradient, rainbow, pulse, twinkle, chase, wave, image colours, or lights off. On top of that, **light cues** sit on their own timeline track: flashes, strobes, washes, sweeps and blackouts. They can span scenes and flights, blend over the base look (replace, tint, add), and fade in and out.
+- **Music sync.** Drop in a song and beats are detected (spectral-flux onsets, tempo by autocorrelation, and a dynamic-programming beat tracker). Timeline edits snap to beats, and pulse and flash effects can fire on the beat or bar.
+- **Client preview.** *Present* plays the show fullscreen from the audience position, with music.
 
-Most drone-show tooling is Blender plugins or proprietary desktops. This is a from-scratch, web-native editor with a real engineering spine:
+## Safety checks
 
-- **Graph-as-source-of-truth architecture.** A single typed `ShowGraph` (`launch → formation → transition → idle → land` nodes, with `flow` and `attachment` edges) is the canonical state. The React Flow canvas, the Three.js viewport, the inspector panels, the validator, and the exporter are all *derived views* of that one model. No duplicated state, no drift.
-- **Two-tier evaluation: live preview vs. bake.** A fast `evaluateAtTime()` path runs on the main thread (sub-16ms for 60 fps scrubbing) with deliberate approximations. A separate deterministic `bakeShow()` runs in a Web Worker with full physics enforcement and is the only thing that produces export trajectories. The contract between the two is explicit and tested.
-- **AI agent integrated as a first-class editor surface.** A Claude tool-calling agent has access to **30+ typed tools** (read + write) that operate directly on the graph: `create_formation_from_text`, `add_transition_node`, `set_color_program`, `generate_music_synced_show`, `analyze_image_for_formation`, `fix_all_violations`, etc. Every write tool snapshots history first, so any AI change is undoable with Ctrl+Z.
-- **Strong test coverage on the hard parts.** ~41 test files, ~7.9 k LOC of tests covering the graph evaluator, transition strategies, ant-trail interpolation, physics validation, time pushing, topology, split/merge flow assignment, serialization round-trips, and store cross-interactions.
+Checks run in a background worker after every edit. Each issue links to the moment it happens and, where possible, offers a one-click fix.
 
----
+| Check | How |
+|---|---|
+| Minimum distance in formations | Every pair, every formation. Holds are rigid (static or spinning), so the distance is constant while held. |
+| Minimum distance during flights | Every pair, closed form. With shared timing, the distance between two drones is \|A + s·B\|, so its minimum over the flight is solved analytically, not sampled. |
+| Speed (horizontal, climb, descent) and acceleration | Exact peaks of the S-curve profile, and of spin ramps. |
+| Altitude floor and ceiling, flight radius | Straight segments peak at their endpoints. Spinning formations are checked in closed form over the swept angle. |
+| Battery | Total flight time, takeoff to landing. |
 
-## What's in the box
+Why formations spaced ≥ √2 × min spacing always fly clear: with optimal assignment and synchronised straight-line motion, start and end separations above 2√2·r keep robots of radius r from colliding (Turpin, Michael & Kumar, “Concurrent assignment and planning of trajectories for multiple robots”, IJRR 2014). The validator doesn't rely on this; it checks every pair anyway.
 
-### Editor (root project)
+The preview, the validator and the exporter all call the same `evaluate()` function, so what you see is exactly what gets exported.
 
-- **Node-based show graph.** Add launches, formations, transitions, idles, and lands; wire them with flow edges; attach idle behaviors to formation nodes. Drag, group, search via `Ctrl+K`, undo/redo, keyboard-driven.
-- **3D viewport.** Live Three.js preview of drone positions and colors, scrubbable timeline, transport controls, formation gizmo for direct manipulation, point-level editing.
-- **Formation library.** 7 procedural generators (ring, grid, sphere, spiral, line, heart, star), 3 animated formations (firework burst, apple-tree shake, breathing sphere), free text-to-points via the AI generator.
-- **8 transition strategies:** stagger, spiral, explosion, implosion, cascade, morph, color-sweep, bounce — each with its own point mapping and minimum-duration estimator.
-- **11 idle behaviors** for attached drones: hover, orbit, breathe, random-walk, figure-8, swarm, sparkle, pulse, wave, spin, drift — with per-axis inheritance flags.
-- **10 color programs:** solids, gradients, rainbows, pulses, chase patterns.
-- **Physics-aware validation.** Per-segment velocity (horizontal + vertical), acceleration, drone-pair spacing, altitude floor / geofence. Auto-fix patches available for common violations; auto-timing assigns durations to satisfy constraints.
-- **Crash recovery.** IndexedDB autosave; offers to restore the most recent in-progress show on reload.
-- **Export.** Per-drone CSV waypoint bundles (zipped, ENU or NED), full project JSON, optional MP4 video render. Bake output is deterministic — same graph, same constraints, same trajectories.
+## Export
 
-### Standalone (`standalone/`)
+- **Project** (`.droneshow.json`): the full show, with the music embedded.
+- **Trajectories** (ZIP): one CSV per drone with columns `time_s, east_m, north_m, up_m, red, green, blue`, sampled at 5–20 Hz. Coordinates are ENU metres from the centre of the takeoff grid; the audience stands to the south.
 
-A smaller, chat-only companion app that takes a natural-language prompt → produces drone keyframes → previews them in 3D → exports a `formation.json` + paste-in Blender import script. Same physics validator as the main editor, ~1.2 k LOC, no graph.
+Formats for specific flight controllers and show systems are planned.
 
----
+## Keyboard
 
-## Architecture at a glance
+| | |
+|---|---|
+| Space | Play / pause |
+| ← → (Shift) | Seek 1 s (5 s) |
+| ↑ ↓ | Previous / next scene |
+| A / C | Add formation / light cue at playhead |
+| Ctrl D, Delete | Duplicate, delete |
+| Ctrl Z, Ctrl Shift Z | Undo, redo |
+| 1 2 3 | Audience / orbit / top view |
+| P | Present |
+| Ctrl S | Save project |
 
-```
-src/
-├── graph/         # Pure model & engine: types, topology, timing, evaluate, bake, validate, serialize
-├── registries/    # Pluggable strategies: generators, transitions, idle behaviors, color programs
-├── stores/        # Zustand stores: graph, formations, project, playhead, history, view, selection, AI chat
-├── services/      # IO, autosave, bake worker, exports, AI service (Claude API), AI tools, image analysis
-├── components/    # canvas/ (React Flow) · viewport/ (R3F) · inspectors/ · panels/ · dialogs
-└── app/           # App shell, layout, demo seeds
-```
+Drag any number field's label to scrub it (Shift ×10, Alt ×0.1). Hold Alt while dragging on the timeline to bypass beat snapping.
 
-**Architectural laws** (enforced by code + tests):
-
-1. `ShowGraph` is canonical. Everything else derives.
-2. Live preview is allowed to approximate; bake is not.
-3. Transitions own point mapping, entering/exiting drones, and motion interpolation — but never timing or drone-count allocation.
-4. Registries are the only extension surface — adding a transition, generator, or color program is a single `register…()` call.
-
-See `src/docs/PREVIEW_VS_BAKE.md` for the preview ↔ bake contract.
-
----
-
-## Getting started
+## Development
 
 ```bash
 pnpm install
 pnpm dev          # http://localhost:5173
-pnpm typecheck    # strict TS, no emit
-pnpm test         # vitest
-pnpm test:e2e     # playwright
-pnpm build        # production bundle
+pnpm test         # unit tests (engine, validator, beats, export, demos)
+pnpm test:e2e     # browser tests (Playwright; run `pnpm exec playwright install chromium` once)
+pnpm typecheck && pnpm lint && pnpm build
 ```
 
-The standalone app:
-
-```bash
-cd standalone
-npm install
-npm run dev
+```
+src/
+  core/      Pure, deterministic engine: model, shapes, assignment, motion profiles,
+             compile → flight plan, evaluate(t), exact validator, beats, export, file format
+  engine/    Web Worker that compiles and validates off the main thread
+  state/     Zustand store (document + undo history), playback clock, actions, autosave & files
+  ui/        React: scene list, 3D viewport (react-three-fiber), timeline, inspector, present mode
+  app/       Built-in demo shows (CI requires every demo to pass every check)
 ```
 
-AI features are optional. Add a Claude API key in-app (Settings → AI). Without a key the editor works fully; the chat panel is disabled.
+## Roadmap
 
----
-
-## CI
-
-GitHub Actions runs `typecheck → lint → test → build` on every push and PR. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
-
----
-
-## Project shape
-
-| | |
-|---|---|
-| Source files (excl. tests) | 110 |
-| Source LOC (excl. tests) | ~22.7 k |
-| Test files | 41 |
-| Test LOC | ~7.9 k |
-| Registered AI tools | 30+ |
-| Transition strategies | 8 |
-| Idle behaviors | 11 |
-| Formation generators | 7 + 3 animated |
-
----
+- Hardware export formats
+- Video export and shareable preview links
+- An audience-view overlap check (drones that are safely apart but merge into one dot from the ground)
+- Tracks for subgroups on independent timing (splits and merges)
+- AI-assisted first drafts
 
 ## License
 
-[MIT](LICENSE) — © Willi Krappen. Part of my portfolio at [prototyp.ms](https://prototyp.ms).
+[MIT](LICENSE)

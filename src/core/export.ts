@@ -11,24 +11,6 @@ export interface ExportOptions {
   rate: number
 }
 
-export function droneCsv(c: Compiled, drone: number, rate: number): string {
-  const pos = new Float32Array(c.n * 3)
-  const col = new Float32Array(c.n * 3)
-  const lines = ['time_s,east_m,north_m,up_m,red,green,blue']
-  const steps = Math.ceil(c.duration * rate)
-  for (let k = 0; k <= steps; k++) {
-    const t = Math.min(c.duration, k / rate)
-    evaluate(c, t, pos, col)
-    const o = drone * 3
-    lines.push([
-      t.toFixed(3),
-      pos[o]!.toFixed(3), (-pos[o + 2]! || 0).toFixed(3), pos[o + 1]!.toFixed(3),
-      Math.round(col[o]! * 255), Math.round(col[o + 1]! * 255), Math.round(col[o + 2]! * 255),
-    ].join(','))
-  }
-  return lines.join('\n') + '\n'
-}
-
 /** One CSV per drone, zipped. Evaluates the show once per sample for all drones. */
 export function exportCsvZip(c: Compiled, opts: ExportOptions, showName: string): Uint8Array {
   const rate = Math.max(1, Math.min(50, opts.rate))

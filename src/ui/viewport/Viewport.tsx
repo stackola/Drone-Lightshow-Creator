@@ -125,27 +125,37 @@ function Pads() {
   )
 }
 
-const hazeVertex = /* glsl */ `
-  varying float vH;
+const skyVertex = /* glsl */ `
+  varying vec3 vWorld;
   void main() {
-    vH = position.y;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec4 w = modelMatrix * vec4(position, 1.0);
+    vWorld = w.xyz;
+    gl_Position = projectionMatrix * viewMatrix * w;
   }
 `
-const hazeFragment = /* glsl */ `
-  varying float vH;
+const skyFragment = /* glsl */ `
+  varying vec3 vWorld;
   void main() {
-    float k = exp(-max(vH, 0.0) / 90.0);
-    gl_FragColor = vec4(vec3(0.10, 0.15, 0.27) * k, 1.0);
+    vec3 dir = normalize(vWorld - cameraPosition);
+    float h = max(dir.y, 0.0);
+    vec3 zenith = vec3(0.012, 0.018, 0.035);
+    vec3 mid = vec3(0.035, 0.05, 0.095);
+    vec3 horizon = vec3(0.085, 0.115, 0.2);
+    vec3 c = mix(horizon, mid, smoothstep(0.0, 0.12, h));
+    c = mix(c, zenith, smoothstep(0.12, 0.7, h));
+    gl_FragColor = vec4(c, 1.0);
   }
 `
 
-/** Soft glow along the horizon so the ground and sky read as a place. */
-function Haze() {
-  const mat = useMemo(() => new THREE.ShaderMaterial({ vertexShader: hazeVertex, fragmentShader: hazeFragment, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }), [])
+/** Night-sky dome with a soft glow toward the horizon. */
+function Sky() {
+  const mat = useMemo(() => new THREE.ShaderMaterial({ vertexShader: skyVertex, fragmentShader: skyFragment, side: THREE.BackSide, depthWrite: false }), [])
+  const ref = useRef<THREE.Mesh>(null)
+  // Keep the dome centred on the camera so the horizon is always at eye level.
+  useFrame(({ camera }) => ref.current?.position.copy(camera.position))
   return (
-    <mesh material={mat} position={[0, 150, 0]} renderOrder={-1}>
-      <cylinderGeometry args={[1900, 1900, 300, 64, 1, true]} />
+    <mesh ref={ref} material={mat} renderOrder={-2} frustumCulled={false}>
+      <sphereGeometry args={[4000, 48, 24]} />
     </mesh>
   )
 }
@@ -167,7 +177,7 @@ function Ground({ present }: { present: boolean }) {
         <planeGeometry args={[4000, 4000]} />
         <meshBasicMaterial color="#05080e" />
       </mesh>
-      <Haze />
+      <Sky />
       <Grid
         position={[0, 0, 0]}
         args={[10, 10]}
@@ -252,9 +262,10 @@ function IssueMarkers() {
 export function Viewport({ present = false }: { present?: boolean }) {
   return (
     <Canvas
-      camera={{ fov: 40, near: 0.5, far: 5000, position: [0, 1.7, 160] }}
+      camera={{ fov: 40, near: 0.5, far: 9000, position: [0, 1.7, 160] }}
       dpr={[1, 2]}
-      gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
+      gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
+      onCreated={({ gl }) => gl.setClearColor('#04060b')}
       frameloop="always"
     >
       <CameraRig present={present} />

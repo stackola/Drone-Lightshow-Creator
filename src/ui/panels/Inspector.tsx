@@ -70,11 +70,11 @@ export function IssueCard({ issue }: { issue: Issue }) {
   )
 }
 
-function Vec3Field({ value, onChange, labels, step = 0.5, unit = 'm' }: { value: Vec3; onChange: (v: Vec3) => void; labels: [string, string, string]; step?: number; unit?: string }) {
+function Vec3Field({ value, onChange, labels, step = 0.5 }: { value: Vec3; onChange: (v: Vec3) => void; labels: [string, string, string]; step?: number }) {
   return (
     <div className="grid3">
       {[0, 1, 2].map((i) => (
-        <NumberField key={i} label={labels[i]} value={value[i]!} step={step} unit={unit} onChange={(v) => { const n = [...value] as Vec3; n[i] = v; onChange(n) }} />
+        <NumberField key={i} label={labels[i]} value={value[i]!} step={step} onChange={(v) => { const n = [...value] as Vec3; n[i] = v; onChange(n) }} />
       ))}
     </div>
   )
@@ -160,11 +160,11 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
       </Section>
 
       <Section title="Placement">
-        <Row label="Centre">
+        <Row stack label="Centre (m) — across, altitude, depth">
           <Vec3Field value={scene.position} labels={['X', 'Alt', 'Z']} onChange={(v) => up((s) => { s.position = v }, 'Move scene', `pos:${id}`)} />
         </Row>
-        <Row label="Rotation">
-          <Vec3Field value={scene.rotation} labels={['Tilt', 'Turn', 'Roll']} step={5} unit="°" onChange={(v) => up((s) => { s.rotation = v }, 'Rotate scene', `rot:${id}`)} />
+        <Row stack label="Rotation (°)">
+          <Vec3Field value={scene.rotation} labels={['Tilt', 'Turn', 'Roll']} step={5} onChange={(v) => up((s) => { s.rotation = v }, 'Rotate scene', `rot:${id}`)} />
         </Row>
         <Row label="Spin" title="Turns the formation about its vertical axis while it is held. Eases in and out.">
           <NumberField value={scene.spin} step={1} unit="°/s" min={-720} max={720} onChange={(v) => up((s) => { s.spin = v }, 'Spin', `spin:${id}`)} />
@@ -265,11 +265,11 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
         </button>
         {open && (
           <>
-            <Row label="Offset">
+            <Row stack label="Offset from scene centre (m)">
               <Vec3Field value={layer.offset} labels={['X', 'Y', 'Z']} onChange={(v) => upLayer((l) => { l.offset = v }, 'Move shape', `off:${k}`)} />
             </Row>
-            <Row label="Rotation">
-              <Vec3Field value={layer.rotation} labels={['X', 'Y', 'Z']} step={5} unit="°" onChange={(v) => upLayer((l) => { l.rotation = v }, 'Rotate shape', `lrot:${k}`)} />
+            <Row stack label="Rotation (°)">
+              <Vec3Field value={layer.rotation} labels={['X', 'Y', 'Z']} step={5} onChange={(v) => upLayer((l) => { l.rotation = v }, 'Rotate shape', `lrot:${k}`)} />
             </Row>
           </>
         )}

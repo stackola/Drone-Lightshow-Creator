@@ -66,6 +66,34 @@ function StageOverlay() {
   )
 }
 
+const HINT_KEY = 'dsd.hint.dismissed'
+
+/** One-time orientation for first-time users. */
+function FirstRunHint() {
+  const [open, setOpen] = useState(() => {
+    try { return !localStorage.getItem(HINT_KEY) } catch { return false }
+  })
+  if (!open) return null
+  const close = () => {
+    setOpen(false)
+    try { localStorage.setItem(HINT_KEY, '1') } catch { /* ignore */ }
+  }
+  return (
+    <div className="stage-overlay ov-bl">
+      <div className="glass" style={{ padding: '10px 12px', maxWidth: 380, lineHeight: 1.5 }}>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>This is a demo show</div>
+        <div className="hint" style={{ color: 'var(--muted)' }}>
+          Press <span className="kbd">Space</span> to play. Click a scene to edit it, drag block edges on the timeline to retime,
+          drop in a song to sync to the beat. The safety check runs as you edit. <b>File → New show</b> starts fresh.
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+          <button className="btn sm" onClick={close}>Got it</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function isTyping(e: KeyboardEvent): boolean {
   const t = e.target as HTMLElement | null
   if (!t) return false
@@ -153,6 +181,7 @@ export function App() {
         <main className="stage" aria-label="3D preview">
           {!presenting && <Viewport />}
           <StageOverlay />
+          <FirstRunHint />
         </main>
         <Inspector />
         <Timeline />

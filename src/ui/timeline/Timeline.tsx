@@ -182,7 +182,7 @@ export function Timeline() {
                 const min = ceilTo(t.minFlight, 0.1)
                 const dur = Math.max(min, snapT(tt, ev.altKey) - t.flightStart)
                 updateScene(scene.id, (s) => { s.flight.duration = Math.round(dur * 100) / 100 }, 'Flight duration', `flight:${scene.id}`)
-              })
+              }, () => getState().select({ kind: 'flight', id: scene.id }))
             }
           />
         </div>,
@@ -205,7 +205,7 @@ export function Timeline() {
               drag(e, (tt, ev) => {
                 const hold = Math.max(0, snapT(tt, ev.altKey) - t.holdStart)
                 updateScene(scene.id, (s) => { s.hold = Math.round(hold * 100) / 100 }, 'Hold duration', `hold:${scene.id}`)
-              })
+              }, () => { getState().select({ kind: 'scene', id: scene.id }); seekToScene(scene.id) })
             }
           />
         </div>,
@@ -228,7 +228,7 @@ export function Timeline() {
             drag(e, (tt, ev) => {
               const dur = Math.max(ceilTo(rf.minDuration, 0.1), snapT(tt, ev.altKey) - rf.t0)
               getState().update((d) => { d.site.returnFlight.duration = Math.round(dur * 100) / 100 }, 'Return flight', 'returnFlight')
-            })
+            }, () => getState().select({ kind: 'landing' }))
           }
         />
       </div>,
@@ -274,7 +274,7 @@ export function Timeline() {
             drag(e, (tt, ev) => {
               const s = Math.max(0, Math.min(end - 0.1, snapT(tt, ev.altKey)))
               updateCue(q.id, (c) => { c.start = s; c.duration = end - s }, 'Resize light cue', `cue-l:${q.id}`)
-            })
+            }, () => getState().select({ kind: 'cue', id: q.id }))
           }}
         />
         <div
@@ -283,7 +283,7 @@ export function Timeline() {
             drag(e, (tt, ev) => {
               const d = Math.max(0.1, snapT(tt, ev.altKey) - q.start)
               updateCue(q.id, (c) => { c.duration = Math.round(d * 100) / 100 }, 'Resize light cue', `cue-r:${q.id}`)
-            })
+            }, () => getState().select({ kind: 'cue', id: q.id }))
           }
         />
       </div>

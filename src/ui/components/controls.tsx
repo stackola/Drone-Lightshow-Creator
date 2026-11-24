@@ -123,9 +123,9 @@ export function NumberField({ value, onChange, step = 1, min = -Infinity, max = 
 
 // --- Rows -----------------------------------------------------------------------
 
-export function Row({ label, children, title }: { label: ReactNode; children: ReactNode; title?: string }) {
+export function Row({ label, children, title, stack }: { label: ReactNode; children: ReactNode; title?: string; stack?: boolean }) {
   return (
-    <div className="row" title={title}>
+    <div className={`row${stack ? ' stack' : ''}`} title={title}>
       <label>{label}</label>
       <div className="grow" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         {children}
