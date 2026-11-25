@@ -3,7 +3,7 @@
 
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, CircleDollarSign } from 'lucide-react'
-import { claudePrice, formatUsd, imagePrice, spentSince, startOfToday, useCosts } from '@/ai/costs'
+import { claudePrice, estimateImageCost, formatUsd, imagePrice, spentSince, startOfToday, useCosts } from '@/ai/costs'
 import { MODEL } from '@/ai/client'
 import { loadImageSettings } from '@/ai/openai'
 
@@ -50,7 +50,7 @@ export function CostMeter({ since, busy, label = 'this window' }: { since: numbe
             </table>
           ) : <p className="hint" style={{ margin: 0 }}>Nothing spent here yet.</p>}
           <p className="hint" style={{ margin: '6px 0 0' }}>
-            Estimated from list prices per million tokens — Claude ({MODEL}): ${cp.input} in, ${cp.output} out, ${cp.cacheRead} cached; pictures ({img.model}, {img.quality}): ${ip.output} per million image tokens (about {formatUsd((1756 * ip.output) / 1e6)} for a square medium picture). Your provider bills are the source of truth; prices can be changed in AI settings.
+            Estimated from list prices per million tokens — Claude ({MODEL}): ${cp.input} in, ${cp.output} out, ${cp.cacheRead} cached; pictures ({img.model}, {img.quality}): ${ip.output} per million image tokens (about {formatUsd(estimateImageCost(img.model, 'medium'), true)} for a square medium picture). Your provider bills are the source of truth; prices can be changed in AI settings.
           </p>
         </div>
       )}

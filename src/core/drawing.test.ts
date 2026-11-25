@@ -46,6 +46,25 @@ describe('drawings with strokes', () => {
     // 16 m of strokes, 41 drones: 0.4 m apart, and none doubled up where the strokes cross.
     expect(nearest(g.points)[0]).toBeGreaterThan(0.3)
   })
+
+  it('lines only, at any count: even when no spacing gives exactly that many drones', () => {
+    // 40 identical strokes gain a drone at the same spacing, so the count jumps by 40 at once.
+    // (This used to recurse forever, looking for fill room in a drawing with nothing to fill.)
+    const empty = encodeMask(100, 100, () => false)
+    const rows = Array.from({ length: 40 }, (_, i) => ({ p: [0.1, 0.05 + i * 0.023, 0.9, 0.05 + i * 0.023] }))
+    for (const n of [130, 297, 401, 555]) {
+      const t = performance.now()
+      const g = generateShape(image(rows, empty), n)
+      expect(performance.now() - t).toBeLessThan(2000)
+      expect(g.points.length).toBe(n * 3)
+      // Every drone on a row, none doubled up.
+      for (let k = 0; k < n; k++) {
+        const v = 0.5 - g.points[k * 3 + 1]! / 10
+        expect(Math.abs((v - 0.05) / 0.023 - Math.round((v - 0.05) / 0.023))).toBeLessThan(1e-3)
+      }
+      expect(nearest(g.points)[0]).toBeGreaterThan(0.05)
+    }
+  })
 })
 
 describe('drawings in project files', () => {

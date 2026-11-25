@@ -7,13 +7,20 @@ const STORAGE_KEY = 'dsd.openai.v1'
 
 export interface ImageSettings {
   apiKey: string
-  /** Image model, e.g. gpt-image-2. */
+  /** Image model, e.g. gpt-image-2.5-flare. */
   model: string
   quality: 'low' | 'medium' | 'high'
 }
 
-export const IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1-mini'] as const
-const DEFAULTS: ImageSettings = { apiKey: '', model: 'gpt-image-2', quality: 'medium' }
+/**
+ * Picture models, best value first. Tested on drone line art (phoenix, couple, tiara, bouquet, rose):
+ * 2.5 Flare traces into drones as well as gpt-image-2 or better (its bolder, simpler lines suit
+ * drones), at about a quarter of the price (≈$0.014 for a square medium picture) and three times
+ * the speed; it adds a glow the tracer ignores. gpt-image-2 draws the cleanest, most detailed line
+ * art; the 2.6 models are fast but busier, and their haze costs more lines.
+ */
+export const IMAGE_MODELS = ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2', 'gpt-image-2.6-flare', 'gpt-image-2.6-sunburst', 'gpt-image-1.5', 'gpt-image-1-mini'] as const
+const DEFAULTS: ImageSettings = { apiKey: '', model: 'gpt-image-2.5-flare', quality: 'medium' }
 
 export function loadImageSettings(): ImageSettings {
   try {

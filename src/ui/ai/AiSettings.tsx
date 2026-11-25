@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
-import { claudePrice, formatUsd, imagePrice, spentSince, startOfToday, useCosts } from '@/ai/costs'
+import { claudePrice, estimateImageCost, formatUsd, imagePrice, spentSince, startOfToday, useCosts } from '@/ai/costs'
 import { IMAGE_MODELS, loadImageSettings, saveImageSettings, testImageKey, type ImageSettings } from '@/ai/openai'
 import { MODEL, MODEL_LABEL, describeError, getClient, loadAiSettings, saveAiSettings } from '@/ai/client'
 import { getState } from '@/state/store'
@@ -98,7 +98,8 @@ export function ImageKeyForm({ onSaved, compact }: { onSaved?: () => void; compa
       {!compact && (
         <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
           <select className="select" aria-label="Image model" value={model} onChange={(e) => setModel(e.target.value)}>
-            {IMAGE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+            {IMAGE_MODELS.map((m) => <option key={m} value={m}>{m} · ≈{formatUsd(estimateImageCost(m, quality), true)}{m === IMAGE_MODELS[0] ? ' (best value)' : ''}</option>)}
+            {!(IMAGE_MODELS as readonly string[]).includes(model) && <option value={model}>{model}</option>}
           </select>
           <select className="select" aria-label="Picture quality" value={quality} onChange={(e) => setQuality(e.target.value as ImageSettings['quality'])}>
             <option value="low">Low quality (fast, cheapest)</option>

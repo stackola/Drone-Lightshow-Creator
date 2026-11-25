@@ -23,10 +23,29 @@ export const CLAUDE_PRICES: Record<string, ClaudePrice> = {
 
 /** OpenAI image-model list prices (USD per million tokens): text input, image input, output (image) tokens. */
 export const IMAGE_PRICES: Record<string, ImagePrice> = {
+  'gpt-image-2.5-flare': { textInput: 5, imageInput: 8, output: 30 },
+  'gpt-image-2.5-sunburst': { textInput: 5, imageInput: 8, output: 30 },
+  'gpt-image-2.6-flare': { textInput: 5, imageInput: 8, output: 30 },
+  'gpt-image-2.6-sunburst': { textInput: 5, imageInput: 8, output: 30 },
   'gpt-image-2': { textInput: 5, imageInput: 8, output: 30 },
   'gpt-image-1.5': { textInput: 5, imageInput: 8, output: 32 },
   'gpt-image-1-mini': { textInput: 2, imageInput: 2.5, output: 8 },
   'gpt-image-1': { textInput: 5, imageInput: 10, output: 40 },
+}
+
+/**
+ * Image tokens of one square medium-quality picture, measured (the 2.5 models draw a picture in a
+ * quarter of gpt-image-2's tokens). Low quality is about an eighth of this, high about four times.
+ */
+export const IMAGE_TOKENS_MEDIUM: Record<string, number> = {
+  'gpt-image-2.5-flare': 439,
+  'gpt-image-2.5-sunburst': 439,
+  'gpt-image-2.6-flare': 1449,
+  'gpt-image-2.6-sunburst': 1449,
+  'gpt-image-2': 1756,
+  'gpt-image-1.5': 1056,
+  'gpt-image-1-mini': 1056,
+  'gpt-image-1': 1056,
 }
 
 const DEFAULT_CLAUDE = CLAUDE_PRICES['claude-opus-5-5']!
@@ -177,9 +196,16 @@ export function startOfToday(): number {
   return d.getTime()
 }
 
-/** Typical cost of a kind of call: the median of the recent ones, else a fallback. */
-export function typicalCost(entries: CostEntry[], label: string, fallback: number): number {
-  const xs = entries.filter((e) => e.label === label).slice(-12).map((e) => e.usd).sort((a, b) => a - b)
+/** Estimated cost of one picture before any has been made: measured tokens × the model's price. */
+export function estimateImageCost(model: string, quality: 'low' | 'medium' | 'high', format?: string): number {
+  const p = imagePrice(model)
+  const tokens = (IMAGE_TOKENS_MEDIUM[model] ?? 1756) * { low: 0.12, medium: 1, high: 4 }[quality] * (format && format !== 'square' ? 1.5 : 1)
+  return (tokens * p.output + 200 * p.textInput) / 1e6
+}
+
+/** Typical cost of a kind of call: the median of the recent ones (by that model, if given), else a fallback. */
+export function typicalCost(entries: CostEntry[], label: string, fallback: number, model?: string): number {
+  const xs = entries.filter((e) => e.label === label && (!model || e.model === model)).slice(-12).map((e) => e.usd).sort((a, b) => a - b)
   return xs.length ? xs[Math.floor(xs.length / 2)]! : fallback
 }
 

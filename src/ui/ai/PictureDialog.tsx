@@ -11,7 +11,7 @@ import { defaultEffect } from '@/core/effects'
 import type { DrawingStyle, PictureSource } from '@/core/types'
 import { aiConfigured, describeError } from '@/ai/client'
 import { imagesConfigured, loadImageSettings } from '@/ai/openai'
-import { formatUsd, typicalCost, useCosts } from '@/ai/costs'
+import { estimateImageCost, formatUsd, typicalCost, useCosts } from '@/ai/costs'
 import { CostMeter } from './CostMeter'
 import { compactPicture, createPicture, describeFit, expandPrompt, newPicture, pictureFit, reviewPicture, thresholdFor, traceSource, type PictureAttempt } from '@/ai/picture'
 import { dronesPng } from '@/ai/render'
@@ -56,9 +56,9 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
   const [openedAt] = useState(() => Date.now())
   const costEntries = useCosts((s) => s.entries)
   const imageSettings = loadImageSettings()
-  const pictureFallback = { low: 0.006, medium: 0.053, high: 0.211 }[imageSettings.quality] * (current?.source.format && current.source.format !== 'square' ? 1.5 : 1)
+  const pictureFallback = estimateImageCost(imageSettings.model, imageSettings.quality, current?.source.format)
   const est = {
-    picture: typicalCost(costEntries, 'Picture', pictureFallback),
+    picture: typicalCost(costEntries, 'Picture', pictureFallback, imageSettings.model),
     describe: typicalCost(costEntries, 'Picture description', 0.01),
     look: typicalCost(costEntries, 'Look & fix (picture)', 0.03),
   }

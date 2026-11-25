@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { formatUsd, recordClaude, recordImage, spentSince, typicalCost, useCosts } from './costs'
+import { estimateImageCost, formatUsd, recordClaude, recordImage, spentSince, typicalCost, useCosts } from './costs'
 
 describe('AI cost tracker', () => {
   beforeEach(() => { useCosts.getState().reset(); useCosts.getState().setClaudePrice('claude-opus-5-5', null) })
@@ -29,5 +29,20 @@ describe('AI cost tracker', () => {
     expect(typicalCost(useCosts.getState().entries, 'Picture description', 9)).toBeCloseTo(1, 10)
     expect(typicalCost(useCosts.getState().entries, 'Never ran', 0.03)).toBe(0.03)
     expect(formatUsd(0.0042)).toBe('$0.004')
+  })
+
+  it('estimates a picture per model before any was made, and learns per model after', () => {
+    // Measured: a square medium 2.5 Flare picture is 439 image tokens, a quarter of gpt-image-2's 1756.
+    expect(estimateImageCost('gpt-image-2.5-flare', 'medium')).toBeCloseTo((439 * 30 + 200 * 5) / 1e6, 10)
+    expect(formatUsd(estimateImageCost('gpt-image-2.5-flare', 'medium'), true)).toBe('$0.014')
+    expect(formatUsd(estimateImageCost('gpt-image-2', 'medium'), true)).toBe('$0.054')
+    expect(estimateImageCost('gpt-image-2', 'medium', 'landscape')).toBeGreaterThan(estimateImageCost('gpt-image-2', 'medium'))
+    expect(estimateImageCost('gpt-image-2.5-flare', 'low')).toBeLessThan(estimateImageCost('gpt-image-2.5-flare', 'medium'))
+    recordImage('gpt-image-2', { input_tokens: 100, output_tokens: 1756 }, 'Picture')
+    recordImage('gpt-image-2.5-flare', { input_tokens: 100, output_tokens: 439 }, 'Picture')
+    // The typical cost of the next picture is that model's, not the last picture's.
+    expect(typicalCost(useCosts.getState().entries, 'Picture', 1, 'gpt-image-2')).toBeCloseTo((100 * 5 + 1756 * 30) / 1e6, 10)
+    expect(typicalCost(useCosts.getState().entries, 'Picture', 1, 'gpt-image-2.5-flare')).toBeCloseTo((100 * 5 + 439 * 30) / 1e6, 10)
+    expect(typicalCost(useCosts.getState().entries, 'Picture', 0.5, 'gpt-image-2.6-flare')).toBe(0.5)
   })
 })

@@ -721,7 +721,10 @@ function layoutDrawing(spec: Picture, n: number, w: number, h: number, fixedSpac
     const count = (s: number) => lineDrones(lines, closed, s).pts.length / 3 + fillFor(s)
     let lo = 1e-4, hi = 2
     for (let it = 0; it < 30; it++) { const mid = Math.sqrt(lo * hi); if (count(mid) > n) lo = mid; else hi = mid }
-    return hi
+    // The count jumps as the spacing changes (several strokes gain a drone at once), so `hi` can
+    // hold a few drones fewer than n. With a fill those go to the fill; with lines only, take the
+    // spacing just below (a few drones more) and thin them evenly to n.
+    return area > 0 || count(hi) >= n ? hi : lo
   }
   // Each line's colour (from the picture along it), so differently coloured neighbours both survive.
   const lineColors = all.map((l) => {
@@ -777,8 +780,10 @@ function layoutDrawing(spec: Picture, n: number, w: number, h: number, fixedSpac
     }
     if (cand.length / 3 >= fillN) fill = readingOrder(gather(cand, spreadPick(cand, fillN)), 0.02)
     else {
-      // No room left to fill (at this spacing): let the caller decide, or put more drones on the strokes.
+      // No room left to fill (at this spacing): let the caller decide, or put every drone on the strokes.
       if (fixedSpacing !== undefined) return { shape: { points: new Float32Array(n * 3), colors: null }, spacing: s, strokes, ok: false }
+      // Lines only already (nothing to fill) and still short: the strokes can't hold n drones at all.
+      if (area === 0) return { shape: plain(sunflower(n)), spacing: s, strokes, ok: false }
       return layoutDrawing({ ...spec, mask: { ...spec.mask, bits: '' } }, n, w, h)
     }
   }
