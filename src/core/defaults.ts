@@ -118,7 +118,8 @@ export function newScene(doc: ShowDoc, kind: ShapeKind, opts: { name?: string; p
   const color = opts.color ?? PALETTE[doc.scenes.length % PALETTE.length]!
   const shape = opts.shape ?? newShape(kind)
   const label = SHAPE_BY_KIND[shape.kind].label
-  const effect = opts.effect ?? (shape.kind === 'image' && shape.colors ? defaultEffect('image') : defaultEffect('solid', color))
+  // Pictures and 3D models light up in their own colours.
+  const effect = opts.effect ?? ((shape.kind === 'image' && shape.colors) || shape.kind === 'model' ? defaultEffect('image') : defaultEffect('solid', color))
   const scene: Scene = {
     id: newId('scene'),
     name: opts.name ?? (shape.kind === 'text' ? shape.text.replace(/\n/g, ' ') || 'Text' : label),

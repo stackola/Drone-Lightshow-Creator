@@ -129,3 +129,11 @@ describe('richer parts and relief', () => {
     expect(nn(front.points)).toBeLessThan(nn(all.points))
   })
 })
+
+describe('new 3D model formations', () => {
+  it('light up in the model’s own colours, not a solid colour', () => {
+    const doc = newShow(120)
+    const s = newScene(doc, 'model', { shape: { kind: 'model', size: 1, name: 'Rocket', parts: SAMPLE_MODEL } })
+    expect(s.layers[0]!.effect.kind).toBe('image')
+  })
+})
