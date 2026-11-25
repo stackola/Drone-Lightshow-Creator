@@ -10,7 +10,9 @@ import { generateShape } from '@/core/shapes'
 import { defaultEffect } from '@/core/effects'
 import type { DrawingStyle, PictureSource } from '@/core/types'
 import { aiConfigured, describeError } from '@/ai/client'
-import { imagesConfigured } from '@/ai/openai'
+import { imagesConfigured, loadImageSettings } from '@/ai/openai'
+import { formatUsd, typicalCost, useCosts } from '@/ai/costs'
+import { CostMeter } from './CostMeter'
 import { compactPicture, createPicture, describeFit, expandPrompt, newPicture, pictureFit, reviewPicture, thresholdFor, traceSource, type PictureAttempt } from '@/ai/picture'
 import { dronesPng } from '@/ai/render'
 import { getState, useStore } from '@/state/store'
@@ -50,6 +52,17 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const controller = useRef<AbortController | null>(null)
   const current = attempts[selected]
+  // Costs: everything since this studio opened, and what the next action will likely cost.
+  const [openedAt] = useState(() => Date.now())
+  const costEntries = useCosts((s) => s.entries)
+  const imageSettings = loadImageSettings()
+  const pictureFallback = { low: 0.006, medium: 0.053, high: 0.211 }[imageSettings.quality] * (current?.source.format && current.source.format !== 'square' ? 1.5 : 1)
+  const est = {
+    picture: typicalCost(costEntries, 'Picture', pictureFallback),
+    describe: typicalCost(costEntries, 'Picture description', 0.01),
+    look: typicalCost(costEntries, 'Look & fix (picture)', 0.03),
+  }
+  const createEst = est.describe + est.picture + est.look
 
   useEffect(() => { if (current) setPrompt(current.source.prompt) }, [current?.source.prompt]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -191,10 +204,11 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             <input className="text-input" style={{ height: 32 }} aria-label="What should the drones show?" placeholder="e.g. bride and groom dancing" value={description} autoFocus onChange={(e) => setDescription(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && description.trim() && !busy && create()} />
             <div style={{ width: 120 }}><NumberField value={drones} step={50} min={20} max={2000} unit="drones" precision={0} title="Drones in this formation" onChange={(v) => setDrones(Math.round(v))} /></div>
-            <button className="btn ai" style={{ height: 32 }} disabled={!description.trim() || !!busy || !imagesConfigured()} onClick={create}><Sparkles size={14} /> {attempts.length ? 'New' : 'Create'}</button>
+            <button className="btn ai" style={{ height: 32 }} disabled={!description.trim() || !!busy || !imagesConfigured()} onClick={create}><Sparkles size={14} /> {attempts.length ? 'New' : 'Create'}<span className="cost-est" title="Estimated: description + picture + one look & fix">≈{formatUsd(createEst, true)}</span></button>
             <button className="btn" style={{ height: 32 }} disabled={!!busy} onClick={upload} title="Trace your own picture: bright lines on a dark background work best"><Upload size={14} /></button>
           </div>
           {!attempts.length && !busy && <div className="chips">{EXAMPLES.map((e) => <button key={e} className="chip" onClick={() => setDescription(e)}>{e}</button>)}</div>}
+          <CostMeter since={openedAt} busy={!!busy && busy !== 'tracing'} label="in this studio" />
           {error && <div className="cp-notice error" style={{ marginTop: 10 }}>{error}</div>}
           {busy && busy !== 'tracing' && <p className="hint" style={{ marginTop: 10 }}><Loader2 size={12} className="spin" /> {busyText[busy]}</p>}
           {current && (
@@ -234,7 +248,7 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
                   </div>
                 )}
                 <div className="pic-actions">
-                  <button className="btn ai sm" disabled={!!busy} onClick={lookAndFix}><Wrench size={12} /> Look &amp; fix</button>
+                  <button className="btn ai sm" disabled={!!busy} onClick={lookAndFix}><Wrench size={12} /> Look &amp; fix<span className="cost-est">≈{formatUsd(est.look, true)}</span></button>
                 </div>
                 {current.critique && (
                   <p className={`hint ${current.verdict === 'good' ? 'ok' : ''}`}>{current.verdict === 'good' ? <Check size={11} /> : <Wrench size={11} />} {current.critique}</p>
@@ -242,8 +256,8 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
                 <label className="field-label" htmlFor="pic-prompt">Picture description</label>
                 <textarea id="pic-prompt" className="textarea" rows={5} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
                 <div className="pic-actions">
-                  <button className="btn sm" disabled={!!busy || !prompt.trim() || !imagesConfigured()} onClick={redraw}><RefreshCw size={12} /> New picture from this</button>
-                  <button className="btn ghost sm" disabled={!!busy || !description.trim()} onClick={expandOnly} title="Claude rewrites the description from your words"><Sparkles size={12} /> Rewrite</button>
+                  <button className="btn sm" disabled={!!busy || !prompt.trim() || !imagesConfigured()} onClick={redraw}><RefreshCw size={12} /> New picture from this<span className="cost-est">≈{formatUsd(est.picture, true)}</span></button>
+                  <button className="btn ghost sm" disabled={!!busy || !description.trim()} onClick={expandOnly} title="Claude rewrites the description from your words"><Sparkles size={12} /> Rewrite<span className="cost-est">≈{formatUsd(est.describe, true)}</span></button>
                 </div>
               </div>
             </div>

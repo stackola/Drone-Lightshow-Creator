@@ -76,6 +76,7 @@ export async function drawFormation(description: string, opts: { n?: number; fee
   const out = await submitObject({
     schema: SvgShape,
     tool: { name: 'submit_drawing', description: 'Submit the finished formation drawing: a short name and the complete SVG document.' },
+    label: 'Drawing',
     system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
     content,
     maxTokens: 24000,
@@ -141,6 +142,7 @@ export async function drawAndCheck(description: string, n: number, signal?: Abor
     const review = await submitObject({
       schema: DrawingReview,
       tool: { name: 'submit_review', description: 'Submit your review of the drones as drawn: the critique, whether it is done, and (if not) the improved SVG.' },
+      label: 'Look & fix (drawing)',
       system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
       content,
       maxTokens: 24000,

@@ -586,3 +586,32 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent-2); c
 .pic-thumb img { width: 56px; height: 56px; object-fit: contain; background: #000; border-radius: 4px; }
 .pic-thumb.on { border-color: var(--accent); color: var(--text); }
 @media (max-width: 760px) { .pic-studio { grid-template-columns: 1fr; } }
+
+/* AI cost meter */
+.cost-meter { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); margin: 10px 0 0; overflow: hidden; }
+.cost-meter.busy { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.cost-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; background: none; border: 0; color: var(--text); cursor: pointer; font: inherit; text-align: left; flex-wrap: wrap; }
+.cost-head svg { color: var(--accent); flex: none; }
+.cost-main { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cost-meter.busy .cost-main { animation: cost-pulse 1.2s ease-in-out infinite; }
+@keyframes cost-pulse { 50% { opacity: 0.55; } }
+.cost-sub { font-size: 12px; color: var(--muted); }
+.cost-split { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.cost-body { padding: 4px 10px 10px; border-top: 1px solid var(--line); max-height: 220px; overflow: auto; }
+.cost-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cost-table th { text-align: left; color: var(--faint); font-weight: 500; padding: 4px 6px 4px 0; }
+.cost-table td { padding: 3px 6px 3px 0; border-top: 1px solid var(--line); }
+.cost-table .cost-model { color: var(--muted); }
+.cost-table .cost-usd { text-align: right; font-weight: 600; }
+.cost-chip { gap: 5px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.cost-chip svg { color: var(--accent); }
+.cost-chip.busy { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.cost-chip.busy svg { animation: cost-pulse 1.2s ease-in-out infinite; }
+.cost-pop { padding: 8px 10px; font-size: 12.5px; }
+.cost-pop-row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; font-variant-numeric: tabular-nums; }
+.cost-pop-head { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.04em; }
+.cost-est { font-size: 11px; opacity: 0.75; margin-left: 4px; font-variant-numeric: tabular-nums; }
+.cost-prices { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px; }
+.cost-prices > .cost-sub { width: 100%; }
+.cost-price { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--muted); }
+.cost-price input { width: 96px; height: 28px; }

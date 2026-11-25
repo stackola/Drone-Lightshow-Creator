@@ -186,6 +186,7 @@ function structured<T extends z.ZodType>(schema: T, content: BetaContentBlockPar
   return submitObject({
     schema,
     tool,
+    label: tool.name === 'submit_review' ? 'Look & fix (3D)' : '3D model',
     system: [{ type: 'text', text: MODEL3D_SYSTEM, cache_control: { type: 'ephemeral' } }],
     content,
     maxTokens: 24000,

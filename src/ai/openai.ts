@@ -1,6 +1,8 @@
 // OpenAI image generation, straight from the browser (the API allows it).
 // The key is stored only in this browser, like the Claude key.
 
+import { recordImage, tracked, type ImageUsage } from './costs'
+
 const STORAGE_KEY = 'dsd.openai.v1'
 
 export interface ImageSettings {
@@ -38,17 +40,17 @@ export type ImageFormat = 'square' | 'landscape' | 'portrait'
 const SIZES: Record<ImageFormat, string> = { square: '1024x1024', landscape: '1536x1024', portrait: '1024x1536' }
 
 /** Generate one picture; resolves to PNG base64 (no data: prefix). */
-export async function generateImage(prompt: string, opts: { signal?: AbortSignal; settings?: ImageSettings; format?: ImageFormat } = {}): Promise<string> {
+export async function generateImage(prompt: string, opts: { signal?: AbortSignal; settings?: ImageSettings; format?: ImageFormat; label?: string } = {}): Promise<string> {
   const s = opts.settings ?? loadImageSettings()
   if (!s.apiKey.trim()) throw new ImageError('Add an OpenAI API key in AI settings to generate pictures.')
   let res: Response
   try {
-    res = await fetch('https://api.openai.com/v1/images/generations', {
+    res = await tracked(fetch('https://api.openai.com/v1/images/generations', {
       method: 'POST',
       headers: { Authorization: `Bearer ${s.apiKey.trim()}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: s.model, prompt, size: SIZES[opts.format ?? 'square'], quality: s.quality, n: 1 }),
       signal: opts.signal,
-    })
+    }))
   } catch (err) {
     if ((err as Error).name === 'AbortError') throw err
     throw new ImageError('Couldn’t reach OpenAI. Check your connection and try again.')
@@ -61,7 +63,8 @@ export async function generateImage(prompt: string, opts: { signal?: AbortSignal
     if (res.status === 400 && /safety|policy|moderation/i.test(message)) throw new ImageError('OpenAI declined that picture. Try describing it differently.')
     throw new ImageError(`OpenAI error ${res.status}${message ? `: ${message}` : ''}`)
   }
-  const body = (await res.json()) as { data?: { b64_json?: string }[] }
+  const body = (await res.json()) as { data?: { b64_json?: string }[]; usage?: ImageUsage }
+  recordImage(s.model, body.usage, opts.label ?? 'Picture')
   const b64 = body.data?.[0]?.b64_json
   if (!b64) throw new ImageError('OpenAI returned no picture. Try again.')
   return b64

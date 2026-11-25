@@ -1,10 +1,11 @@
-import { Undo2, Redo2, MonitorPlay, Menu, ShieldCheck, ShieldAlert, Wrench, Settings2, FilePlus2, FolderOpen, Save, Download, Music, Keyboard, Sparkles, Wand2, PenLine, MessageSquareText, FileText, KeyRound, Box, Wind, ImagePlus } from 'lucide-react'
+import { Undo2, Redo2, MonitorPlay, Menu, ShieldCheck, ShieldAlert, Wrench, Settings2, FilePlus2, FolderOpen, Save, Download, Music, Keyboard, Sparkles, Wand2, PenLine, MessageSquareText, FileText, KeyRound, Box, Wind, ImagePlus, CircleDollarSign } from 'lucide-react'
 import { openCopilot } from './ai/openCopilot'
 import { STARTERS } from '@/ai/copilotStore'
 import { getState, useStore } from '@/state/store'
 import { fixAll } from '@/state/actions'
 import { loadMusic, openProjectFile, pickFile, saveProject } from '@/state/persist'
 import { formatTime } from '@/core/validate'
+import { formatUsd, spentSince, startOfToday, useCosts } from '@/ai/costs'
 import { MenuButton } from './components/controls'
 import { IssueCard } from './panels/Inspector'
 
@@ -29,6 +30,7 @@ export function TopBar({ onPresent }: { onPresent: () => void }) {
       <button className="btn ghost icon" disabled={!canRedo} onClick={() => getState().redo()} title={canRedo ? `Redo ${redoLabel} (Ctrl+Shift+Z)` : 'Nothing to redo'} aria-label="Redo"><Redo2 size={15} /></button>
       <div className="divider-v" />
       <SafetyStatus />
+      <AiCostChip />
       <MenuButton className="btn ai" title="AI features" align="right" width={280} button={<><Sparkles size={14} /> AI</>}>
         {(close) => (
           <>
@@ -63,6 +65,57 @@ export function TopBar({ onPresent }: { onPresent: () => void }) {
         <MonitorPlay size={15} /> Present
       </button>
     </header>
+  )
+}
+
+/** What the AI has spent today, always in view once it has spent anything; pulses while a request runs. */
+function AiCostChip() {
+  const entries = useCosts((s) => s.entries)
+  const total = useCosts((s) => s.total)
+  const since = useCosts((s) => s.since)
+  const running = useCosts((s) => s.running)
+  const sessionStart = useCosts((s) => s.sessionStart)
+  if (!total && !running) return null
+  const todayStart = startOfToday()
+  const today = spentSince(entries, todayStart)
+  const byLabel = new Map<string, { n: number; usd: number }>()
+  for (const e of entries) if (e.at >= todayStart) { const b = byLabel.get(e.label) ?? { n: 0, usd: 0 }; b.n++; b.usd += e.usd; byLabel.set(e.label, b) }
+  const recent = entries.slice(-5).reverse()
+  const time = (t: number) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return (
+    <MenuButton
+      className={`btn ghost cost-chip${running ? ' busy' : ''}`}
+      title={running ? 'An AI request is running — AI spending today' : 'AI spending today (estimated)'}
+      align="right"
+      width={300}
+      button={<><CircleDollarSign size={14} /> <span aria-label="AI spending today">{formatUsd(today)}</span></>}
+    >
+      {(close) => (
+        <div className="cost-pop">
+          <div className="cost-pop-row"><span>This session</span><b>{formatUsd(spentSince(entries, sessionStart))}</b></div>
+          <div className="cost-pop-row"><span>Today</span><b>{formatUsd(today)}</b></div>
+          <div className="cost-pop-row"><span>Since {new Date(since).toLocaleDateString()}</span><b>{formatUsd(total)}</b></div>
+          {byLabel.size > 0 && (
+            <>
+              <div className="cost-pop-head">Today by feature</div>
+              {[...byLabel.entries()].sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([l, b]) => (
+                <div className="cost-pop-row" key={l}><span>{l} <span className="hint">{b.n}×</span></span><span>{formatUsd(b.usd)}</span></div>
+              ))}
+            </>
+          )}
+          {recent.length > 0 && (
+            <>
+              <div className="cost-pop-head">Latest calls</div>
+              {recent.map((e) => (
+                <div className="cost-pop-row" key={e.id}><span><span className="hint">{time(e.at)}</span> {e.label}</span><span>{formatUsd(e.usd, true)}</span></div>
+              ))}
+            </>
+          )}
+          <p className="hint" style={{ margin: '8px 0 6px' }}>Estimated from the tokens each call used, at list prices. Your Anthropic and OpenAI bills are the source of truth.</p>
+          <button className="menu-item" onClick={() => { close(); getState().set({ dialog: 'ai-settings' }) }}><KeyRound size={14} /> Prices & history…</button>
+        </div>
+      )}
+    </MenuButton>
   )
 }
 

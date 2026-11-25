@@ -16,6 +16,7 @@ import { useCopilot, type ChatItem } from './copilotStore'
 export { useCopilot, STARTERS, type ChatItem } from './copilotStore'
 import { getState } from '@/state/store'
 import { asParams, baseParams, describeError, eagerStreaming, echoContent, getClient, recordUsage, AiNotConfigured } from './client'
+import { tracked } from './costs'
 import { summarizeShow } from './context'
 import { runTool, toolDefinitions, toolLabel } from './tools'
 
@@ -118,7 +119,7 @@ export async function sendToCopilot(text: string): Promise<void> {
 
       let message
       try {
-        message = await stream.finalMessage()
+        message = await tracked(stream.finalMessage())
         retries = 0
       } catch (err) {
         // A tool input that can't be parsed at all, or a dropped connection, is
@@ -128,7 +129,7 @@ export async function sendToCopilot(text: string): Promise<void> {
         remove(replyId)
         continue
       }
-      recordUsage(message.usage)
+      recordUsage(message.usage, { model: message.model, label: 'Copilot' })
       patch(replyId, (it) => (it.kind === 'assistant' ? { ...it, streaming: false } : it))
       const reply = useCopilot.getState().items.find((it) => it.id === replyId)
       if (reply?.kind === 'assistant' && !reply.text.trim()) remove(replyId)

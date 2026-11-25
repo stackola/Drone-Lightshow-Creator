@@ -102,6 +102,7 @@ export async function directShow(req: DirectorRequest, onProgress: (p: DirectorP
   const plan = await submitObject({
     schema: ShowPlan,
     tool: { name: 'submit_show_plan', description: 'Submit the complete show plan: every scene with its formation, light and timing, the light cues, and the music options.' },
+    label: 'Show plan',
     system: DIRECTOR_SYSTEM,
     content: [{ type: 'text', text: briefFor(req, base) }],
     maxTokens: 32000,

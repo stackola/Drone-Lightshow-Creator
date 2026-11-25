@@ -311,7 +311,7 @@ test('Picture to drones: Claude writes the picture, it is traced into drones at 
   await page.route('https://api.openai.com/**', async (route) => {
     if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })
     images.push(route.request().postDataJSON() as Record<string, unknown>)
-    return route.fulfill({ status: 200, headers: { ...CORS, 'content-type': 'application/json' }, body: JSON.stringify({ data: [{ b64_json: LINE_ART_PNG }] }) })
+    return route.fulfill({ status: 200, headers: { ...CORS, 'content-type': 'application/json' }, body: JSON.stringify({ data: [{ b64_json: LINE_ART_PNG }], usage: { input_tokens: 105, output_tokens: 1756, input_tokens_details: { text_tokens: 105, image_tokens: 0 } } }) })
   })
   const seen = await mockClaude(page, (body) => {
     const tool = (body.tools as { name: string }[] | undefined)?.[0]?.name
@@ -326,6 +326,14 @@ test('Picture to drones: Claude writes the picture, it is traced into drones at 
   await page.getByRole('button', { name: /Create/ }).click()
   await expect(page.getByAltText('Mountain sun as 200 drones')).toBeVisible({ timeout: 20000 })
   await expect(page.getByText(/Ring, peak and sun all read clearly/)).toBeVisible()
+  // The cost meter: what this studio spent, itemised (Claude by tokens, the picture by its image tokens).
+  const meter = page.getByLabel('AI cost')
+  await expect(meter.locator('.cost-main')).not.toHaveText('$0.00')
+  await meter.locator('.cost-head').click()
+  await expect(meter.locator('.cost-table tr', { hasText: 'Picture description' })).toHaveCount(1)
+  await expect(meter.locator('.cost-table tr', { hasText: 'gpt-image-2' })).toContainText('$0.053')
+  await expect(meter.locator('.cost-table tr', { hasText: 'Look & fix (picture)' })).toHaveCount(1)
+  await expect(page.getByRole('button', { name: /New picture from this ≈\$0\.053/ })).toBeVisible()
   // Claude expanded the words; the image prompt carries the line-art style and the drone budget.
   expect(String(images[0]!.prompt)).toMatch(/A round frame around a single mountain peak.*glowing neon line drawing.*Line budget/s)
   expect(images[0]!.size).toBe('1024x1024')
@@ -344,4 +352,12 @@ test('Picture to drones: Claude writes the picture, it is traced into drones at 
     const s = doc?.scenes?.find((x: { name: string }) => x.name === 'Mountain sun')
     return [s?.layers?.[0]?.shape?.picture?.image?.slice(0, 23), s?.layers?.length]
   })).toEqual(['data:image/jpeg;base64,', 2])
+  // The top bar keeps today's AI spending in view; it opens the breakdown.
+  const chip = page.locator('.cost-chip')
+  await expect(chip).not.toContainText('$0.00')
+  await chip.click()
+  await expect(page.locator('.cost-pop-row', { hasText: 'Picture description' }).first()).toBeVisible()
+  await expect(page.locator('.cost-pop-row', { hasText: /^.*Picture\s*1×/ })).toContainText('$0.05')
+  await page.getByRole('button', { name: 'Prices & history…' }).click()
+  await expect(page.getByRole('dialog', { name: 'AI settings' })).toContainText('Look & fix (picture)')
 })

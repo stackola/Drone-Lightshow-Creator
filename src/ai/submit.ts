@@ -11,6 +11,7 @@
 import { z } from 'zod'
 import type { BetaContentBlockParam, BetaMessageParam, BetaTextBlockParam, BetaToolUnion } from '@anthropic-ai/sdk/resources/beta/messages/messages'
 import { RefusalError, baseParams, eagerStreaming, getClient, recordUsage } from './client'
+import { tracked } from './costs'
 
 export interface SubmitOptions<T extends z.ZodType> {
   schema: T
@@ -27,6 +28,8 @@ export interface SubmitOptions<T extends z.ZodType> {
   messages: { refusal: string; tooLong: string; unreadable: string }
   /** Attempts to correct an invalid result (default 2). */
   retries?: number
+  /** What the call is for, in the cost tracker (default: the tool's name). */
+  label?: string
 }
 
 /** JSON schema for a tool's input, from a zod schema. */
@@ -65,8 +68,8 @@ export async function submitObject<T extends z.ZodType>(o: SubmitOptions<T>): Pr
       { signal: o.signal },
     )
     if (o.onPartial) stream.on('inputJson', (_delta, snapshot) => o.onPartial!(snapshot))
-    const msg = await stream.finalMessage()
-    recordUsage(msg.usage)
+    const msg = await tracked(stream.finalMessage())
+    recordUsage(msg.usage, { model: msg.model, label: o.label ?? o.tool.name })
     if (msg.stop_reason === 'refusal') throw new RefusalError(o.messages.refusal)
     if (msg.stop_reason === 'max_tokens') throw new Error(o.messages.tooLong)
     const call = msg.content.find((b): b is Extract<typeof b, { type: 'tool_use' }> => b.type === 'tool_use' && b.name === o.tool.name)

@@ -3,6 +3,7 @@
 
 import type { BetaContentBlockParam } from '@anthropic-ai/sdk/resources/beta/messages/messages'
 import { RefusalError, baseParams, getClient, recordUsage } from './client'
+import { tracked } from './costs'
 import { summarizeShow } from './context'
 import { contactSheet } from './render'
 import { getState } from '@/state/store'
@@ -51,8 +52,8 @@ export async function writePitch(req: PitchRequest, onText: (snapshot: string) =
     { signal },
   )
   stream.on('text', (_d, snapshot) => onText(snapshot))
-  const msg = await stream.finalMessage()
-  recordUsage(msg.usage)
+  const msg = await tracked(stream.finalMessage())
+  recordUsage(msg.usage, { model: msg.model, label: 'Client pitch' })
   if (msg.stop_reason === 'refusal') throw new RefusalError('Claude declined to write this pitch.')
   return msg.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('')
 }

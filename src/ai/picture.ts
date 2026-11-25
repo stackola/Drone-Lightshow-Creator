@@ -63,6 +63,7 @@ export async function expandPrompt(description: string, drones: number, signal?:
   const out = await submitObject({
     schema: ExpandedPrompt,
     tool: { name: 'submit_description', description: 'Submit the picture description and a short name.' },
+    label: 'Picture description',
     system: EXPAND_SYSTEM,
     content: [{ type: 'text', text: `Request: ${description.trim()}\nLights available: ${drones} — ${detailFor(drones)}\nThe formation can be up to about 240 m wide and 100 m tall.` }],
     maxTokens: 2000,
@@ -200,6 +201,7 @@ export async function reviewPicture(description: string, attempt: PictureAttempt
   return submitObject({
     schema: PictureReview,
     tool: { name: 'submit_review', description: 'Submit your verdict on the drones: approve, or the adjustment to make.' },
+    label: 'Look & fix (picture)',
     system: SYSTEM,
     content,
     maxTokens: 4000,

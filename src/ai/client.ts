@@ -5,6 +5,7 @@
 // localStorage), or through a proxy the user runs that adds the key itself.
 
 import Anthropic from '@anthropic-ai/sdk'
+import { recordClaude } from './costs'
 import type { BetaContentBlock, BetaContentBlockParam } from '@anthropic-ai/sdk/resources/beta/messages/messages'
 
 export const MODEL = 'claude-opus-5-5'
@@ -139,8 +140,10 @@ type UsageListener = (u: Usage) => void
 const usage: Usage = { input: 0, output: 0, cacheRead: 0, requests: 0 }
 const listeners = new Set<UsageListener>()
 
-export function recordUsage(u: { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } | null | undefined): void {
+export function recordUsage(u: { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } | null | undefined, meta: { model?: string; label?: string } = {}): void {
   if (!u) return
+  // Priced by the model that actually answered (a refusal fallback can differ from MODEL).
+  recordClaude(meta.model || MODEL, u, meta.label ?? 'Claude')
   usage.input += (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0)
   usage.cacheRead += u.cache_read_input_tokens ?? 0
   usage.output += u.output_tokens ?? 0

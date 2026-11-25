@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, Check, Loader2, Plus, Settings2, Sparkles, Square, TriangleAlert, Undo2 } from 'lucide-react'
+import { formatUsd, spentSince, useCosts } from '@/ai/costs'
 import { STARTERS, newChat, sendToCopilot, stopCopilot, useCopilot, type ChatItem } from '@/ai/copilot'
 import { MODEL_LABEL, aiConfigured, onUsage, type Usage } from '@/ai/client'
 import { getState, useStore } from '@/state/store'
@@ -69,6 +70,7 @@ export function CopilotPanel() {
   const logRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const usage = useUsage()
+  const sessionCost = useCosts((s) => spentSince(s.entries, s.sessionStart))
   const hasMusic = useStore((s) => !!s.doc.audio)
 
   useEffect(() => {
@@ -138,7 +140,7 @@ export function CopilotPanel() {
           </div>
           <div className="cp-foot">
             <span>Shift+Enter for a new line</span>
-            {usage.requests > 0 && <span title="Tokens used by AI features this session">{Math.round(usage.input / 1000)}k in · {Math.round(usage.output / 1000)}k out</span>}
+            {usage.requests > 0 && <span title="AI cost this session (estimated from list prices) and tokens used">{formatUsd(sessionCost)} · {Math.round(usage.input / 1000)}k in · {Math.round(usage.output / 1000)}k out</span>}
           </div>
         </>
       )}

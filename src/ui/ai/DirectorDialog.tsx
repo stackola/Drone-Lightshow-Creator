@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { Check, Loader2, Sparkles } from 'lucide-react'
+import { CostMeter } from './CostMeter'
 import { directShow, type DirectorProgress, type DirectorResult } from '@/ai/director'
 import { describeError } from '@/ai/client'
 import { getState, useStore } from '@/state/store'
@@ -20,6 +21,7 @@ export function DirectorDialog({ onClose }: { onClose: () => void }) {
   const doc = useStore((s) => s.doc)
   // A composed score belongs to the current show; a new show gets a new one.
   const hasMusic = !!doc.audio?.beats.length && !doc.audio.generated
+  const [openedAt] = useState(() => Date.now())
   const [brief, setBrief] = useState('')
   const [drones, setDrones] = useState(doc.droneCount)
   const [length, setLength] = useState<Length>(hasMusic ? 'music' : 'natural')
@@ -119,6 +121,7 @@ export function DirectorDialog({ onClose }: { onClose: () => void }) {
           )}
           {!hasMusic && <p className="hint">Or load your own song first (timeline → Music) and the show will be choreographed to it.</p>}
           <p className="hint">Replaces the current show — you can undo. Every formation is sized and checked by the safety engine.</p>
+          <CostMeter since={openedAt} busy={!!progress && !result && !error} />
           {error && <div className="cp-notice error" style={{ marginTop: 8 }}>{error}</div>}
         </>
       )}

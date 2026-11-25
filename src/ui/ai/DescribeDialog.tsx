@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { findScene } from '@/core/groups'
+import { CostMeter } from './CostMeter'
 import { Loader2, Sparkles } from 'lucide-react'
 import { drawAndCheck, drawFormation, drawingPng, formationFromSvg, type DrawnFormation } from '@/ai/shapeGen'
 import { shapePreview } from '@/ai/render'
@@ -18,6 +19,7 @@ export function DescribeDialog({ onClose }: { onClose: () => void }) {
   const n = useStore((s) => s.doc.droneCount)
   const selection = useStore((s) => s.selection)
   const selectedScene = useStore((s) => (s.selection.kind === 'scene' ? findScene(s.doc, (s.selection as { id: string }).id)?.scene : undefined))
+  const [openedAt] = useState(() => Date.now())
   const [description, setDescription] = useState('')
   const [feedback, setFeedback] = useState('')
   const [drawn, setDrawn] = useState<DrawnFormation | null>(null)
@@ -94,6 +96,7 @@ export function DescribeDialog({ onClose }: { onClose: () => void }) {
           {EXAMPLES.map((e) => <button key={e} className="chip" onClick={() => setDescription(e)}>{e}</button>)}
         </div>
       )}
+      <CostMeter since={openedAt} busy={busy} />
       {error && <div className="cp-notice error" style={{ marginTop: 10 }}>{error}</div>}
       {busy && !shape && <p className="hint" style={{ marginTop: 10 }}>Drawing, then checking how it comes out as drones…</p>}
       {shape && drawn && dots && (

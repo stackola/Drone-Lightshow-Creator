@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
+import { claudePrice, formatUsd, imagePrice, spentSince, startOfToday, useCosts } from '@/ai/costs'
 import { IMAGE_MODELS, loadImageSettings, saveImageSettings, testImageKey, type ImageSettings } from '@/ai/openai'
 import { MODEL, MODEL_LABEL, describeError, getClient, loadAiSettings, saveAiSettings } from '@/ai/client'
 import { getState } from '@/state/store'
@@ -115,6 +116,48 @@ export function ImageKeyForm({ onSaved, compact }: { onSaved?: () => void; compa
   )
 }
 
+/** What the AI features have cost, and the prices the tracker uses (editable). */
+function CostSettings() {
+  const entries = useCosts((s) => s.entries)
+  const total = useCosts((s) => s.total)
+  const since = useCosts((s) => s.since)
+  const overrides = useCosts((s) => s.overrides)
+  const img = loadImageSettings()
+  const cp = claudePrice(MODEL), ip = imagePrice(img.model)
+  const byLabel = new Map<string, { n: number; usd: number }>()
+  for (const e of entries) { const b = byLabel.get(e.label) ?? { n: 0, usd: 0 }; b.n++; b.usd += e.usd; byLabel.set(e.label, b) }
+  const num = (v: number, on: (x: number) => void, label: string) => (
+    <label className="cost-price"><span>{label}</span><input className="text-input" type="number" min={0} step={0.01} value={v} aria-label={label} onChange={(e) => on(Math.max(0, Number(e.target.value) || 0))} /></label>
+  )
+  return (
+    <div style={{ marginTop: 18 }}>
+      <div className="field-label">AI costs</div>
+      <p style={{ margin: '0 0 6px' }}><b style={{ fontSize: 18 }}>{formatUsd(total)}</b> <span className="hint">since {new Date(since).toLocaleDateString()} · today {formatUsd(spentSince(entries, startOfToday()))}</span></p>
+      {byLabel.size > 0 && (
+        <table className="cost-table" style={{ marginBottom: 8 }}>
+          <tbody>{[...byLabel.entries()].sort((a, b) => b[1].usd - a[1].usd).map(([l, b]) => <tr key={l}><td>{l}</td><td>{b.n}×</td><td className="cost-usd">{formatUsd(b.usd)}</td></tr>)}</tbody>
+        </table>
+      )}
+      <div className="hint" style={{ marginBottom: 6 }}>Prices used (USD per million tokens). Estimates from list prices — your Anthropic and OpenAI bills are the source of truth.</div>
+      <div className="cost-prices">
+        <span className="cost-sub">{MODEL}</span>
+        {num(cp.input, (x) => useCosts.getState().setClaudePrice(MODEL, { ...cp, input: x }), 'Input')}
+        {num(cp.output, (x) => useCosts.getState().setClaudePrice(MODEL, { ...cp, output: x }), 'Output')}
+        {num(cp.cacheRead, (x) => useCosts.getState().setClaudePrice(MODEL, { ...cp, cacheRead: x }), 'Cached input')}
+      </div>
+      <div className="cost-prices">
+        <span className="cost-sub">{img.model}</span>
+        {num(ip.textInput, (x) => useCosts.getState().setImagePrice(img.model, { ...ip, textInput: x }), 'Text input')}
+        {num(ip.output, (x) => useCosts.getState().setImagePrice(img.model, { ...ip, output: x }), 'Image output')}
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+        {(overrides.claude[MODEL] || overrides.image[img.model]) && <button className="btn sm" onClick={() => { useCosts.getState().setClaudePrice(MODEL, null); useCosts.getState().setImagePrice(img.model, null) }}>Use list prices</button>}
+        <button className="btn sm" onClick={() => useCosts.getState().reset()} disabled={!entries.length && !total}>Reset the cost history</button>
+      </div>
+    </div>
+  )
+}
+
 export function AiSettingsDialog({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="AI settings" onClose={onClose} footer={<button className="btn" onClick={onClose}>Done</button>}>
@@ -125,6 +168,7 @@ export function AiSettingsDialog({ onClose }: { onClose: () => void }) {
       <div style={{ marginTop: 18 }}>
         <ImageKeyForm onSaved={() => getState().toast('Picture settings saved')} />
       </div>
+      <CostSettings />
       <div style={{ marginTop: 14 }}>
         <button
           className="btn sm danger"

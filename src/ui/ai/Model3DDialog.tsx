@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { findScene, sceneDroneCount } from '@/core/groups'
+import { CostMeter } from './CostMeter'
 import { Box, Check, Eye, Loader2, Sparkles, Wrench } from 'lucide-react'
 import { attemptFrom, createModel, lookAndFix, modelShape, type ModelAttempt } from '@/ai/model3d'
 import { fourViews, frontStrip } from '@/ai/render'
@@ -39,6 +40,7 @@ export function Model3DDialog({ onClose }: { onClose: () => void }) {
   const target = useStore((s) => s.aiTarget)
   const selection = useStore((s) => s.selection)
   const selectedScene = useStore((s) => (s.selection.kind === 'scene' ? findScene(s.doc, (s.selection as { id: string }).id)?.scene : undefined))
+  const [openedAt] = useState(() => Date.now())
   const [configured, setConfigured] = useState(aiConfigured())
   const [description, setDescription] = useState(init.description)
   const [rounds, setRounds] = useState<'0' | '1' | '2' | '3'>('2')
@@ -148,6 +150,7 @@ export function Model3DDialog({ onClose }: { onClose: () => void }) {
           {!attempts.length && !busy && (
             <div className="chips">{EXAMPLES.map((e) => <button key={e} className="chip" onClick={() => setDescription(e)}>{e}</button>)}</div>
           )}
+          <CostMeter since={openedAt} busy={!!busy} />
           {error && <div className="cp-notice error" style={{ marginTop: 10 }}>{error}</div>}
           {(attempts.length > 0 || busy) && (
             <div className="m3d">
