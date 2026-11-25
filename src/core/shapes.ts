@@ -238,7 +238,8 @@ export function generateShape(spec: ShapeSpec, n: number): ShapePoints {
 function cacheKey(spec: ShapeSpec, n: number): string {
   // Joints only animate the drones; they don't change where drones sit.
   if (spec.kind === 'model') return `${n}|model|${spec.relief ? 'relief|' : ''}${solidsKey(spec.parts)}`
-  const { size: _size, ...rest } = spec as ShapeSpec & { size: number }
+  // A traced picture's source doesn't change where drones sit (its traced lines do).
+  const { size: _size, picture: _picture, ...rest } = spec as ShapeSpec & { size: number; picture?: unknown }
   return `${n}|${JSON.stringify(rest)}`
 }
 
@@ -476,7 +477,8 @@ function lineDrones(lines: [number, number][][], closed: boolean[], spacing: num
   lines.forEach((line, li) => {
     const lens = line.slice(1).map((q, i) => Math.hypot(q[0] - line[i]![0], q[1] - line[i]![1]))
     const total = lens.reduce((a, b) => a + b, 0)
-    if (!(total > 0)) return
+    // A stroke much shorter than the spacing would be a stray dot or two: leave it out.
+    if (!(total > 0) || total < spacing * 0.75) return
     const steps = Math.max(1, Math.round(total / spacing))
     const count = closed[li] ? steps : steps + 1
     let seg = 0, acc = 0
@@ -516,19 +518,91 @@ function imageShape(spec: Extract<ShapeSpec, { kind: 'image' }>, n: number): Sha
  * spacing of length) plus the filled area (hexagonally packed) take exactly
  * n drones, place the strokes' drones, then fill the area around them.
  */
+/**
+ * Level of detail: keep strokes in order of importance (longest first) and
+ * leave out any that runs mostly within `reach` spacings of strokes already
+ * kept — with this few drones it would only blur into them. Returns the kept
+ * strokes' indices, in their original order.
+ */
+function strokesForSpacing(lines: [number, number][][], lens: number[], s: number, reach = 1.4, closed: boolean[] = [], colors: ([number, number, number] | null)[] = []): number[] {
+  // Closed shapes (heads, eyes, gems, petals) are features: they go first, then the longest lines.
+  const weight = (i: number) => lens[i]! * (closed[i] ? 3 : 1)
+  const order = lines.map((_, i) => i).sort((a, b) => weight(b) - weight(a))
+  const cell = s * reach
+  const grid = new Map<number, [number, number, number][]>() // x, y, owner
+  const key = (x: number, y: number) => (Math.floor(x / cell) * 73856093) ^ (Math.floor(y / cell) * 19349663)
+  const samples = (line: [number, number][]) => {
+    const out: [number, number][] = []
+    for (let i = 1; i < line.length; i++) {
+      const [ax, ay] = line[i - 1]!, [bx, by] = line[i]!
+      const L = Math.hypot(bx - ax, by - ay), k = Math.max(1, Math.ceil(L / (s / 2)))
+      for (let j = i === 1 ? 0 : 1; j <= k; j++) out.push([ax + ((bx - ax) * j) / k, ay + ((by - ay) * j) / k])
+    }
+    return out
+  }
+  // A line in a clearly different colour still reads beside another: it only half counts as crowding.
+  const differs = (i: number, j: number) => {
+    const a = colors[i], b = colors[j]
+    return !!a && !!b && Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) > 0.35
+  }
+  const near = (x: number, y: number, i: number): number => {
+    let best = 0
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+      for (const [qx, qy, j] of grid.get((Math.floor(x / cell + a) * 73856093) ^ (Math.floor(y / cell + b) * 19349663)) ?? []) {
+        if (Math.hypot(qx - x, qy - y) >= cell) continue
+        best = Math.max(best, differs(i, j) ? 0.5 : 1)
+        if (best === 1) return 1
+      }
+    }
+    return best
+  }
+  const kept: number[] = []
+  for (const i of order) {
+    const pts = samples(lines[i]!)
+    let close = 0
+    for (const [x, y] of pts) close += near(x, y, i)
+    if (pts.length && close / pts.length > (closed[i] ? 0.6 : 0.4)) continue
+    kept.push(i)
+    for (const p of pts) { const k = key(p[0], p[1]); const l = grid.get(k); const e: [number, number, number] = [p[0], p[1], i]; if (l) l.push(e); else grid.set(k, [e]) }
+  }
+  return kept.sort((a, b) => a - b)
+}
+
 function drawingShape(spec: Extract<ShapeSpec, { kind: 'image' }>, n: number, w: number, h: number): ShapePoints {
-  const lines = spec.lines!.map((l) => { const out: [number, number][] = []; for (let i = 0; i + 1 < l.p.length; i += 2) out.push([(l.p[i]! - 0.5) * w, (0.5 - l.p[i + 1]!) * h]); return out }).filter((l) => l.length >= 2)
-  const closed = spec.lines!.map((l) => !!l.closed)
+  const all = spec.lines!.map((l) => { const out: [number, number][] = []; for (let i = 0; i + 1 < l.p.length; i += 2) out.push([(l.p[i]! - 0.5) * w, (0.5 - l.p[i + 1]!) * h]); return { pts: out, closed: !!l.closed } }).filter((l) => l.pts.length >= 2)
+  const lens = all.map((l) => l.pts.slice(1).reduce((a, q, i) => a + Math.hypot(q[0] - l.pts[i]![0], q[1] - l.pts[i]![1]), 0))
   const px = decodeMask(spec.mask)
   let on = 0
   for (let i = 0; i < px.length; i++) on += px[i]!
   const area = (on / Math.max(1, spec.mask.w * spec.mask.h)) * w * h
   // Spacing such that strokes + fill hold about n drones (strokes: length/s, fill: area/(HEX·s²)).
   const fillFor = (s: number) => Math.round(area / (HEX * s * s))
-  const count = (s: number) => lineDrones(lines, closed, s).pts.length / 3 + fillFor(s)
-  let lo = 1e-4, hi = 2
-  for (let it = 0; it < 30; it++) { const mid = Math.sqrt(lo * hi); if (count(mid) > n) lo = mid; else hi = mid }
-  const s = hi
+  let lines = all.map((l) => l.pts), closed = all.map((l) => l.closed)
+  const solve = () => {
+    const count = (s: number) => lineDrones(lines, closed, s).pts.length / 3 + fillFor(s)
+    let lo = 1e-4, hi = 2
+    for (let it = 0; it < 30; it++) { const mid = Math.sqrt(lo * hi); if (count(mid) > n) lo = mid; else hi = mid }
+    return hi
+  }
+  // Each line's colour (from the picture along it), so differently coloured neighbours both survive.
+  const lineColors = all.map((l) => {
+    const n2 = Math.min(8, l.pts.length), pts = new Float32Array(n2 * 3)
+    for (let k = 0; k < n2; k++) { const q = l.pts[Math.floor((k * (l.pts.length - 1)) / Math.max(1, n2 - 1))]!; pts[k * 3] = q[0]; pts[k * 3 + 1] = q[1] }
+    const c = rasterColors(spec, pts, n2, w, h)
+    if (!c) return null
+    const avg: [number, number, number] = [0, 0, 0]
+    for (let k = 0; k < n2; k++) for (let a = 0; a < 3; a++) avg[a] = avg[a]! + c[k * 3 + a]! / n2
+    return avg
+  })
+  let s = solve()
+  // Fewer drones, less detail: drop strokes that would blur into stronger ones at this spacing, then re-solve.
+  for (let it = 0; it < 4; it++) {
+    const keep = strokesForSpacing(all.map((l) => l.pts), lens, s, 1.9 - 1.1 * Math.max(0, Math.min(1, spec.detail ?? 0.5)), all.map((l) => l.closed), lineColors)
+    if (keep.length === lines.length) break
+    lines = keep.map((i) => all[i]!.pts)
+    closed = keep.map((i) => all[i]!.closed)
+    s = solve()
+  }
   const ld = lineDrones(lines, closed, s)
   let strokes = ld.pts.length / 3
   // Too many stroke drones for the fleet (only strokes): drop every other one from the end, evenly.

@@ -572,3 +572,17 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent-2); c
 .palette-stops { display: flex; flex-direction: column; gap: 4px; width: 100%; }
 .palette-stop { display: flex; gap: 4px; align-items: center; }
 .palette-stop > :first-child { flex: 1; }
+
+/* Picture to drones */
+.pic-studio { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px; margin-top: 12px; }
+.pic-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pic-pair figure { margin: 0; }
+.pic-pair img { width: 100%; aspect-ratio: 1; object-fit: contain; background: #000; border-radius: 8px; border: 1px solid var(--line); display: block; }
+.pic-pair figcaption { font-size: 11px; color: var(--faint); margin-top: 4px; text-align: center; }
+.pic-controls { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pic-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0; }
+.pic-history { display: flex; gap: 6px; margin-top: 10px; overflow-x: auto; }
+.pic-thumb { border: 1px solid var(--line); border-radius: 6px; padding: 2px; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; color: var(--muted); font-size: 11px; }
+.pic-thumb img { width: 56px; height: 56px; object-fit: contain; background: #000; border-radius: 4px; }
+.pic-thumb.on { border-color: var(--accent); color: var(--text); }
+@media (max-width: 760px) { .pic-studio { grid-template-columns: 1fr; } }

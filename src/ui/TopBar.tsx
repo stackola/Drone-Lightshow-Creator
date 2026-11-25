@@ -1,4 +1,4 @@
-import { Undo2, Redo2, MonitorPlay, Menu, ShieldCheck, ShieldAlert, Wrench, Settings2, FilePlus2, FolderOpen, Save, Download, Music, Keyboard, Sparkles, Wand2, PenLine, MessageSquareText, FileText, KeyRound, Box, Wind } from 'lucide-react'
+import { Undo2, Redo2, MonitorPlay, Menu, ShieldCheck, ShieldAlert, Wrench, Settings2, FilePlus2, FolderOpen, Save, Download, Music, Keyboard, Sparkles, Wand2, PenLine, MessageSquareText, FileText, KeyRound, Box, Wind, ImagePlus } from 'lucide-react'
 import { openCopilot } from './ai/openCopilot'
 import { STARTERS } from '@/ai/copilotStore'
 import { getState, useStore } from '@/state/store'
@@ -33,6 +33,7 @@ export function TopBar({ onPresent }: { onPresent: () => void }) {
         {(close) => (
           <>
             <button className="menu-item" onClick={() => { close(); getState().set({ dialog: 'director' }) }}><Wand2 size={14} className="ai-mark" /> Generate a show from a brief…</button>
+            <button className="menu-item" onClick={() => { close(); getState().set({ dialog: 'picture', aiTarget: null }) }}><ImagePlus size={14} className="ai-mark" /> Picture to drones…</button>
             <button className="menu-item" onClick={() => { close(); getState().set({ dialog: 'describe' }) }}><PenLine size={14} className="ai-mark" /> Describe a formation…</button>
             <button className="menu-item" onClick={() => { close(); getState().set({ dialog: 'model3d', aiTarget: null }) }}><Box size={14} className="ai-mark" /> Create a 3D model…</button>
             <button className="menu-item" onClick={() => { close(); openCopilot() }}><MessageSquareText size={14} className="ai-mark" /> Ask the copilot <span className="kbd">Ctrl K</span></button>

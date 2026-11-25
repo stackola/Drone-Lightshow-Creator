@@ -302,3 +302,46 @@ test('3D model: improve an existing model with designer feedback', async ({ page
   await expect(page.locator('.layer-card').getByText('Snowman · 4 parts')).toBeVisible()
   await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 15000 })
 })
+
+// A tiny line-art picture: a pink ring, a green peak and a gold sun on black.
+const LINE_ART_PNG = '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'
+
+test('Picture to drones: Claude writes the picture, it is traced into drones at any count, Claude checks it', async ({ page }) => {
+  const images: Record<string, unknown>[] = []
+  await page.route('https://api.openai.com/**', async (route) => {
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })
+    images.push(route.request().postDataJSON() as Record<string, unknown>)
+    return route.fulfill({ status: 200, headers: { ...CORS, 'content-type': 'application/json' }, body: JSON.stringify({ data: [{ b64_json: LINE_ART_PNG }] }) })
+  })
+  const seen = await mockClaude(page, (body) => {
+    const tool = (body.tools as { name: string }[] | undefined)?.[0]?.name
+    if (tool === 'submit_description') return { blocks: [{ type: 'tool_use', id: 'd1', name: 'submit_description', input: { name: 'Mountain sun', prompt: 'A round frame around a single mountain peak with a small sun above it, pink frame, green peak, gold sun.', format: 'square' } }], stop: 'tool_use' }
+    return { blocks: [{ type: 'tool_use', id: 'r1', name: 'submit_review', input: { critique: 'Ring, peak and sun all read clearly.', done: true } }], stop: 'tool_use' }
+  })
+  await open(page)
+  await page.evaluate(() => localStorage.setItem('dsd.openai.v1', JSON.stringify({ apiKey: 'sk-test', model: 'gpt-image-2', quality: 'low' })))
+  await page.getByRole('button', { name: 'AI', exact: true }).click()
+  await page.getByText('Picture to drones…').click()
+  await page.getByLabel('What should the drones show?').fill('mountain and sun')
+  await page.getByRole('button', { name: /Create/ }).click()
+  await expect(page.getByAltText('Mountain sun as 200 drones')).toBeVisible({ timeout: 20000 })
+  await expect(page.getByText(/Ring, peak and sun all read clearly/)).toBeVisible()
+  // Claude expanded the words; the image prompt carries the line-art style and the drone budget.
+  expect(String(images[0]!.prompt)).toMatch(/A round frame around a single mountain peak.*glowing neon line drawing.*Line budget/s)
+  expect(images[0]!.size).toBe('1024x1024')
+  const review = (seen[1]!.body.messages as Msg[])[0]!.content as { type: string }[]
+  expect(review.filter((b) => b.type === 'image')).toHaveLength(2)
+  // A different drone count re-traces instantly — no new picture.
+  await page.getByLabel('Drones', { exact: true }).fill('120')
+  await expect(page.getByAltText('Mountain sun as 120 drones')).toBeVisible()
+  expect(images).toHaveLength(1)
+  await page.getByRole('button', { name: /Add as new scene \(120 drones\)/ }).click()
+  await expect(page.locator('.srow', { hasText: 'Mountain sun' })).toBeVisible()
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 20000 })
+  // The picture is kept with the shape, so it can be traced again later.
+  await expect.poll(() => page.evaluate(() => {
+    const doc = JSON.parse(localStorage.getItem('dsd.doc.v1') ?? 'null')
+    const s = doc?.scenes?.find((x: { name: string }) => x.name === 'Mountain sun')
+    return [s?.layers?.[0]?.shape?.picture?.image?.slice(0, 23), s?.layers?.length]
+  })).toEqual(['data:image/jpeg;base64,', 2])
+})

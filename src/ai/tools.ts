@@ -25,6 +25,8 @@ import { contactSheet, fourViews, frontStrip } from './render'
 import { attemptFrom, createModel, lookAndFix, modelShape } from './model3d'
 import { allocate, findSceneTime, scenePointColors } from '@/core/compile'
 import { drawAndCheck } from './shapeGen'
+import { pictureFor } from './picture'
+import { imagesConfigured } from './openai'
 import { MAX_CUSTOM, customJobs, resolveCustoms } from './customs'
 import { findScene as findAnyScene, findGroup, groupSizes, replaceSceneIn, sceneDroneCount } from '@/core/groups'
 import { groupDoc, groupSpots, splitSceneDoc } from '@/core/splits'
@@ -105,7 +107,7 @@ function ok(summary: string, detail?: string): ToolOutcome {
 async function resolveCustom(shape: z.infer<typeof ShapeInput>, signal?: AbortSignal, n = doc().droneCount): Promise<ShapeSpec | null> {
   if (shape.kind !== 'custom' && shape.kind !== 'model3d') return null
   if (!shape.description?.trim()) throw new ToolError(`A ${shape.kind} shape needs a description.`)
-  if (shape.kind === 'custom') return (await drawAndCheck(shape.description, n, signal)).shape
+  if (shape.kind === 'custom') return imagesConfigured() ? await pictureFor(shape.description, n, doc().limits, signal) : (await drawAndCheck(shape.description, n, signal)).shape
   // 3D: generate, then up to two look-and-fix rounds.
   const attempts = await createModel(shape.description, { n, rounds: 2, render: RENDER, signal })
   return modelShape(attempts[attempts.length - 1]!)

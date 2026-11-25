@@ -55,7 +55,7 @@ interface State {
   snap: boolean
   audio: AudioRuntime | null
   toasts: Toast[]
-  dialog: null | 'new' | 'export' | 'shortcuts' | 'ai-settings' | 'director' | 'describe' | 'pitch' | 'model3d' | 'wind' | 'site'
+  dialog: null | 'new' | 'export' | 'shortcuts' | 'ai-settings' | 'director' | 'describe' | 'pitch' | 'model3d' | 'picture' | 'wind' | 'site'
   /** Layer an AI dialog is improving (e.g. an existing 3D model). */
   aiTarget: { sceneId: string; layerId: string } | null
   /** Which tool the right-hand panel shows. */

@@ -177,6 +177,20 @@ export interface Mask {
 
 export type Fill = 'outline' | 'filled'
 
+/** Where a traced picture came from, kept so it can be traced again (other detail, sensitivity, drone count). */
+export interface PictureSource {
+  /** What it shows (the description it was made from). */
+  prompt: string
+  /** The picture, as a small JPEG data URL. */
+  image: string
+  /** 0 (bold, few lines) … 1 (every line). */
+  detail: number
+  /** Brightness 0–1 a line needs to count; null = automatic. */
+  threshold: number | null
+  /** The picture's shape, for drawing it again. */
+  format?: 'square' | 'landscape' | 'portrait'
+}
+
 /** A stroke of a drawing: flat [u, v, u, v, …] in 0..1 of the picture (v down), drawn in order. */
 export interface DrawnLine {
   p: number[]
@@ -208,7 +222,7 @@ export type ShapeSpec =
    * strokes (each becomes one evenly spaced line of drones along its path),
    * `colors` an RGB raster the drones take their colours from.
    */
-  | { kind: 'image'; size: number; name: string; mask: Mask; colors: string | null; cw: number; ch: number; lines?: DrawnLine[] }
+  | { kind: 'image'; size: number; name: string; mask: Mask; colors: string | null; cw: number; ch: number; lines?: DrawnLine[]; detail?: number; picture?: PictureSource }
   /** relief: drones only on the side the audience sees (twice as dense there); leave off for models that turn. */
   | { kind: 'model'; size: number; name: string; parts: ModelPart[]; joints?: ModelJoint[]; relief?: boolean }
 

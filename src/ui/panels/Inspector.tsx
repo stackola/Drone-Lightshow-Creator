@@ -437,7 +437,15 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
             </div>
           </>
         )}
-        {shape.kind === 'image' && (
+        {shape.kind === 'image' && shape.picture && (
+          <Row label="Picture">
+            <span className="hint" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }} title={shape.picture.prompt}>{shape.name}</span>
+            <button className="btn sm ai" title="Change detail, line sensitivity or drone count, look and fix, or draw a new picture" onClick={() => getState().set({ dialog: 'picture', aiTarget: { sceneId: scene.id, layerId: layer.id } })}>
+              <Sparkles size={12} /> Studio
+            </button>
+          </Row>
+        )}
+        {shape.kind === 'image' && !shape.picture && (
           <Row label="Image">
             <span className="hint" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{shape.name}</span>
             <button className="btn sm" onClick={async () => {

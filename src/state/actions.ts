@@ -2,7 +2,7 @@ import { safeSpacing } from '@/core/site'
 import type { Draft } from 'immer'
 import type { Effect, Group, LightCue, Scene, ShapeKind, ShapeSpec, ShowDoc, SpareRole } from '@/core/types'
 import { SPARE_ROLES, addSpareLayer, applySpareRole, calmMotion } from '@/core/idle'
-import { fitScene, fitToAirspace, newId, newLayer, newLedSign, newScene, newShape } from '@/core/defaults'
+import { fitScene, fitToAirspace, newId, newLayer, newLedSign, newScene, newShape, withSpareDrones } from '@/core/defaults'
 import { comfortableSpacing, type FixAction, type Issue } from '@/core/validate'
 import { applyFixToDoc, autoFix, settleParts, tidySplit } from '@/core/fixes'
 import { defaultEffect } from '@/core/effects'
@@ -59,6 +59,26 @@ export function addFlappingBird() {
   // The fullest flap these drones can fly at this beat.
   const settled = settleParts({ ...ref.scene, hold: Math.max(ref.scene.hold, 36) }, sub, { prefer: 'calm' })
   getState().update((d) => { replaceSceneIn(d as ShowDoc, scene.id, settled) }, 'Add Bird', 'add-bird')
+}
+
+/**
+ * Add a picture formation flown by `drones` drones: fewer than the show has
+ * and the rest wait dark behind it; more and the show grows to that many.
+ */
+export function addPictureScene(shape: ShapeSpec, name: string, drones: number) {
+  const s0 = getState()
+  if (drones > s0.doc.droneCount) setDroneCount(drones)
+  const s = getState()
+  const sel = s.selection
+  const idx = sel.kind === 'scene' || sel.kind === 'flight' ? s.doc.scenes.findIndex((x) => x.id === sel.id) : -1
+  const after = idx >= 0 ? s.doc.scenes[idx] : s.doc.scenes[s.doc.scenes.length - 1]
+  let scene = newScene(s.doc, shape.kind, { shape, name, position: after ? [...after.position] : undefined })
+  const n = s.doc.droneCount
+  if (drones < n) scene = fitToAirspace(withSpareDrones(scene, s.doc, 1 - drones / n), s.doc)
+  const at = idx >= 0 ? idx + 1 : s.doc.scenes.length
+  s.update((d) => { d.scenes.splice(at, 0, scene as Draft<Scene>) }, `Add ${scene.name}`)
+  s.select({ kind: 'scene', id: scene.id })
+  return scene
 }
 
 /** Calm a formation's moving parts to what its drones can fly (keeping the beat). */

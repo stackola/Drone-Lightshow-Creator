@@ -7,6 +7,9 @@ import type { ShapeSpec } from '@/core/types'
 import type { SceneInput, ShapeInput, StepInput } from './schemas'
 import type { CustomShapes } from './convert'
 import { drawAndCheck } from './shapeGen'
+import { pictureFor } from './picture'
+import { imagesConfigured } from './openai'
+import { getState } from '@/state/store'
 import { createModel, modelShape } from './model3d'
 import { fourViews, frontStrip } from './render'
 
@@ -61,7 +64,8 @@ export async function resolveCustoms(jobs: CustomJob[], signal?: AbortSignal, ma
   const customs: CustomShapes = new Map()
   const results = await mapLimit(todo, 4, async (j): Promise<ShapeSpec> => {
     const description = j.shape.description!.trim()
-    if (j.shape.kind === 'custom') return (await drawAndCheck(description, j.n, signal)).shape
+    // With an image model: a picture traced into line art (highest fidelity); otherwise Claude's own SVG drawing.
+    if (j.shape.kind === 'custom') return imagesConfigured() ? await pictureFor(description, j.n, getState().doc.limits, signal) : (await drawAndCheck(description, j.n, signal)).shape
     const attempts = await createModel(description, { n: j.n, rounds: 2, render: { views: fourViews, strip: frontStrip }, signal })
     return modelShape(attempts[attempts.length - 1]!)
   })

@@ -14,6 +14,7 @@ import { Suspense, lazy } from 'react'
 const AiSettingsDialog = lazy(() => import('./ai/AiSettings').then((m) => ({ default: m.AiSettingsDialog })))
 const DirectorDialog = lazy(() => import('./ai/DirectorDialog').then((m) => ({ default: m.DirectorDialog })))
 const DescribeDialog = lazy(() => import('./ai/DescribeDialog').then((m) => ({ default: m.DescribeDialog })))
+const PictureDialog = lazy(() => import('./ai/PictureDialog').then((m) => ({ default: m.PictureDialog })))
 const PitchDialog = lazy(() => import('./ai/PitchDialog').then((m) => ({ default: m.PitchDialog })))
 const Model3DDialog = lazy(() => import('./ai/Model3DDialog').then((m) => ({ default: m.Model3DDialog })))
 const WindDialog = lazy(() => import('./WindDialog').then((m) => ({ default: m.WindDialog })))
@@ -29,6 +30,7 @@ export function Dialogs() {
     dialog === 'ai-settings' ? <AiSettingsDialog onClose={close} />
     : dialog === 'director' ? <DirectorDialog onClose={close} />
     : dialog === 'describe' ? <DescribeDialog onClose={close} />
+    : dialog === 'picture' ? <PictureDialog onClose={close} />
     : dialog === 'pitch' ? <PitchDialog onClose={close} />
     : dialog === 'model3d' ? <Model3DDialog onClose={close} />
     : dialog === 'wind' ? <WindDialog onClose={close} />

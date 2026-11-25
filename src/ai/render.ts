@@ -199,3 +199,39 @@ export function frontStrip(frames: { points: Float32Array; label: string }[], co
   })
   return canvas.toDataURL('image/png').split(',')[1]!
 }
+
+/**
+ * Drones as the audience sees them at night (PNG base64): glowing dots on
+ * black, sized for the count, the formation filling the frame.
+ */
+export function dronesPng(points: Float32Array, colors: Float32Array | null, size = 640): string {
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const x = canvas.getContext('2d')!
+  x.fillStyle = '#000'
+  x.fillRect(0, 0, size, size)
+  const n = points.length / 3
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  for (let i = 0; i < n; i++) {
+    minX = Math.min(minX, points[i * 3]!); maxX = Math.max(maxX, points[i * 3]!)
+    minY = Math.min(minY, points[i * 3 + 1]!); maxY = Math.max(maxY, points[i * 3 + 1]!)
+  }
+  const k = (size - 40) / Math.max(1e-6, maxX - minX, maxY - minY)
+  const r = Math.max(1.4, Math.min(4, (1.1 * size) / Math.sqrt(Math.max(1, n)) / 9))
+  x.globalCompositeOperation = 'lighter'
+  for (let i = 0; i < n; i++) {
+    const px = size / 2 + (points[i * 3]! - (minX + maxX) / 2) * k
+    const py = size / 2 - (points[i * 3 + 1]! - (minY + maxY) / 2) * k
+    const c = colors ? [colors[i * 3]!, colors[i * 3 + 1]!, colors[i * 3 + 2]!].map((v) => Math.round(v * 255)).join(',') : '255,255,255'
+    const g = x.createRadialGradient(px, py, 0, px, py, r * 2.2)
+    g.addColorStop(0, 'rgba(255,255,255,0.95)')
+    g.addColorStop(0.35, `rgba(${c},0.95)`)
+    g.addColorStop(1, `rgba(${c},0)`)
+    x.fillStyle = g
+    x.beginPath()
+    x.arc(px, py, r * 2.2, 0, Math.PI * 2)
+    x.fill()
+  }
+  return canvas.toDataURL('image/png').split(',')[1]!
+}

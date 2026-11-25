@@ -256,6 +256,15 @@ function shapeSpec(v: unknown): ShapeSpec | null {
       return pts.length >= 4 ? [{ p: pts, ...(l.closed === true ? { closed: true } : {}) }] : []
     })
     if (lines.length) out.lines = lines
+    if (typeof v.detail === 'number') out.detail = num(v.detail, 0.5, 0, 1)
+    const pic = v.picture
+    if (isObj(pic) && typeof pic.image === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(pic.image) && pic.image.length < 1_500_000) {
+      out.picture = {
+        prompt: str(pic.prompt, '').slice(0, 2000), image: pic.image, detail: num(pic.detail, 0.5, 0, 1),
+        threshold: pic.threshold === null || pic.threshold === undefined ? null : num(pic.threshold, 0.25, 0.02, 0.95),
+        ...(pic.format === 'landscape' || pic.format === 'portrait' || pic.format === 'square' ? { format: pic.format } : {}),
+      }
+    }
   }
   if ('fill' in base) out.fill = v.fill === 'outline' ? 'outline' : 'filled'
   if ('font' in base) out.font = v.font === 'serif' || v.font === 'pixel' ? v.font : 'sans'
