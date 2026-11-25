@@ -2,10 +2,9 @@
 // structured plan (scenes, lights, cues); the engine builds it safely, lands
 // arrivals on the music's downbeats, and applies automatic safety fixes.
 
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import type { ShapeSpec, ShowDoc } from '@/core/types'
 import { ShowPlan } from './schemas'
-import { RefusalError, baseParams, getClient, recordUsage } from './client'
+import { submitObject } from './submit'
 import { describeMusic, estimateTimings } from './context'
 import { buildShowFromPlan, type BuiltShow } from './convert'
 import { describeToShape } from './shapeGen'
@@ -82,46 +81,33 @@ function briefFor(req: DirectorRequest, base: ShowDoc): string {
 }
 
 export async function directShow(req: DirectorRequest, onProgress: (p: DirectorProgress) => void, signal?: AbortSignal): Promise<DirectorResult> {
-  const client = getClient()
   const current = getState().doc
   // Keep the music in the project either way; only time the show to it when asked.
   const base: ShowDoc = { ...newShow(req.droneCount, 'AI show'), limits: current.limits, site: current.site, audio: current.audio }
 
   onProgress({ phase: 'planning', scenes: [] })
-  const stream = client.beta.messages.stream(
-    {
-      ...baseParams(),
-      max_tokens: 32000,
-      system: DIRECTOR_SYSTEM,
-      output_config: { effort: 'high', format: zodOutputFormat(ShowPlan) },
-      messages: [{ role: 'user', content: briefFor(req, base) }],
-    },
-    { signal },
-  )
+  // The plan comes back as a tool call: far too many optional fields for grammar-constrained output (see submit.ts).
   let lastCount = 0
-  stream.on('text', (_d, snapshot) => {
-    // Show scene names as the plan streams in.
-    const scenesPart = snapshot.split('"cues"')[0] ?? ''
-    const names = [...scenesPart.matchAll(/"name"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"shape"/g)].map((m) => m[1]!.replace(/\\"/g, '"'))
-    if (names.length !== lastCount) {
-      lastCount = names.length
-      onProgress({ phase: 'planning', scenes: names })
-    }
+  const plan = await submitObject({
+    schema: ShowPlan,
+    tool: { name: 'submit_show_plan', description: 'Submit the complete show plan: every scene with its formation, light and timing, the light cues, and the music options.' },
+    system: DIRECTOR_SYSTEM,
+    content: [{ type: 'text', text: briefFor(req, base) }],
+    maxTokens: 32000,
+    effort: 'high',
+    signal,
+    onPartial: (snap) => {
+      // Show scene names as the plan streams in.
+      const scenes = (snap as { scenes?: { name?: unknown }[] } | null)?.scenes
+      const names = Array.isArray(scenes) ? scenes.map((x) => (typeof x?.name === 'string' ? x.name : '')).filter(Boolean) : []
+      if (names.length !== lastCount) {
+        lastCount = names.length
+        onProgress({ phase: 'planning', scenes: names })
+      }
+    },
+    messages: { refusal: 'Claude declined this brief. Try rewording it.', tooLong: 'The plan was too long. Ask for a shorter show.', unreadable: 'The plan was incomplete. Try again.' },
   })
-  const msg = await stream.finalMessage()
-  recordUsage(msg.usage)
-  if (msg.stop_reason === 'refusal') throw new RefusalError('Claude declined this brief. Try rewording it.')
-  if (msg.stop_reason === 'max_tokens') throw new Error('The plan was too long. Ask for a shorter show.')
-  const text = msg.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('')
-  let raw: unknown
-  try {
-    raw = JSON.parse(text)
-  } catch {
-    throw new Error('Couldn’t read the plan. Try again.')
-  }
-  const parsed = ShowPlan.safeParse(raw)
-  if (!parsed.success || !parsed.data.scenes.length) throw new Error('The plan was incomplete. Try again.')
-  const plan = parsed.data
+  if (!plan.scenes.length) throw new Error('The plan was incomplete. Try again.')
 
   // Draw custom formations and build 3D models in parallel (capped).
   const customIdx = plan.scenes.flatMap((s, i) => ((s.shape.kind === 'custom' || s.shape.kind === 'model3d') && s.shape.description ? [i] : [])).slice(0, 4)

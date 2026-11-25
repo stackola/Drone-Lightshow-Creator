@@ -1,11 +1,10 @@
 // "Describe a formation": Claude draws a bold SVG silhouette, which is
 // rasterised and sampled into drone positions with the drawing's colours.
 
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import type { BetaContentBlockParam } from '@anthropic-ai/sdk/resources/beta/messages/messages'
 import type { ShapeSpec } from '@/core/types'
 import { SvgShape } from './schemas'
-import { RefusalError, baseParams, getClient, recordUsage } from './client'
+import { submitObject } from './submit'
 import { imageShape } from '@/ui/content'
 
 const SYSTEM = `You draw formations for drone light shows: hundreds of drones, each a single point of coloured light about 3 metres from its neighbours, seen from far away against a night sky. You draw each formation as an SVG silhouette that is then filled evenly with drones.
@@ -31,7 +30,6 @@ function checkSvg(svg: string): string {
 }
 
 export async function drawFormation(description: string, opts: { feedback?: string; previous?: DrawnFormation; previewPng?: string; signal?: AbortSignal } = {}): Promise<DrawnFormation> {
-  const client = getClient()
   const content: BetaContentBlockParam[] = [{ type: 'text', text: `Draw this formation: ${description.trim()}` }]
   if (opts.previous) {
     content.push({ type: 'text', text: `Your previous drawing:\n${opts.previous.svg}` })
@@ -41,30 +39,17 @@ export async function drawFormation(description: string, opts: { feedback?: stri
     }
     content.push({ type: 'text', text: `Improve it. ${opts.feedback?.trim() ? `The designer says: ${opts.feedback.trim()}` : 'Make it bolder and easier to recognise as drones.'}` })
   }
-  const stream = client.beta.messages.stream(
-    {
-      ...baseParams(),
-      max_tokens: 16000,
-      system: SYSTEM,
-      output_config: { effort: 'medium', format: zodOutputFormat(SvgShape) },
-      messages: [{ role: 'user', content }],
-    },
-    { signal: opts.signal },
-  )
-  const msg = await stream.finalMessage()
-  recordUsage(msg.usage)
-  if (msg.stop_reason === 'refusal') throw new RefusalError('Claude declined to draw that. Try describing it differently.')
-  if (msg.stop_reason === 'max_tokens') throw new Error('The drawing got too long. Try a simpler description.')
-  const text = msg.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('')
-  let raw: unknown
-  try {
-    raw = JSON.parse(text)
-  } catch {
-    throw new Error('Couldn’t read the drawing. Try again.')
-  }
-  const parsed = SvgShape.safeParse(raw)
-  if (!parsed.success) throw new Error('Couldn’t read the drawing. Try again.')
-  return { name: parsed.data.name.slice(0, 40) || 'Custom', svg: checkSvg(parsed.data.svg) }
+  const out = await submitObject({
+    schema: SvgShape,
+    tool: { name: 'submit_drawing', description: 'Submit the finished formation drawing: a short name and the complete SVG document.' },
+    system: SYSTEM,
+    content,
+    maxTokens: 16000,
+    effort: 'medium',
+    signal: opts.signal,
+    messages: { refusal: 'Claude declined to draw that. Try describing it differently.', tooLong: 'The drawing got too long. Try a simpler description.', unreadable: 'Couldn’t read the drawing. Try again.' },
+  })
+  return { name: out.name.slice(0, 40) || 'Custom', svg: checkSvg(out.svg) }
 }
 
 /** Rasterise an SVG drawing into an image shape (browser only). */

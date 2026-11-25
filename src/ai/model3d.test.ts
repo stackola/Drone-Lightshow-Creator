@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Fake Claude: each structured request pops the next scripted JSON reply.
+// Fake Claude: each request pops the next scripted reply and hands it over through the request's tool.
 const replies: unknown[] = []
-const requests: { content: { type: string; text?: string; source?: { data: string } }[] }[] = []
+const requests: { content: { type: string; text?: string; source?: { data: string } }[]; tool: string }[] = []
 vi.mock('./client', async (orig) => {
   const real = await orig<typeof import('./client')>()
   return {
@@ -10,10 +10,14 @@ vi.mock('./client', async (orig) => {
     getClient: () => ({
       beta: {
         messages: {
-          stream: (body: { messages: { content: never }[] }) => {
-            requests.push({ content: body.messages[0]!.content })
+          stream: (body: { messages: { content: never }[]; tools: { name: string }[] }) => {
+            const tool = body.tools[0]!.name
+            requests.push({ content: body.messages[0]!.content, tool })
             const reply = replies.shift()
-            return { finalMessage: async () => ({ stop_reason: 'end_turn', usage: {}, content: [{ type: 'text', text: JSON.stringify(reply) }] }) }
+            return {
+              on: () => {},
+              finalMessage: async () => ({ stop_reason: 'tool_use', usage: {}, content: [{ type: 'tool_use', id: `t${requests.length}`, name: tool, input: reply }] }),
+            }
           },
         },
       },

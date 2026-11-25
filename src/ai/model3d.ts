@@ -7,12 +7,11 @@
 //    their own feedback for further rounds.
 
 import { z } from 'zod'
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import type { BetaContentBlockParam } from '@anthropic-ai/sdk/resources/beta/messages/messages'
 import type { ModelPart, ShapeSpec } from '@/core/types'
 import { MAX_PARTS, sampleModel } from '@/core/model3d'
 import { modelPart } from '@/core/serialize'
-import { RefusalError, baseParams, getClient, recordUsage } from './client'
+import { submitObject } from './submit'
 
 const vec3 = z.array(z.number()).describe('[x, y, z]')
 
@@ -97,31 +96,18 @@ function makeAttempt(name: string, parts: ModelPart[], n: number, render: Render
   return { name, parts, image: render(s.points, s.colors, name), hiddenParts: s.hiddenParts }
 }
 
-async function structured<T extends z.ZodType>(schema: T, content: BetaContentBlockParam[], signal?: AbortSignal): Promise<z.infer<T>> {
-  const stream = getClient().beta.messages.stream(
-    {
-      ...baseParams(),
-      max_tokens: 16000,
-      system: [{ type: 'text', text: MODEL3D_SYSTEM, cache_control: { type: 'ephemeral' } }],
-      output_config: { effort: 'medium', format: zodOutputFormat(schema) },
-      messages: [{ role: 'user', content }],
-    },
-    { signal },
-  )
-  const msg = await stream.finalMessage()
-  recordUsage(msg.usage)
-  if (msg.stop_reason === 'refusal') throw new RefusalError('Claude declined to build that model. Try describing it differently.')
-  if (msg.stop_reason === 'max_tokens') throw new Error('The model got too complex. Try a simpler description.')
-  const text = msg.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('')
-  let raw: unknown
-  try {
-    raw = JSON.parse(text)
-  } catch {
-    throw new Error('Couldn’t read the model. Try again.')
-  }
-  const parsed = schema.safeParse(raw)
-  if (!parsed.success) throw new Error('Couldn’t read the model. Try again.')
-  return parsed.data
+/** One result from Claude, handed over as a tool call (see submit.ts). */
+function structured<T extends z.ZodType>(schema: T, content: BetaContentBlockParam[], signal?: AbortSignal, tool = { name: 'submit_model', description: 'Submit the 3D model: a name and its solid parts.' }): Promise<z.infer<T>> {
+  return submitObject({
+    schema,
+    tool,
+    system: [{ type: 'text', text: MODEL3D_SYSTEM, cache_control: { type: 'ephemeral' } }],
+    content,
+    maxTokens: 16000,
+    effort: 'medium',
+    signal,
+    messages: { refusal: 'Claude declined to build that model. Try describing it differently.', tooLong: 'The model got too complex. Try a simpler description.', unreadable: 'Couldn’t read the model. Try again.' },
+  })
 }
 
 export async function generateModel(description: string, n: number, render: Renderer, signal?: AbortSignal): Promise<ModelAttempt> {
@@ -148,7 +134,7 @@ export async function lookAndFix(description: string, attempt: ModelAttempt, n: 
       ? `The designer asks: ${opts.feedback.trim()}\nApply that, fix anything else that doesn't read, and return the improved model (done = false).`
       : 'Look at it as an audience would, mostly from the front. Is it instantly recognisable? Check proportions, missing or extra parts, parts that float or don’t connect, and thin features that got too few drones. If it already reads clearly, set done = true and return the model unchanged. Otherwise return an improved model.',
   })
-  const review = await structured(ModelReview, content, opts.signal)
+  const review = await structured(ModelReview, content, opts.signal, { name: 'submit_review', description: 'Submit your review of the drones as built: the critique, whether it is done, and (if not) the corrected model.' })
   if (review.done && !opts.feedback?.trim()) return { critique: review.critique, next: null }
   return { critique: review.critique, next: makeAttempt(review.model.name || attempt.name, partsFromOutput(review.model), n, render) }
 }

@@ -147,7 +147,7 @@ const PLAN = {
 }
 
 test('Show Director turns a brief into a safe show', async ({ page }) => {
-  const seen = await mockClaude(page, () => ({ blocks: [{ type: 'text', text: JSON.stringify(PLAN) }], stop: 'end_turn' }))
+  const seen = await mockClaude(page, () => ({ blocks: [{ type: 'tool_use', id: 'plan_1', name: 'submit_show_plan', input: PLAN }], stop: 'tool_use' }))
   await open(page)
   await page.getByRole('button', { name: 'AI', exact: true }).click()
   await page.getByText('Generate a show from a brief…').click()
@@ -155,9 +155,12 @@ test('Show Director turns a brief into a safe show', async ({ page }) => {
   await page.getByRole('button', { name: 'Generate' }).click()
   await expect(page.getByText('Passes every safety check')).toBeVisible({ timeout: 20000 })
   await expect(page.locator('.result-grid figure')).toHaveCount(4)
-  const fmt = (seen[0]!.body.output_config as { format?: { type: string }; effort?: string })
-  expect(fmt.format?.type).toBe('json_schema')
-  expect(fmt.effort).toBe('high')
+  // The plan is handed over as a (non-strict) tool call: no grammar limits on its size.
+  const body = seen[0]!.body as { output_config?: { format?: unknown; effort?: string }; tools?: { name: string; strict?: boolean }[] }
+  expect(body.output_config?.format).toBeUndefined()
+  expect(body.output_config?.effort).toBe('high')
+  expect(body.tools?.map((t) => t.name)).toEqual(['submit_show_plan'])
+  expect(body.tools?.[0]?.strict).toBeUndefined()
   await page.getByRole('button', { name: 'Use this show' }).click()
   await expect(page.locator('.title-input')).toHaveValue('NOVA launch')
   await expect(page.locator('.slist .srow')).toHaveCount(6)
@@ -167,7 +170,7 @@ test('Show Director turns a brief into a safe show', async ({ page }) => {
 const ROCKET_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400"><path d="M200 30 C260 90 270 190 250 290 L150 290 C130 190 140 90 200 30 Z" fill="#e8f1ff"/><path d="M150 230 L95 320 L155 300 Z M250 230 L305 320 L245 300 Z" fill="#ff5a5a"/><path d="M165 290 L235 290 L200 380 Z" fill="#ffb02e"/></svg>'
 
 test('Describe a formation: words become a drawing become drones', async ({ page }) => {
-  await mockClaude(page, () => ({ blocks: [{ type: 'text', text: JSON.stringify({ name: 'Rocket', svg: ROCKET_SVG }) }], stop: 'end_turn' }))
+  await mockClaude(page, () => ({ blocks: [{ type: 'tool_use', id: 'draw_1', name: 'submit_drawing', input: { name: 'Rocket', svg: ROCKET_SVG } }], stop: 'tool_use' }))
   await open(page)
   await page.getByRole('button', { name: 'AI', exact: true }).click()
   await page.getByText('Describe a formation…').click()
@@ -226,17 +229,18 @@ const SNOWMAN = {
   ],
 }
 const SNOWMAN_HAT = { ...SNOWMAN, parts: [...SNOWMAN.parts, { type: 'cylinder', from: [0, 0.55, 0], to: [0, 0.9, 0], radius: 0.22, color: '#ff3366' }] }
-const isReview = (body: Record<string, unknown>) => JSON.stringify((body.output_config as { format?: unknown })?.format ?? {}).includes('"critique"')
+const isReview = (body: Record<string, unknown>) => (body.tools as { name: string }[] | undefined)?.[0]?.name === 'submit_review'
+const submit = (name: string, input: unknown) => ({ blocks: [{ type: 'tool_use' as const, id: `${name}_${Math.random().toString(36).slice(2, 8)}`, name, input }], stop: 'tool_use' as const })
 
 test('3D model: built, looked at from four angles, fixed until right, added to the show', async ({ page }) => {
   let reviews = 0
   const seen = await mockClaude(page, (body) => {
-    if (!isReview(body)) return { blocks: [{ type: 'text', text: JSON.stringify(SNOWMAN) }], stop: 'end_turn' }
+    if (!isReview(body)) return submit('submit_model', SNOWMAN)
     reviews++
     const reply = reviews === 1
       ? { critique: 'Reads as a snowman, but it needs the hat from the brief.', done: false, model: SNOWMAN_HAT }
       : { critique: 'A clear snowman with a red hat.', done: true, model: SNOWMAN_HAT }
-    return { blocks: [{ type: 'text', text: JSON.stringify(reply) }], stop: 'end_turn' }
+    return submit('submit_review', reply)
   })
   await open(page)
   await page.getByRole('button', { name: 'AI', exact: true }).click()
@@ -258,9 +262,9 @@ test('3D model: built, looked at from four angles, fixed until right, added to t
 test('3D model: improve an existing model with designer feedback', async ({ page }) => {
   let feedbackSeen = ''
   await mockClaude(page, (body) => {
-    if (!isReview(body)) return { blocks: [{ type: 'text', text: JSON.stringify(SNOWMAN) }], stop: 'end_turn' }
+    if (!isReview(body)) return submit('submit_model', SNOWMAN)
     feedbackSeen = JSON.stringify(body.messages)
-    return { blocks: [{ type: 'text', text: JSON.stringify({ critique: 'Added the hat you asked for.', done: false, model: SNOWMAN_HAT }) }], stop: 'end_turn' }
+    return submit('submit_review', { critique: 'Added the hat you asked for.', done: false, model: SNOWMAN_HAT })
   })
   await open(page)
   // Build without look-and-fix rounds, add it, then improve from the inspector.
