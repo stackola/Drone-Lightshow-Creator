@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { findScene } from '@/core/groups'
 import { Loader2, Sparkles } from 'lucide-react'
-import { drawFormation, formationFromSvg, type DrawnFormation } from '@/ai/shapeGen'
+import { drawAndCheck, drawFormation, drawingPng, formationFromSvg, type DrawnFormation } from '@/ai/shapeGen'
 import { shapePreview } from '@/ai/render'
 import { describeError } from '@/ai/client'
 import { generateShape } from '@/core/shapes'
@@ -23,6 +23,7 @@ export function DescribeDialog({ onClose }: { onClose: () => void }) {
   const [drawn, setDrawn] = useState<DrawnFormation | null>(null)
   const [shape, setShape] = useState<Extract<ShapeSpec, { kind: 'image' }> | null>(null)
   const [busy, setBusy] = useState(false)
+  const [critique, setCritique] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const controller = useRef<AbortController | null>(null)
 
@@ -33,11 +34,19 @@ export function DescribeDialog({ onClose }: { onClose: () => void }) {
     setError(null)
     controller.current = new AbortController()
     try {
-      const previewPng = refine && dots ? shapePreview(dots.points, dots.colors, drawn?.name ?? '') : undefined
-      const next = await drawFormation(description, refine && drawn ? { previous: drawn, feedback, previewPng, signal: controller.current.signal } : { signal: controller.current.signal })
-      const sh = await formationFromSvg(next)
-      setDrawn(next)
-      setShape(sh)
+      if (!refine || !drawn) {
+        // Draw, then one look: Claude compares its drawing with the drones and fixes what got lost.
+        const out = await drawAndCheck(description, n, controller.current.signal, 1)
+        setDrawn(out.drawn)
+        setShape(out.shape)
+        setCritique(out.critique ?? null)
+      } else {
+        const previewPng = dots ? shapePreview(dots.points, dots.colors, drawn.name) : undefined
+        const next = await drawFormation(description, { n, previous: drawn, feedback, previewPng, drawingPng: await drawingPng(drawn.svg), signal: controller.current.signal })
+        setDrawn(next)
+        setShape(await formationFromSvg(next))
+        setCritique(null)
+      }
       setFeedback('')
     } catch (err) {
       setError(describeError(err))
@@ -86,7 +95,7 @@ export function DescribeDialog({ onClose }: { onClose: () => void }) {
         </div>
       )}
       {error && <div className="cp-notice error" style={{ marginTop: 10 }}>{error}</div>}
-      {busy && !shape && <p className="hint" style={{ marginTop: 10 }}>Drawing… this takes a few seconds.</p>}
+      {busy && !shape && <p className="hint" style={{ marginTop: 10 }}>Drawing, then checking how it comes out as drones…</p>}
       {shape && drawn && dots && (
         <>
           <div className="describe-previews">
@@ -99,6 +108,7 @@ export function DescribeDialog({ onClose }: { onClose: () => void }) {
               <figcaption>As {n} drones</figcaption>
             </figure>
           </div>
+          {critique && <p className="hint">Claude checked the drones: {critique}</p>}
           <label className="field-label" htmlFor="feedback">Not quite right? Say what to change</label>
           <div style={{ display: 'flex', gap: 6 }}>
             <input id="feedback" className="text-input" style={{ height: 32 }} value={feedback} placeholder="e.g. make the flame bigger, point it up and to the right" onChange={(e) => setFeedback(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && !busy && run(true)} />

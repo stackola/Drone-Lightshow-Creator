@@ -25,7 +25,7 @@ vi.mock('./client', async (orig) => {
   }
 })
 
-const { createModel, lookAndFix, partsFromOutput } = await import('./model3d')
+const { createModel, lookAndFix, modelShape, partsFromOutput } = await import('./model3d')
 type Model3DOutput = import('./model3d').Model3DOutput
 
 const snowman: Model3DOutput = {
@@ -58,12 +58,15 @@ describe('3D model look and fix', () => {
     expect(attempts.map((a) => a.verdict)).toEqual(['fixed', 'good'])
     expect(attempts[0]!.critique).toMatch(/needs a hat/)
     expect(attempts[1]!.parts).toHaveLength(4)
-    expect(renders).toEqual([120, 120]) // rendered as the real drone count
+    // Each attempt is rendered as the real drone count, and as dense solid surfaces for reference.
+    expect(renders).toEqual([120, 600, 120, 600])
     expect(updates).toEqual(['generating', 'looking', 'looking', 'null'])
     // Each review saw the current model and its four-view render.
     const review = requests[1]!.content
     expect(review.some((b) => b.type === 'image' && b.source?.data === 'iVBORfake')).toBe(true)
     expect(review.some((b) => b.text?.includes('"Snowman"'))).toBe(true)
+    expect(review.some((b) => b.text?.includes('as solid surfaces'))).toBe(true)
+    expect(review.some((b) => b.text?.includes('Drone budget: 120 drones'))).toBe(true)
   })
 
   it('respects the round limit', async () => {
@@ -84,5 +87,35 @@ describe('3D model look and fix', () => {
     const sent = requests[1]!.content.map((b) => b.text ?? '').join('\n')
     expect(sent).toMatch(/Parts 1 \(0-based\) produce no drones/)
     expect(sent).toMatch(/The designer asks: turn it into a snowman/)
+  })
+})
+
+describe('3D models with moving parts', () => {
+  it('keeps joints that parts move with, renders the motion, and settles to what the drones can fly', async () => {
+    const bird = {
+      name: 'Eagle', relief: true,
+      parts: [
+        { type: 'ellipsoid', center: [0, 0, 0], radii: [0.15, 0.35, 0.12], rotation: [0, 0, 0], color: '#ffb347' },
+        { type: 'plate', center: [0.5, 0.05, 0], points: [[-0.38, -0.08], [0.4, 0.05], [0.3, 0.14], [-0.38, 0.1]], depth: 0.02, rotation: [0, 0, 0], color: '#ff8c2e', joint: 'r' },
+        { type: 'plate', center: [-0.5, 0.05, 0], points: [[0.38, -0.08], [-0.4, 0.05], [-0.3, 0.14], [0.38, 0.1]], depth: 0.02, rotation: [0, 0, 0], color: '#ff8c2e', joint: 'l' },
+        { type: 'tube', path: [[0, -0.3, 0], [0.05, -0.55, 0.02], [0, -0.75, 0]], radius: 0.01, color: '#ffd27a' },
+      ],
+      joints: [
+        { id: 'r', name: 'Right wing', kind: 'swing', pivot: [0.12, 0.05, 0], axis: [0, 0, 1], amount: 25, period: 8 },
+        { id: 'l', name: 'Left wing', kind: 'swing', pivot: [-0.12, 0.05, 0], axis: [0, 0, -1], amount: 25, period: 8 },
+        { id: 'unused', name: 'Nothing', kind: 'turn', pivot: [0, 0, 0], axis: [0, 1, 0], amount: 10 },
+      ],
+    }
+    replies.push(bird)
+    const strips: number[] = []
+    const [a] = await createModel('an eagle flapping its wings', { n: 150, rounds: 0, render: { views: render, strip: (frames) => { strips.push(frames.length); return 'strip' } } })
+    expect(a!.joints!.map((j) => j.id)).toEqual(['r', 'l'])
+    expect(a!.relief).toBe(true)
+    expect(a!.motion).toBe('strip')
+    expect(strips).toEqual([3]) // at rest and at both ends of the swing
+    const shape = modelShape(a!)
+    expect(shape.joints).toHaveLength(2)
+    expect(shape.relief).toBe(true)
+    expect(shape.parts.filter((p) => p.joint).length).toBe(2)
   })
 })

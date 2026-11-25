@@ -221,13 +221,29 @@ export function fitToAirspace(scene: Scene, doc: ShowDoc): Scene {
   }
   // Spare drones the designer gave a role (halo, starfield, …) are kept; only otherwise park more drones.
   const hasRoles = s.layers.some((l) => l.role && l.role !== 'park')
-  if (!fits(s) && s.layers.length <= 2 && !hasRoles) {
-    const single = { ...s, layers: [s.layers[0]!] }
-    const current = s.layers.length === 2 ? s.layers[1]!.weight / (s.layers[0]!.weight + s.layers[1]!.weight) : 0
-    for (const f of [0.2, 0.35, 0.5, 0.6, 0.7, 0.8]) {
-      if (f <= current) continue
-      s = withSpareDrones(single, doc, f)
-      if (fits(s)) break
+  if (!fits(s) && !hasRoles) {
+    // Park a growing share of the drones dark behind the formation; every shape keeps its share of the rest.
+    const spare = (l: Scene['layers'][number]) => l.role === 'park' || l.effect.kind === 'off'
+    const shapes = s.layers.filter((l) => !spare(l))
+    const total = s.layers.reduce((a, l) => a + l.weight, 0) || 1
+    const shapeTotal = shapes.reduce((a, l) => a + l.weight, 0) || 1
+    const current = 1 - shapeTotal / total
+    const base = s
+    if (shapes.length === 1) {
+      const single = { ...base, layers: [shapes[0]!] }
+      for (const f of [0.2, 0.35, 0.5, 0.6, 0.7, 0.8]) {
+        if (f <= current) continue
+        s = withSpareDrones(single, doc, f)
+        if (fits(s)) break
+      }
+    } else if (shapes.length > 1) {
+      const park = { ...newLayer(newShape('grid'), defaultEffect('off')), role: 'park' as const, offset: [0, 0, -25] as Vec3 }
+      for (const f of [0.2, 0.35, 0.5, 0.6, 0.7, 0.8]) {
+        if (f <= current) continue
+        const layers = [...shapes.map((l) => ({ ...l, weight: (l.weight / shapeTotal) * (1 - f) })), { ...park, weight: f }]
+        s = placeAboveFloor(fitScene({ ...base, layers }, doc.droneCount, target, 'exact'), doc)
+        if (fits(s)) break
+      }
     }
   }
   return placeInAirspace(s, doc)

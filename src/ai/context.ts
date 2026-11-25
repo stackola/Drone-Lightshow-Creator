@@ -2,6 +2,7 @@
 // and rendered images of formations (browser only, in render.ts).
 
 import type { Effect, ShowDoc } from '@/core/types'
+import { describeJoint } from '@/core/joints'
 import { compile, allocate, findSceneTime, type Compiled } from '@/core/compile'
 import { groupSizes } from '@/core/groups'
 import { validate, formatTime, type Validation } from '@/core/validate'
@@ -25,7 +26,8 @@ export function describeEffect(e: Effect): string {
     case 'meter': return `level meter ${e.a}→${e.b} following the music's loudness`
     case 'strobe': return `strobe ${e.color} at ${e.rate} Hz`
     case 'off': return 'lights off'
-    case 'image': return 'image colours'
+    case 'image': return `the shape's own colours${e.anim && e.anim !== 'none' ? ` with ${e.anim}${e.speed && e.speed !== 1 ? ` (speed ${e.speed})` : ''}` : ''}`
+    case 'palette': return `palette ${e.colors.join(' → ')} (${e.mode === 'radial' ? 'centre → edge' : `at ${e.angle}°`}${e.speed ? `, flowing at ${e.speed}` : ''})`
     case 'write': return `write-on ${e.a} with a ${e.pen} pen over ${e.duration}s`
     case 'type': return `typewriter ${e.a} over ${e.duration}s`
     case 'flip': return `flip board settling to ${e.a} over ${e.duration}s`
@@ -39,7 +41,10 @@ function describeShape(shape: ShowDoc['scenes'][number]['layers'][number]['shape
   if ('fill' in shape) extras.unshift(shape.fill ?? 'filled')
   if (shape.kind === 'text') extras.unshift(`"${shape.text.replace(/\n/g, '\\n')}"`, shape.font)
   if (shape.kind === 'image') extras.unshift(`image "${shape.name}"`)
-  if (shape.kind === 'model') extras.unshift(`3D model "${shape.name}", ${shape.parts.length} parts`)
+  if (shape.kind === 'model') {
+    const moving = (shape.joints ?? []).filter((j) => shape.parts.some((p) => p.joint === j.id) || (shape.joints ?? []).some((c) => c.parent === j.id))
+    extras.unshift(`3D model "${shape.name}", ${shape.parts.length} parts${shape.relief ? ', relief (front side only)' : ''}${moving.length ? `; moving parts: ${moving.map((j) => `${j.name} ${describeJoint(j)}`).join(', ')}` : ''}`)
+  }
   return `${def.label.toLowerCase()}${extras.length ? ` (${extras.join(', ')})` : ''}, ${sizeLabel(shape.kind).toLowerCase()} ${f1(shape.size)} m`
 }
 
@@ -72,7 +77,7 @@ export function summarizeShow(doc: ShowDoc, compiled: Compiled = compile(doc), v
     lines.push(`${i + 1}. [${s.id}] "${s.name}" — ${timing}. Centre (${s.position.map(f1).join(', ')}) m, rotation tilt ${s.rotation[0]}° turn ${s.rotation[1]}° roll ${s.rotation[2]}°, spin ${s.spin}°/s${describeMotion(s)}.${t?.detour ? ' Flight in takes a collision-free detour (spread, cross, close in).' : ''}${t && t.transition.requested !== 'direct' ? ` Transition in: ${t.transition.used}${t.transition.used !== t.transition.requested ? ` (asked for ${t.transition.requested})` : ''}${t.transition.note ? ` — ${t.transition.note}` : ''}.` : ''}`)
     if (s.keys?.length) lines.push(`   keyframes while held: ${[...s.keys].sort((a, b) => a.t - b.t).map((k) => `at ${f1(k.t)} s${k.move.some((v) => v) ? ` move (${k.move.map(f1).join(', ')}) m` : ''}${k.rotate.some((v) => v) ? ` rotate tilt ${k.rotate[0]}° turn ${k.rotate[1]}° roll ${k.rotate[2]}°` : ''}${k.scale !== 1 ? ` size ${Math.round(k.scale * 100)}%` : ''}${k.through ? ' (flows through)' : ''}`).join('; ')}`)
     s.layers.forEach((l, li) => {
-      lines.push(`   layer ${li}${l.role ? ` (spare drones: ${l.role})` : ''}: ${counts[li]} drones, ${describeShape(l.shape)}; light: ${describeEffect(l.effect)}${l.offset.some((v) => v !== 0) ? `; offset (${l.offset.map(f1).join(', ')})` : ''}`)
+      lines.push(`   layer ${li}${l.role ? ` (spare drones: ${l.role})` : ''}: ${counts[li]} drones, ${describeShape(l.shape)}; light: ${describeEffect(l.effect)}${l.offset.some((v) => v !== 0) ? `; offset (${l.offset.map(f1).join(', ')})` : ''}${l.joint ? `; moves on its own: ${describeJoint(l.joint)}` : ''}`)
     })
     if (s.groups?.length && t) {
       const sizes = groupSizes(s, doc.droneCount)

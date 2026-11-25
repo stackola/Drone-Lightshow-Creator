@@ -217,7 +217,7 @@ function pairs(v: unknown): [number, number][] {
 }
 
 /** A 3D model's joints (dropping any that aren't). */
-function modelJoints(v: unknown): ModelJoint[] {
+export function modelJoints(v: unknown): ModelJoint[] {
   if (!Array.isArray(v)) return []
   const out: ModelJoint[] = []
   for (const j of v.filter(isObj).slice(0, MAX_JOINTS)) {
@@ -245,6 +245,17 @@ function shapeSpec(v: unknown): ShapeSpec | null {
     const joints = modelJoints(v.joints)
     if (joints.length) out.joints = joints
     if (v.relief === true) out.relief = true
+  }
+  if (v.kind === 'image' && Array.isArray(v.lines)) {
+    // Strokes: flat [u, v, …] in 0..1, at most 200 lines and 20 000 points.
+    let budget = 20000
+    const lines = v.lines.filter(isObj).slice(0, 200).flatMap((l) => {
+      const p = Array.isArray(l.p) ? l.p.filter((x): x is number => typeof x === 'number' && Number.isFinite(x)) : []
+      const pts = p.slice(0, Math.min(p.length, budget * 2) & ~1).map((x) => Math.max(-0.5, Math.min(1.5, x)))
+      budget -= pts.length / 2
+      return pts.length >= 4 ? [{ p: pts, ...(l.closed === true ? { closed: true } : {}) }] : []
+    })
+    if (lines.length) out.lines = lines
   }
   if ('fill' in base) out.fill = v.fill === 'outline' ? 'outline' : 'filled'
   if ('font' in base) out.font = v.font === 'serif' || v.font === 'pixel' ? v.font : 'sans'
@@ -297,7 +308,16 @@ function effect(v: unknown): Effect {
     if (typeof d === 'number') out[k] = num(x, d)
     else if (typeof d === 'boolean') out[k] = bool(x, d)
     else if (k === 'text') out[k] = str(x, d as string).slice(0, 200)
-    else if (typeof d === 'string') out[k] = hex(x, d)
+    else if (k === 'mode') out[k] = x === 'radial' ? 'radial' : 'linear'
+    else if (k === 'colors' && Array.isArray(d)) {
+      const cols = Array.isArray(x) ? x.filter((c): c is string => typeof c === 'string').slice(0, 6).map((c) => hex(c, '#ffffff')) : []
+      out[k] = cols.length >= 1 ? cols : d
+    } else if (typeof d === 'string') out[k] = hex(x, d)
+  }
+  // Optional extras on shape colours: animation and its speed.
+  if (out.kind === 'image' && ['shimmer', 'glint', 'pulse', 'sparkle'].includes(v.anim as string)) {
+    out.anim = v.anim
+    out.speed = num(v.speed, 1, 0.05, 10)
   }
   return out as unknown as Effect
 }

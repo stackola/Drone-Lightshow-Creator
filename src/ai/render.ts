@@ -168,3 +168,34 @@ export function fourViews(points: Float32Array, colors: Float32Array | null, tit
   FOUR_VIEWS.forEach((v, k) => drawDepthTile(ctx, (k % 2) * W, 34 + Math.floor(k / 2) * H, W, H, centred, cols, v, scale, [0, 0]))
   return canvas.toDataURL('image/png').split(',')[1]!
 }
+
+/**
+ * Front views side by side (PNG base64): the same formation in different
+ * poses, e.g. a model's moving parts at rest and at both ends of their swing.
+ */
+export function frontStrip(frames: { points: Float32Array; label: string }[], colors: Float32Array | null, title: string): string {
+  const W = 300, H = 280
+  const canvas = document.createElement('canvas')
+  canvas.width = W * frames.length
+  canvas.height = H + 34
+  const ctx = canvas.getContext('2d')!
+  ctx.fillStyle = '#0b0e15'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  ctx.fillStyle = '#e8ebf1'
+  ctx.font = '600 15px system-ui, sans-serif'
+  ctx.fillText(title, 10, 22)
+  // One scale and centre for every frame, so the motion is visible.
+  let ext = 1e-6
+  const c = [0, 0, 0]
+  const first = frames[0]!.points, n = first.length / 3
+  for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) c[k]! += first[i * 3 + k]! / n
+  for (const f of frames) for (let i = 0; i < n; i++) for (let k = 0; k < 2; k++) ext = Math.max(ext, Math.abs(f.points[i * 3 + k]! - c[k]!))
+  const scale = (Math.min(W, H - 40) / 2 - 12) / ext
+  const cols = colors ?? new Float32Array(n * 3).fill(1)
+  frames.forEach((f, k) => {
+    const centred = new Float32Array(f.points.length)
+    for (let i = 0; i < n; i++) for (let a = 0; a < 3; a++) centred[i * 3 + a] = f.points[i * 3 + a]! - c[a]!
+    drawDepthTile(ctx, k * W, 34, W, H, centred, cols, { label: f.label, yaw: 0, pitch: 0 }, scale, [0, 0])
+  })
+  return canvas.toDataURL('image/png').split(',')[1]!
+}

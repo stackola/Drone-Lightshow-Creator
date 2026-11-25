@@ -455,6 +455,11 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
             </button>
           </Row>
         )}
+        {shape.kind === 'model' && (
+          <div style={{ margin: '2px 0 6px 100px' }} title="Drones only on the side the audience sees: twice as dense there. Leave off for models that spin.">
+            <Toggle checked={!!shape.relief} onChange={(v) => upLayer((l) => { if (l.shape.kind === 'model') { if (v) l.shape.relief = true; else delete l.shape.relief } }, v ? 'Relief: front side only' : 'Drones all round')} label="Front side only (relief)" />
+          </div>
+        )}
         <Row label={sizeLabel(shape.kind)}>
           <NumberField value={shape.size} step={0.5} unit="m" min={0.5} max={2000} onChange={(v) => upShape({ size: v }, 'Resize', `size:${k}`)} />
           <button className="btn sm" title={`Set the size for ${target.toFixed(1)} m spacing — the smallest that keeps every flight collision-free`} onClick={() => fitSceneToSpacing(scene.id, 'exact')}>

@@ -7,7 +7,7 @@ import { sampleModel, solidsKey } from './model3d'
 import { hash01 } from './math'
 import { glyphMap, textPointOrder, type GlyphMap } from './textOrder'
 import {
-  base64ToBytes, gather, maskCandidates, polygonCandidates, readingOrder, sampleCurve,
+  base64ToBytes, decodeMask, gather, maskCandidates, polygonCandidates, readingOrder, sampleCurve,
   samplePolygonOutline, spreadPick,
 } from './sample'
 
@@ -451,13 +451,133 @@ function textShape(mask: { w: number; h: number; bits: string }, n: number): Sha
   return { points, colors: null, order, glyphs: map.glyphs }
 }
 
+/** Hexagonal packing: each drone of a filled area covers about this × spacing² of it. */
+const HEX = Math.sqrt(3) / 2
+
+/**
+ * A drawing's strokes as drones: each line gets drones evenly along its
+ * length (`spacing` apart), skipping any that would land on a drone already
+ * placed (where strokes cross or meet). Returns points and their pen order.
+ */
+function lineDrones(lines: [number, number][][], closed: boolean[], spacing: number): { pts: number[]; order: number[] } {
+  const pts: number[] = [], order: number[] = []
+  const cell = spacing
+  const grid = new Map<number, number[]>()
+  const key = (x: number, y: number) => (Math.floor(x / cell) * 73856093) ^ (Math.floor(y / cell) * 19349663)
+  const near = (x: number, y: number) => {
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+      for (const k of grid.get((Math.floor(x / cell + a) * 73856093) ^ (Math.floor(y / cell + b) * 19349663)) ?? []) {
+        if (Math.hypot(pts[k * 3]! - x, pts[k * 3 + 1]! - y) < spacing * 0.6) return true
+      }
+    }
+    return false
+  }
+  let pen = 0
+  lines.forEach((line, li) => {
+    const lens = line.slice(1).map((q, i) => Math.hypot(q[0] - line[i]![0], q[1] - line[i]![1]))
+    const total = lens.reduce((a, b) => a + b, 0)
+    if (!(total > 0)) return
+    const steps = Math.max(1, Math.round(total / spacing))
+    const count = closed[li] ? steps : steps + 1
+    let seg = 0, acc = 0
+    for (let k = 0; k < count; k++) {
+      const target = (total * k) / steps
+      while (seg < lens.length - 1 && acc + lens[seg]! < target) { acc += lens[seg]!; seg++ }
+      const t = lens[seg]! > 0 ? Math.min(1, (target - acc) / lens[seg]!) : 0
+      const a = line[seg]!, b = line[seg + 1]!
+      const x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t
+      if (near(x, y)) continue
+      const idx = pts.length / 3
+      pts.push(x, y, 0)
+      order.push(pen + target)
+      const kk = key(x, y)
+      const l = grid.get(kk)
+      if (l) l.push(idx)
+      else grid.set(kk, [idx])
+    }
+    pen += total
+  })
+  return { pts, order: order.map((o) => o / Math.max(1e-9, pen)) }
+}
+
 function imageShape(spec: Extract<ShapeSpec, { kind: 'image' }>, n: number): ShapePoints {
   const { mask } = spec
   if (!mask.w || !mask.h) return plain(sunflower(n))
   const [w, h] = maskSize(mask.w, mask.h)
+  if (spec.lines?.length) return drawingShape(spec, n, w, h)
   const cand = maskCandidates(mask, w, h, Math.max(n * 30, 3000))
   if (cand.length === 0) return plain(sunflower(n))
   const pts = readingOrder(gather(cand, spreadPick(cand, n)), 0.02)
+  return { points: pts, colors: rasterColors(spec, pts, n, w, h) }
+}
+
+/**
+ * Strokes and fills: find the spacing at which the strokes (one drone per
+ * spacing of length) plus the filled area (hexagonally packed) take exactly
+ * n drones, place the strokes' drones, then fill the area around them.
+ */
+function drawingShape(spec: Extract<ShapeSpec, { kind: 'image' }>, n: number, w: number, h: number): ShapePoints {
+  const lines = spec.lines!.map((l) => { const out: [number, number][] = []; for (let i = 0; i + 1 < l.p.length; i += 2) out.push([(l.p[i]! - 0.5) * w, (0.5 - l.p[i + 1]!) * h]); return out }).filter((l) => l.length >= 2)
+  const closed = spec.lines!.map((l) => !!l.closed)
+  const px = decodeMask(spec.mask)
+  let on = 0
+  for (let i = 0; i < px.length; i++) on += px[i]!
+  const area = (on / Math.max(1, spec.mask.w * spec.mask.h)) * w * h
+  // Spacing such that strokes + fill hold about n drones (strokes: length/s, fill: area/(HEX·s²)).
+  const fillFor = (s: number) => Math.round(area / (HEX * s * s))
+  const count = (s: number) => lineDrones(lines, closed, s).pts.length / 3 + fillFor(s)
+  let lo = 1e-4, hi = 2
+  for (let it = 0; it < 30; it++) { const mid = Math.sqrt(lo * hi); if (count(mid) > n) lo = mid; else hi = mid }
+  const s = hi
+  const ld = lineDrones(lines, closed, s)
+  let strokes = ld.pts.length / 3
+  // Too many stroke drones for the fleet (only strokes): drop every other one from the end, evenly.
+  while (strokes > n) {
+    const keep = n / strokes
+    const pts: number[] = [], order: number[] = []
+    for (let k = 0; k < strokes; k++) if (Math.floor((k + 1) * keep) > Math.floor(k * keep)) { pts.push(ld.pts[k * 3]!, ld.pts[k * 3 + 1]!, 0); order.push(ld.order[k]!) }
+    ld.pts = pts; ld.order = order; strokes = pts.length / 3
+  }
+  const fillN = n - strokes
+  let fill: Float32Array = new Float32Array(0)
+  if (fillN > 0) {
+    let cand = maskCandidates(spec.mask, w, h, Math.max(fillN * 30, 3000))
+    // Keep fill drones clear of the strokes' drones.
+    if (strokes) {
+      const keep: number[] = []
+      const cell = s
+      const grid = new Map<number, number[]>()
+      const key = (x: number, y: number) => (Math.floor(x / cell) * 73856093) ^ (Math.floor(y / cell) * 19349663)
+      for (let k = 0; k < strokes; k++) { const kk = key(ld.pts[k * 3]!, ld.pts[k * 3 + 1]!); const l = grid.get(kk); if (l) l.push(k); else grid.set(kk, [k]) }
+      for (let i = 0; i < cand.length / 3; i++) {
+        const x = cand[i * 3]!, y = cand[i * 3 + 1]!
+        let clear = true
+        for (let a = -1; a <= 1 && clear; a++) for (let b = -1; b <= 1 && clear; b++) {
+          for (const k of grid.get((Math.floor(x / cell + a) * 73856093) ^ (Math.floor(y / cell + b) * 19349663)) ?? []) {
+            if (Math.hypot(ld.pts[k * 3]! - x, ld.pts[k * 3 + 1]! - y) < s * 0.85) { clear = false; break }
+          }
+        }
+        if (clear) keep.push(i)
+      }
+      cand = gather(cand, Int32Array.from(keep))
+    }
+    if (cand.length / 3 >= fillN) fill = readingOrder(gather(cand, spreadPick(cand, fillN)), 0.02)
+    else {
+      // No room left to fill: more drones along the strokes instead.
+      return drawingShape({ ...spec, mask: { ...spec.mask, bits: '' } }, n, w, h)
+    }
+  }
+  const points = new Float32Array(n * 3)
+  points.set(ld.pts.slice(0, strokes * 3))
+  points.set(fill, strokes * 3)
+  // Pen order: along the strokes first (as drawn), then the fill top to bottom.
+  const order = new Float32Array(n)
+  for (let k = 0; k < strokes; k++) order[k] = ld.order[k]! * (fillN ? 0.7 : 1)
+  for (let k = 0; k < fillN; k++) order[strokes + k] = 0.7 + (0.3 * k) / Math.max(1, fillN - 1)
+  return { points, colors: rasterColors(spec, points, n, w, h), order }
+}
+
+function rasterColors(spec: Extract<ShapeSpec, { kind: 'image' }>, pts: Float32Array, n: number, w: number, h: number): Float32Array | null {
   let colors: Float32Array | null = null
   if (spec.colors && spec.cw && spec.ch) {
     const rgb = base64ToBytes(spec.colors)
@@ -474,5 +594,5 @@ function imageShape(spec: Extract<ShapeSpec, { kind: 'image' }>, n: number): Sha
       colors[k * 3 + 2] = rgb[o + 2]! / 255
     }
   }
-  return { points: pts, colors }
+  return colors
 }

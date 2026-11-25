@@ -8,7 +8,7 @@ import type { SceneInput, ShapeInput, StepInput } from './schemas'
 import type { CustomShapes } from './convert'
 import { drawAndCheck } from './shapeGen'
 import { createModel, modelShape } from './model3d'
-import { fourViews } from './render'
+import { fourViews, frontStrip } from './render'
 
 /** Custom formations generated per show (or per copilot request). */
 export const MAX_CUSTOM = 10
@@ -52,8 +52,8 @@ async function mapLimit<T, R>(items: T[], limit: number, f: (x: T) => Promise<R>
 }
 
 /**
- * Generate up to `max` custom formations, four at a time: drawings get a
- * look-at-the-drones-and-fix round, 3D models one look-and-fix round. Shapes
+ * Generate up to `max` custom formations, four at a time: drawings and 3D
+ * models each get up to two look-at-the-drones-and-fix rounds. Shapes
  * over the limit, and any that fail, fall back to a placeholder.
  */
 export async function resolveCustoms(jobs: CustomJob[], signal?: AbortSignal, max = MAX_CUSTOM): Promise<{ customs: CustomShapes; failed: number; skipped: number; errors: string[] }> {
@@ -62,7 +62,7 @@ export async function resolveCustoms(jobs: CustomJob[], signal?: AbortSignal, ma
   const results = await mapLimit(todo, 4, async (j): Promise<ShapeSpec> => {
     const description = j.shape.description!.trim()
     if (j.shape.kind === 'custom') return (await drawAndCheck(description, j.n, signal)).shape
-    const attempts = await createModel(description, { n: j.n, rounds: 1, render: fourViews, signal })
+    const attempts = await createModel(description, { n: j.n, rounds: 2, render: { views: fourViews, strip: frontStrip }, signal })
     return modelShape(attempts[attempts.length - 1]!)
   })
   const errors: string[] = []

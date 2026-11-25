@@ -1,77 +1,159 @@
-// "Describe a formation": Claude draws a bold SVG silhouette, which is
-// rasterised and sampled into drone positions with the drawing's colours.
+// "Describe a formation": Claude draws an SVG — strokes for outlines and
+// details, fills for solid areas — which becomes drones: every stroke one
+// evenly spaced line of drones along its path, every filled area filled
+// evenly, each drone in the drawing's colour there. Then Claude compares its
+// drawing with the drones and fixes what got lost.
 
 import type { BetaContentBlockParam } from '@anthropic-ai/sdk/resources/beta/messages/messages'
+import { z } from 'zod'
 import type { ShapeSpec } from '@/core/types'
 import { SvgShape } from './schemas'
 import { submitObject } from './submit'
-import { imageShape } from '@/ui/content'
+import { svgShape } from '@/ui/content'
 import { generateShape } from '@/core/shapes'
 import { shapePreview } from './render'
 
-const SYSTEM = `You draw formations for drone light shows: hundreds of drones, each a single point of coloured light about 3 metres from its neighbours, seen from far away against a night sky. You draw each formation as an SVG silhouette that is then filled evenly with drones.
+const SYSTEM = `You draw formations for drone light shows: a few hundred drones, each a single point of coloured light metres from its neighbours, seen from far away against a night sky. You draw in SVG; the engine turns the drawing into drones:
+- every STROKE becomes one line of drones evenly spaced along its path (crisp, single file) — use strokes for outlines, contours and details (eyes, feathers, rays, lettering lines, the edge of a petal);
+- every FILLED area is filled evenly with drones — use fills for solid masses that should glow as a patch (a sun, a heart, a body), sparingly;
+- each drone takes the colour of the drawing where it sits (gradients included).
 
 Rules for the SVG:
-- <svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400"> with a transparent background (no background rectangle).
-- Only filled shapes: path, polygon, circle, ellipse, rect, g. No text elements, strokes, gradients, filters, masks, clip paths, images, scripts or external references.
-- One bold, instantly recognisable silhouette that fills most of the canvas. Every part at least 24 units thick: thin lines, small details and gaps under 20 units disappear when drawn with drones.
-- 1–4 bright, saturated fill colours; they become the drones' light colours. Never black, grey or very dark fills.
-- Prefer a clean side or front view with a distinctive outline over perspective.`
+- <svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">, transparent background (no background rectangle).
+- Elements: path, line, polyline, polygon, circle, ellipse, rect, g, plus linearGradient/radialGradient in <defs>. No text elements, filters, masks, clip paths, images, scripts or external references.
+- Strokes: stroke-width 4–10, stroke-linecap and stroke-linejoin "round"; give stroke-only elements fill="none". A stroke is one line of drones however wide it is drawn.
+- The subject fills most of the canvas. Keep separate lines at least two drone spacings apart, or they merge.
+- Design for the drone budget you are given: one drone every S units along a stroke, one per about 0.87·S² units of filled area. Spend drones on what makes the subject recognisable; detail smaller than about 2·S vanishes.
+- Line art reads best: a clean outline plus the few inner lines that make it unmistakable, with fills only where a solid glow helps.
+
+Colour (the drones are lights in the dark):
+- Bright, saturated colours; never black, grey or very dark (they vanish — dark ink becomes white light).
+- 2–6 colours that belong together, with a contrasting accent where the eye should go. Gradients (e.g. a flame from deep orange to yellow, a sky from violet to blue) look rich in drones.
+- Neighbouring parts in contrasting colours read as separate.`
 
 export interface DrawnFormation {
   name: string
   svg: string
 }
 
+export const DrawingReview = z.object({
+  critique: z.string().describe('What reads well and what is wrong, in one to three sentences'),
+  done: z.boolean().describe('true only if the drones already read clearly as the description; then the drawing is kept as is'),
+  name: z.string().optional().describe('Name for the improved drawing'),
+  svg: z.string().optional().describe('The complete improved SVG (required when done is false)'),
+})
+
+/** Drone spacing in canvas units for a budget of n drones (a typical mix of strokes and fills). */
+function budget(n: number): string {
+  const S = Math.round(400 / (1.25 * Math.sqrt(Math.max(1, n))))
+  return `Drone budget: ${n} drones, about S = ${S} units apart on the 400-unit canvas (≈ ${Math.round(n * S)} units of stroke if it were all lines, or a filled area of about ${Math.round(0.87 * S * S * n)} square units if it were all fill).`
+}
+
 function checkSvg(svg: string): string {
   const s = svg.trim()
   if (!/^<svg[\s>]/i.test(s) || !/<\/svg>\s*$/i.test(s)) throw new Error('The drawing was not a complete SVG. Try again.')
-  if (s.length > 80000) throw new Error('The drawing was too detailed. Try a simpler description.')
-  if (/<script|<foreignObject|\bon\w+\s*=|(?:href|src)\s*=\s*["']\s*(?:https?:|javascript:|data:)/i.test(s)) throw new Error('The drawing used features that aren’t allowed. Try again.')
+  if (s.length > 120000) throw new Error('The drawing was too detailed. Try a simpler description.')
+  if (/<script|<foreignObject|<image|\bon\w+\s*=|(?:href|src)\s*=\s*["']\s*(?:https?:|javascript:|data:)/i.test(s)) throw new Error('The drawing used features that aren’t allowed. Try again.')
   return s
 }
 
-export async function drawFormation(description: string, opts: { feedback?: string; previous?: DrawnFormation; previewPng?: string; signal?: AbortSignal } = {}): Promise<DrawnFormation> {
-  const content: BetaContentBlockParam[] = [{ type: 'text', text: `Draw this formation: ${description.trim()}` }]
+const MESSAGES = { refusal: 'Claude declined to draw that. Try describing it differently.', tooLong: 'The drawing got too long. Try a simpler description.', unreadable: 'Couldn’t read the drawing. Try again.' }
+
+export async function drawFormation(description: string, opts: { n?: number; feedback?: string; previous?: DrawnFormation; previewPng?: string; drawingPng?: string; signal?: AbortSignal } = {}): Promise<DrawnFormation> {
+  const content: BetaContentBlockParam[] = [{ type: 'text', text: `Draw this formation: ${description.trim()}${opts.n ? `\n${budget(opts.n)}` : ''}` }]
   if (opts.previous) {
     content.push({ type: 'text', text: `Your previous drawing:\n${opts.previous.svg}` })
+    if (opts.drawingPng) {
+      content.push({ type: 'text', text: 'Your drawing:' })
+      content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: opts.drawingPng } })
+    }
     if (opts.previewPng) {
-      content.push({ type: 'text', text: 'This is how it came out as drones (front view):' })
+      content.push({ type: 'text', text: 'How it came out as drones (front view):' })
       content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: opts.previewPng } })
     }
-    content.push({ type: 'text', text: `Improve it. ${opts.feedback?.trim() ? `The designer says: ${opts.feedback.trim()}` : 'Make it bolder and easier to recognise as drones.'}` })
+    content.push({ type: 'text', text: `Improve it. ${opts.feedback?.trim() ? `The designer says: ${opts.feedback.trim()}` : 'Make it read more clearly as drones.'}` })
   }
   const out = await submitObject({
     schema: SvgShape,
     tool: { name: 'submit_drawing', description: 'Submit the finished formation drawing: a short name and the complete SVG document.' },
-    system: SYSTEM,
+    system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
     content,
-    maxTokens: 16000,
-    effort: 'medium',
+    maxTokens: 24000,
+    effort: 'high',
     signal: opts.signal,
-    messages: { refusal: 'Claude declined to draw that. Try describing it differently.', tooLong: 'The drawing got too long. Try a simpler description.', unreadable: 'Couldn’t read the drawing. Try again.' },
+    messages: MESSAGES,
   })
   return { name: out.name.slice(0, 40) || 'Custom', svg: checkSvg(out.svg) }
 }
 
-/** Rasterise an SVG drawing into an image shape (browser only). */
+/** An SVG drawing as a formation (browser only). */
 export async function formationFromSvg(drawn: DrawnFormation, size = 40): Promise<Extract<ShapeSpec, { kind: 'image' }>> {
-  const file = new File([drawn.svg], `${drawn.name.replace(/[^\w-]+/g, '-').toLowerCase() || 'custom'}.svg`, { type: 'image/svg+xml' })
-  const shape = await imageShape(file, size)
-  return { ...shape, name: drawn.name }
+  return svgShape(drawn.svg, size, drawn.name)
+}
+
+/** The drawing itself on a night sky, as Claude drew it (PNG base64; browser only). */
+export async function drawingPng(svg: string): Promise<string> {
+  const img = new Image()
+  const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
+  try {
+    img.src = url
+    await img.decode()
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+  const canvas = document.createElement('canvas')
+  canvas.width = 360
+  canvas.height = 360
+  const ctx = canvas.getContext('2d')!
+  ctx.fillStyle = '#04060b'
+  ctx.fillRect(0, 0, 360, 360)
+  ctx.drawImage(img, 0, 0, 360, 360)
+  return canvas.toDataURL('image/png').split(',')[1]!
 }
 
 /**
- * Describe → draw → look at the drones → fix, like the 3D models' look-and-fix:
- * Claude sees how its drawing actually came out as `n` drones and redraws
- * whatever doesn't read (thin parts, lost details, muddy colours).
+ * Describe → draw → compare the drawing with its drones → fix, up to `rounds`
+ * times or until Claude is satisfied.
  */
-export async function drawAndCheck(description: string, n: number, signal?: AbortSignal): Promise<{ drawn: DrawnFormation; shape: Extract<ShapeSpec, { kind: 'image' }> }> {
-  const first = await describeToShape(description, signal)
-  const dots = generateShape({ ...first.shape, size: 10 }, Math.max(20, n))
-  const previewPng = shapePreview(dots.points, dots.colors, first.drawn.name)
-  const drawn = await drawFormation(description, { previous: first.drawn, previewPng, signal, feedback: 'Look at how it came out as drones and fix anything that doesn’t read: thin parts, lost details, muddy or dark colours. If it already reads clearly, keep it and only make it bolder.' })
-  return { drawn, shape: await formationFromSvg(drawn) }
+export async function drawAndCheck(description: string, n: number, signal?: AbortSignal, rounds = 2): Promise<{ drawn: DrawnFormation; shape: Extract<ShapeSpec, { kind: 'image' }>; critique?: string }> {
+  let drawn = await drawFormation(description, { n, signal })
+  let shape = await formationFromSvg(drawn)
+  let critique: string | undefined
+  for (let round = 0; round < rounds; round++) {
+    const dots = generateShape({ ...shape, size: 10 }, Math.max(20, n))
+    const content: BetaContentBlockParam[] = [
+      { type: 'text', text: `The formation should depict: ${description.trim()}\n${budget(n)}` },
+      { type: 'text', text: `Your drawing:\n${drawn.svg}` },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: await drawingPng(drawn.svg) } },
+      { type: 'text', text: `How it actually comes out as ${n} drones (strokes become lines of drones, fills are filled evenly):` },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: shapePreview(dots.points, dots.colors, drawn.name) } },
+      {
+        type: 'text',
+        text: [
+          'Compare them as the audience would see the drones:',
+          '- Instantly recognisable? Outline and proportions right?',
+          '- Did the defining details survive, or did lines merge, vanish or get too few drones? Too many lines for the budget makes every line coarse: simplify.',
+          '- Are fills earning their drones, or would an outline read better? Are the colours bright, separated and pleasing?',
+          'If it already reads clearly, set done = true. Otherwise return an improved complete SVG.',
+        ].join('\n'),
+      },
+    ]
+    const review = await submitObject({
+      schema: DrawingReview,
+      tool: { name: 'submit_review', description: 'Submit your review of the drones as drawn: the critique, whether it is done, and (if not) the improved SVG.' },
+      system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
+      content,
+      maxTokens: 24000,
+      effort: 'high',
+      signal,
+      messages: MESSAGES,
+    })
+    critique = review.critique
+    if (review.done || !review.svg) break
+    drawn = { name: (review.name ?? drawn.name).slice(0, 40) || drawn.name, svg: checkSvg(review.svg) }
+    shape = await formationFromSvg(drawn)
+  }
+  return { drawn, shape, critique }
 }
 
 /** Describe → draw → shape, in one call. */

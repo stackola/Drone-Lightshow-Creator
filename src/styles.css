@@ -567,3 +567,8 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent-2); c
 .part-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
 .part-chip .dot { width: 8px; height: 8px; border-radius: 50%; }
 .part-chip.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+.m3d-motion { width: 100%; border-radius: 8px; margin-top: 6px; border: 1px solid var(--line); }
+.palette-stops { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.palette-stop { display: flex; gap: 4px; align-items: center; }
+.palette-stop > :first-child { flex: 1; }

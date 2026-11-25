@@ -9,6 +9,7 @@
 //   • all edits made during one user request collapse into one undo step.
 
 import Anthropic from '@anthropic-ai/sdk'
+import { COLOUR_GUIDE, PICTURE_GUIDE } from './guides'
 import type { BetaMessageParam, BetaToolResultBlockParam } from '@anthropic-ai/sdk/resources/beta/messages/messages'
 import { useCopilot, type ChatItem } from './copilotStore'
 
@@ -34,6 +35,11 @@ How to work
 - You can reach everything the editor can do: formations (add_scene incl. LED signs, extra_shapes and keyframes, add_shape/remove_shape for multi-shape formations, set_shape, set_light, edit_scene), groups, cues, music, show-wide settings (set_show: fleet limits, airspace, takeoff, landing, flight home, music start), the real site (set_site: accuracy, location, heading, keep-out zones, flight area), the wind test (wind_test) and the preview (show_moment: select a formation, move the playhead, switch the camera, play). After a visible change, show_moment the result so the user sees it.
 - Leave the show safe: if a tool result reports safety issues, fix them (fix_safety, or adjust) before you finish, and never say the show is safe unless the latest safety line says all checks pass.
 - Creative direction: contrast between consecutive scenes (shape, colour, scale); recognisable shapes; short text, since drones are metres apart and long words become unreadable; 3D shapes look best spinning slowly; long holds can breathe, bob or sway gently; spare drones can become a starfield, halo, frame or base instead of sitting dark; key flights can use spectacle transitions (cascade, swirl, burst, ant walk, rain) at the cost of time; a scene can split into groups that fly their own formations at their own pace and merge in the next scene (split_scene, add_group_step, edit_group; group formations are scenes too, edit them with edit_scene / set_shape / set_light); text can be written on, typed or flipped, and LED signs scroll dot-matrix text; the biggest, brightest moment belongs to the finale; flashes belong on musical accents and quiet passages stay calm.
+
+${PICTURE_GUIDE}
+
+${COLOUR_GUIDE}
+
 - Your replies appear in a narrow chat panel beside the editor, and the user sees each tool call as a card. Keep replies short: what you changed, and anything they should decide. Plain sentences or short lists, no headings.`
 
 let seq = 0

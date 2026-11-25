@@ -279,3 +279,23 @@ describe('plans with keyframes', () => {
     expect(built.validation.issues).toEqual([])
   })
 })
+
+describe('shapes that move on their own', () => {
+  it('a swinging sign and a turning star become joints, calmed to what the drones can fly', () => {
+    const doc = newShow(200)
+    const scene = sceneFromInput(doc, {
+      name: 'Sign', hold_seconds: 30,
+      shape: { kind: 'text', text: 'OPEN', moves: { kind: 'swing', pivot: 'top', amount: 60, period_seconds: 3 } },
+      light: { effect: 'solid', color: '#ffcc00' },
+      extra_shapes: [{ shape: { kind: 'star', moves: { kind: 'turn', amount: 20 } }, light: { effect: 'solid', color: '#ffffff' }, up: 30, share: 0.25 }],
+    })
+    const [sign, star] = scene.layers
+    expect(sign!.joint).toMatchObject({ kind: 'swing', anchor: [0, 1, 0], axis: [0, 0, 1], period: 3 })
+    expect(star!.joint).toMatchObject({ kind: 'turn', anchor: [0, 0, 0] })
+    // 60° every 3 s is far beyond what drones can fly: calmed, keeping the beat.
+    expect(sign!.joint!.amount).toBeLessThan(60)
+    expect(sign!.joint!.period).toBe(3)
+    const d = { ...doc, scenes: [scene] }
+    expect(validate(d, compile(d)).issues.filter((i) => i.sceneId === scene.id).map((i) => i.title)).toEqual([])
+  })
+})

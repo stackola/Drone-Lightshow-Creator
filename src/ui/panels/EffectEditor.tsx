@@ -10,6 +10,7 @@ function baseColor(e: Effect): string {
     case 'chase': return e.b
     case 'write': case 'type': case 'flip': case 'matrix': case 'meter': return e.a
     case 'react': return e.color
+    case 'palette': return e.colors[0] ?? '#38bdf8'
     default: return '#38bdf8'
   }
 }
@@ -106,7 +107,39 @@ export function EffectEditor({ effect, onChange, allowImage, keyPrefix, hasBeats
           <div className="hint">Scrolls right to left (0 = still). On a grid, each dot is one drone: a panel {effect.font === 5 ? 5 : 7} drones tall is pixel-perfect, taller panels centre the text. Each letter needs {effect.font === 5 ? 4 : 6} columns.</div>
         </>
       )}
-      {effect.kind === 'image' && <div className="hint">Each drone shows the colour of its part of the shape (image pixel or 3D model part).</div>}
+      {effect.kind === 'image' && (
+        <>
+          <div className="hint">Each drone shows the colour of its part of the shape (drawing, image or 3D model part).</div>
+          <Row label="Alive">
+            <Segmented full value={effect.anim ?? 'none'} onChange={(v) => onChange({ ...effect, anim: v, speed: effect.speed ?? 1 }, 'Shape colour motion')} options={[
+              { value: 'none', label: 'Still' }, { value: 'shimmer', label: 'Shimmer', title: 'Each drone breathes gently on its own clock' },
+              { value: 'glint', label: 'Glint', title: 'A band of white light sweeps across, like light catching metal' },
+              { value: 'pulse', label: 'Pulse', title: 'Brightens on every beat and settles back' }, { value: 'sparkle', label: 'Sparkle', title: 'Random drones flash white' },
+            ]} />
+          </Row>
+          {effect.anim && effect.anim !== 'none' && num('speed', 'Speed', 0.1, '×', 0.05, 10)}
+        </>
+      )}
+      {effect.kind === 'palette' && (
+        <>
+          <Row label="Colours">
+            <div className="palette-stops">
+              {effect.colors.map((c, i) => (
+                <span key={i} className="palette-stop">
+                  <ColorField value={c} onChange={(v) => set('colors', effect.colors.map((x, j) => (j === i ? v : x)))} />
+                  {effect.colors.length > 2 && <button className="btn ghost icon sm" aria-label={`Remove colour ${i + 1}`} title="Remove colour" onClick={() => onChange({ ...effect, colors: effect.colors.filter((_, j) => j !== i) }, 'Palette colours')}>×</button>}
+                </span>
+              ))}
+              {effect.colors.length < 6 && <button className="btn ghost sm" onClick={() => onChange({ ...effect, colors: [...effect.colors, effect.colors[effect.colors.length - 1] ?? '#ffffff'] }, 'Palette colours')}>+ Colour</button>}
+            </div>
+          </Row>
+          <Row label="Across">
+            <Segmented full value={effect.mode} onChange={(v) => set('mode', v)} options={[{ value: 'linear', label: 'In a direction' }, { value: 'radial', label: 'Centre → edge' }]} />
+          </Row>
+          {effect.mode === 'linear' && num('angle', 'Direction', 5, '°', -360, 360)}
+          {num('speed', 'Flow', 0.05, '/s', -5, 5)}
+        </>
+      )}
       {effect.kind === 'off' && <div className="hint">These drones fly with lights off — handy for parking spare drones out of sight.</div>}
       {effect.kind !== 'off' && (
         <Row label="Brightness">

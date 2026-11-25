@@ -8,6 +8,7 @@ import { submitObject } from './submit'
 import { describeMusic, describeSite, estimateTimings } from './context'
 import { buildShowFromPlan, type BuiltShow, type CustomShapes } from './convert'
 import { MAX_CUSTOM, customJobs, resolveCustoms } from './customs'
+import { COLOUR_GUIDE, PICTURE_GUIDE } from './guides'
 import { newShow } from '@/core/defaults'
 import { formatTime } from '@/core/validate'
 import { getState } from '@/state/store'
@@ -19,7 +20,7 @@ The medium
 - Every drone takes part in every scene (or in its group during a split). Drones are points of coloured light a few metres apart, seen from hundreds of metres away. Bold, recognisable shapes read; fine detail and long words don't.
 - The engine sizes each formation automatically to the smallest safe size and keeps it inside the airspace; use shape.scale only to make a formation deliberately bigger. Flights between scenes are planned and timed by the engine for safety — you can't make them faster.
 - Text: keep it short (about 1 character per 15–25 drones for crisp letters). For digits or short words use spare_fraction (0.3–0.6) so the text stays compact while the remaining drones wait dark behind it.
-- For flat pictures that aren't built-in shapes (logos, symbols, silhouettes), use shape kind "custom" with a clear visual description. For 3D objects (a rocket, a trophy, a globe on a stand, an animal), use "model3d" — it is built from solid parts, checked visually from four angles, and looks best spinning. Use at most 10 custom or model3d shapes per show (counting extra shapes and group formations), for the moments that matter most; each is checked as drones and fixed before it is used.
+- For flat pictures that aren't built-in shapes (logos, symbols, silhouettes), use shape kind "custom" with a clear visual description. For 3D objects (a rocket, a trophy, a globe on a stand, an animal), use "model3d". Use at most 10 custom or model3d shapes per show (counting extra shapes and group formations), for the moments that matter most; each is checked as drones and fixed before it is used.
 - 3D shapes (sphere, torus, cube, helix, cone) look best spinning slowly (spin 10–25 °/s). 2D shapes face the audience; tilt or turn them only for effect.
 - Transitions are part of the show: give 1–3 key flights a spectacle transition (cascade ripples, swirl, burst on a drop, an ant-walk column or rain for a big reveal). They take longer than direct flights (ant walk and rain ~1 min), so budget the battery and use direct for the rest.
 - Text can be revealed: light effects write (stroke-by-stroke handwriting), type (typewriter) and flip (split-flap board) on text formations. For a scrolling marquee use shape kind led_sign (a dot-matrix panel; light.color is the LED colour, light.speed the scroll speed).
@@ -28,6 +29,11 @@ The medium
 - Keyframes move, turn or resize a whole formation while it is held (a rocket rising, a logo turning to face the audience, a heart growing on the drop); it eases into each key and the next flight starts from where it ends. Use them for a few signature moments, slowly.
 - Long holds stay alive with a gentle idle_motion (breathe 4–8%, bob 1–2 m, sway 5–10°); use it on a few scenes, not all. When a formation uses only part of the fleet, give the spares a role instead of hiding them: a starfield behind a quiet scene, a halo or frame around a logo or name, a base band under text.
 - Light: each scene has a base light; cues add accents over time (flashes, washes, sweeps, blackouts), anchored to a scene's arrival. Use cues sparingly and with intent.
+
+
+${PICTURE_GUIDE}
+
+${COLOUR_GUIDE}
 
 Good shows
 - Open with something simple and striking, build through contrast (shape, colour, scale, motion), and finish with the biggest, brightest moment.

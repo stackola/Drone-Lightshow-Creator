@@ -122,7 +122,10 @@ export type Effect =
   | { kind: 'twinkle'; a: Hex; b: Hex; rate: number; brightness: number }
   | { kind: 'chase'; a: Hex; b: Hex; speed: number; width: number; brightness: number }
   | { kind: 'wave'; a: Hex; b: Hex; angle: number; speed: number; width: number; brightness: number }
-  | { kind: 'image'; brightness: number }
+  /** The shape's own colours (images, drawings, 3D models), optionally alive: shimmer, a glint sweeping across, a pulse on the beat, or sparkles. */
+  | { kind: 'image'; brightness: number; anim?: ImageAnim; speed?: number }
+  /** 2–6 colours across the shape (linear at `angle`, or radial from the centre), flowing at `speed` (0 = still). */
+  | { kind: 'palette'; colors: Hex[]; mode: 'linear' | 'radial'; angle: number; speed: number; brightness: number }
   | { kind: 'flash'; color: Hex; decay: number; beatSync: boolean; every: number; onAccents?: boolean; brightness: number }
   | { kind: 'strobe'; color: Hex; rate: number; brightness: number }
   | { kind: 'off'; brightness: number }
@@ -140,6 +143,8 @@ export type Effect =
   | { kind: 'matrix'; text: string; a: Hex; b: Hex; speed: number; font: number; brightness: number }
 
 export type EffectKind = Effect['kind']
+
+export type ImageAnim = 'none' | 'shimmer' | 'glint' | 'pulse' | 'sparkle'
 
 // --- Light cues ---------------------------------------------------------------
 // Cues sit on their own timeline track, independent of formations: they can
@@ -172,6 +177,12 @@ export interface Mask {
 
 export type Fill = 'outline' | 'filled'
 
+/** A stroke of a drawing: flat [u, v, u, v, …] in 0..1 of the picture (v down), drawn in order. */
+export interface DrawnLine {
+  p: number[]
+  closed?: boolean
+}
+
 export type TextFont = 'sans' | 'serif' | 'pixel'
 
 /**
@@ -192,7 +203,12 @@ export type ShapeSpec =
   | { kind: 'helix'; size: number; turns: number; radius: number }
   | { kind: 'cone'; size: number; radius: number }
   | { kind: 'text'; size: number; text: string; font: TextFont; mask: Mask }
-  | { kind: 'image'; size: number; name: string; mask: Mask; colors: string | null; cw: number; ch: number }
+  /**
+   * A picture: `mask` is the filled area (filled evenly with drones), `lines` are
+   * strokes (each becomes one evenly spaced line of drones along its path),
+   * `colors` an RGB raster the drones take their colours from.
+   */
+  | { kind: 'image'; size: number; name: string; mask: Mask; colors: string | null; cw: number; ch: number; lines?: DrawnLine[] }
   /** relief: drones only on the side the audience sees (twice as dense there); leave off for models that turn. */
   | { kind: 'model'; size: number; name: string; parts: ModelPart[]; joints?: ModelJoint[]; relief?: boolean }
 

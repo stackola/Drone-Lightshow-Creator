@@ -5,7 +5,7 @@
 import { z } from 'zod'
 
 export const SHAPE_KINDS = ['circle', 'heart', 'star', 'polygon', 'grid', 'spiral', 'wave', 'sphere', 'torus', 'cube', 'helix', 'cone', 'text'] as const
-export const EFFECT_KINDS = ['solid', 'gradient', 'rainbow', 'pulse', 'twinkle', 'chase', 'wave', 'flash', 'strobe', 'off', 'image', 'react', 'meter', 'write', 'type', 'flip', 'matrix'] as const
+export const EFFECT_KINDS = ['solid', 'gradient', 'rainbow', 'pulse', 'twinkle', 'chase', 'wave', 'flash', 'strobe', 'off', 'image', 'palette', 'react', 'meter', 'write', 'type', 'flip', 'matrix'] as const
 
 const hex = z.string().describe('Hex colour, e.g. "#ff3366"')
 
@@ -14,7 +14,8 @@ export const LightInput = z.object({
     'solid: one colour. gradient: color → color2 across the shape. rainbow: moving hues. pulse: color on each beat fading toward color2. ' +
       'twinkle: color with random color2 sparkles. chase: color2 highlight running along the shape over a color base. ' +
       'wave: color2 band sweeping across a color base. flash: color flash (on every N beats when beat_sync). strobe: color strobe. ' +
-      'off: lights off (parked drones). image: colours of an imported image (image formations only). ' +
+      'off: lights off (parked drones). image: the shape\'s own colours (custom drawings, images, 3D models — set by their drawing or parts), optionally alive with `animate`. ' +
+      'palette: 2–6 `colors` across the shape (a sunset, fire, ocean, a flag, a brand palette) — in a direction (`angle`) or centre → edge (palette_mode radial), still or flowing (`speed`). ' +
       'Music-reactive (need music): react: color whose brightness follows the music\'s loudness (floor = brightness in silence; as a multiply cue it makes the whole show breathe with the song). meter: a level meter filling bottom-up with the loudness, color (low) to color2 (peak). flash with on_accents: flashes on the music\'s stand-out hits. ' +
       'Text reveals (best on text formations, over `duration` seconds from when the formation arrives or the cue starts): ' +
       'write: the text is written stroke by stroke with a glowing pen (color, pen colour color2); also draws outlines of other shapes. ' +
@@ -37,14 +38,28 @@ export const LightInput = z.object({
   duration: z.number().optional().describe('write/type/flip: seconds to reveal the whole text (2–8)'),
   text: z.string().optional().describe('matrix: the text shown on the LED matrix (A–Z, 0–9, basic punctuation)'),
   font_dots: z.number().optional().describe('matrix: 7 = 5×7 letters (default), 5 = compact 3×5 letters for small panels (a grid 5 drones tall)'),
+  colors: z.array(hex).optional().describe('palette: 2–6 colours in order (e.g. ["#2b1055", "#d53369", "#ffb347"] for a sunset)'),
+  palette_mode: z.enum(['linear', 'radial']).optional().describe('palette: linear (in the `angle` direction, default) or radial (centre → edge)'),
+  animate: z.enum(['none', 'shimmer', 'glint', 'pulse', 'sparkle']).optional().describe('image (the shape\'s own colours): shimmer = each drone breathes gently; glint = a white highlight sweeps across (metal, glass, a trophy); pulse = brightens on each beat; sparkle = random white flashes (magic, snow, celebration). `speed` scales it (default 1).'),
 })
 export type LightInput = z.infer<typeof LightInput>
+
+export const PartMotionInput = z.object({
+  kind: z.enum(['swing', 'turn', 'slide']).describe('swing: back and forth about the pivot (a pendulum, a waving sign, a wing); turn: round and round (a wheel, a star spinning in place, windmill blades); slide: back and forth along the axis'),
+  pivot: z.enum(['centre', 'left', 'right', 'top', 'bottom']).optional().describe('Where on the shape it is hinged (default centre): e.g. a sign hanging from its top swings about "top"'),
+  axis: z.enum(['facing', 'upright', 'across']).optional().describe('facing (default): turns in the picture the audience sees, like a clock hand; upright: about a vertical line, like a door; across: a nod. For slide: facing = toward the audience, upright = up and down, across = left and right.'),
+  reverse: z.boolean().optional().describe('The other way round'),
+  amount: z.number().describe('swing: degrees either way (5–30); turn: degrees per second (5–30); slide: metres either way'),
+  period_seconds: z.number().optional().describe('swing/slide: seconds per back-and-forth (default 8; match the beat if there is music)'),
+  phase: z.number().optional().describe('0–1: where in the beat it starts (0.5 = opposite to a partner shape)'),
+}).describe('This shape moves on its own while held, inside the formation (unsafe amounts are calmed automatically)')
+export type PartMotionInput = z.infer<typeof PartMotionInput>
 
 export const ShapeInput = z.object({
   kind: z.enum([...SHAPE_KINDS, 'custom', 'model3d', 'led_sign']).describe(
     '2D (face the audience): circle, heart, star, polygon, grid, spiral, wave. 3D: sphere, torus, cube, helix (double helix), cone (tree). ' +
       'text: letters/numbers. custom: any other flat picture, drawn from `description` (logos, symbols, silhouettes) and checked as drones. ' +
-      'model3d: any other 3D object, built from `description` and checked visually from four angles (a rocket, a trophy, a globe on a stand) — slower, best for hero moments and spinning. ' +
+      'model3d: any other 3D object, built from `description` and checked visually from four angles (a rocket, a trophy, a globe on a stand) — slower, best for hero moments and spinning. Say in the description if parts should move (“an eagle flapping its wings”, “a windmill with turning blades”): the model gets moving parts. ' +
       'led_sign: a dot-matrix LED panel scrolling `text` like a marquee (one drone per LED; 7 rows, or 5 with light.font_dots 5; `columns` wide); remaining drones park dark behind it.',
   ),
   text: z.string().optional().describe('For text: the words. Keep it short (1–12 characters per line); use \\n for a second line.'),
@@ -62,6 +77,7 @@ export const ShapeInput = z.object({
   radius: z.number().optional().describe('helix radius or cone base radius, relative to height (0.05–0.8)'),
   columns: z.number().optional().describe('led_sign: panel width in drones (default: as wide as the fleet allows; 3–5 letters visible per 20 columns)'),
   scale: z.number().optional().describe('Size relative to the smallest safe size: 1 = smallest safe (default), 1.4 = 40% larger. Never below 1.'),
+  moves: PartMotionInput.optional(),
 })
 export type ShapeInput = z.infer<typeof ShapeInput>
 

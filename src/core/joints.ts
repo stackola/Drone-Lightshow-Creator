@@ -411,6 +411,30 @@ export function partsSeparation(anim: Anim, rest: Float32Array, hold: number, sp
   return crossGroupSeparation((t, out) => { articulate(anim, rest, hold, t, P, f); out.set(P) }, n, groupOf, 0, hold, spacing, vMax)
 }
 
+// --- Previews ------------------------------------------------------------------------------
+
+/**
+ * A 3D model's drones at rest and at both ends of its motion (the first
+ * swinging or sliding joint's beat, or a quarter turn), in model space
+ * scaled by `size`. Null when nothing moves.
+ */
+export function modelPoses(spec: Extract<Layer['shape'], { kind: 'model' }>, n: number, generate: (spec: Layer['shape'], n: number) => { points: Float32Array; parts?: Uint16Array; frame?: { center: Vec3; extent: number } }): { label: string; points: Float32Array }[] | null {
+  const g = generate(spec, n)
+  const b = new AnimBuilder(n)
+  const layer: Layer = { id: 'm', shape: spec, weight: 1, offset: [0, 0, 0], rotation: [0, 0, 0], effect: { kind: 'solid', color: '#ffffff', brightness: 1 } }
+  b.addLayer(layer, g.points, 0, { layerRot: null, offset: [0, 0, 0], sceneRot: null, position: [0, 0, 0] }, spec.size, g.parts, g.frame)
+  const anim = b.build()
+  if (!anim) return null
+  const lead = anim.joints.find((j) => j.kind !== 'turn') ?? anim.joints[0]!
+  const T = lead.kind === 'turn' ? Math.PI / 2 / Math.max(1e-6, Math.abs(lead.amount)) : lead.period
+  const hold = Math.max(8 * T, 30)
+  // Mid-hold the motion is at full strength: the swing peaks a quarter beat after sin(...) = 0.
+  const peak = lead.kind === 'turn' ? hold / 2 : hold / 2 - (((hold / 2 / T + lead.phase) % 1) - 0.25) * T
+  const at = (t: number) => articulate(anim, g.points, hold, t, new Float32Array(g.points.length))
+  if (lead.kind === 'turn') return [{ label: 'At rest', points: g.points }, { label: 'Turning', points: at(hold / 2) }]
+  return [{ label: 'At rest', points: g.points }, { label: 'One end of the motion', points: at(peak) }, { label: 'The other end', points: at(peak + T / 2) }]
+}
+
 // --- Editing helpers -----------------------------------------------------------------------
 
 /** Scale every moving part's motion (swing angles, turn rates, slide distances) by f. */

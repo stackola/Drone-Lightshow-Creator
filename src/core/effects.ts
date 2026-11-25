@@ -46,6 +46,7 @@ export const EFFECTS: EffectDef[] = [
   { kind: 'chase', label: 'Chase' },
   { kind: 'wave', label: 'Wave' },
   { kind: 'image', label: 'Shape colours' },
+  { kind: 'palette', label: 'Palette' },
   { kind: 'flash', label: 'Flash' },
   { kind: 'react', label: 'React to music' },
   { kind: 'meter', label: 'Level meter' },
@@ -67,6 +68,7 @@ export function defaultEffect(kind: EffectKind, base = '#38bdf8'): Effect {
     case 'chase': return { kind, a: '#1e293b', b: base, speed: 0.4, width: 0.15, brightness: 1 }
     case 'wave': return { kind, a: base, b: '#ffffff', angle: 0, speed: 0.5, width: 0.3, brightness: 1 }
     case 'image': return { kind, brightness: 1 }
+    case 'palette': return { kind, colors: ['#ff2d55', '#ff9500', '#ffd60a'], mode: 'linear', angle: 90, speed: 0, brightness: 1 }
     case 'flash': return { kind, color: '#ffffff', decay: 0.35, beatSync: true, every: 1, onAccents: false, brightness: 1 }
     case 'react': return { kind, color: base, floor: 0.25, brightness: 1 }
     case 'meter': return { kind, a: '#22c55e', b: '#ff3b3b', brightness: 1 }
@@ -113,6 +115,51 @@ export function textBitmap(text: string, height: 5 | 7 = 7): { w: number; h: num
     bitmaps.set(key, b)
   }
   return b
+}
+
+/** Colour at x (0..1) along a list of stops, smoothly; cyclic wraps the last stop back to the first. */
+function paletteAt(cols: string[], x: number, cyclic: boolean, out: RGB): RGB {
+  const n = cols.length
+  if (n === 1) return setHex(cols[0]!, out)
+  const segs = cyclic ? n : n - 1
+  const f = x * segs
+  const i = Math.min(segs - 1, Math.floor(f))
+  const k = f - i
+  return mix(hexToRgb(cols[i]!), hexToRgb(cols[(i + 1) % n]!), k * k * (3 - 2 * k), out)
+}
+
+/** Life on top of a shape's own colours. */
+function imageAnim(anim: Exclude<import('./types').ImageAnim, 'none'>, speed: number, d: DroneLook, tau: number, t: number, beat: BeatPhase, out: RGB): void {
+  const s = Math.max(0.05, speed)
+  switch (anim) {
+    case 'shimmer': {
+      // Each drone breathes gently on its own clock.
+      const k = 0.7 + 0.3 * (0.5 + 0.5 * Math.sin(2 * Math.PI * (tau * s * (0.35 + 0.5 * d.rand)) + d.rand * 40))
+      out[0] *= k; out[1] *= k; out[2] *= k
+      break
+    }
+    case 'glint': {
+      // A band of white light sweeping diagonally across, like light catching metal.
+      const p = (d.u + d.v) * 0.25 + 0.5
+      const g = ((tau * s * 0.3) % 1.8) - 0.4
+      const m = 0.85 * Math.exp(-(((p - g) / 0.09) ** 2))
+      mix(out, WHITE, m, out)
+      break
+    }
+    case 'pulse': {
+      // Brightens on every beat (or slowly without music) and settles back.
+      const b = beat(t)
+      const k = b ? 0.6 + 0.4 * Math.exp(-b.phase * 4) : 0.75 + 0.25 * Math.cos(2 * Math.PI * tau * s * 0.5)
+      out[0] *= k; out[1] *= k; out[2] *= k
+      break
+    }
+    case 'sparkle': {
+      // Random drones flash white for an instant.
+      const x = Math.sin(2 * Math.PI * tau * s * (0.6 + 0.9 * d.rand) + d.rand * 60)
+      mix(out, WHITE, Math.pow(Math.max(0, x), 40), out)
+      break
+    }
+  }
 }
 
 function mix(a: RGB, b: RGB, t: number, out: RGB): RGB {
@@ -180,9 +227,25 @@ export function effectColor(e: Effect, d: DroneLook, tau: number, t: number, bea
       break
     }
     case 'image': {
-      // Colours carried by the shape itself (images and 3D models).
+      // Colours carried by the shape itself (images, drawings and 3D models), optionally brought to life.
       const c = d.image ?? [1, 1, 1]
       out[0] = c[0]; out[1] = c[1]; out[2] = c[2]
+      if (e.anim && e.anim !== 'none') imageAnim(e.anim, e.speed ?? 1, d, tau, t, beat, out)
+      break
+    }
+    case 'palette': {
+      const cols = e.colors.length ? e.colors : ['#ffffff']
+      const a = e.angle * DEG
+      let p = e.mode === 'radial' ? Math.min(1, Math.hypot(d.u, d.v)) : (d.u * Math.cos(a) + d.v * Math.sin(a)) * 0.5 + 0.5
+      if (e.speed) {
+        // Flowing: the colours cycle through the shape (last back to first).
+        let x = (p - tau * e.speed) % 1
+        if (x < 0) x += 1
+        paletteAt(cols, x, true, out)
+      } else {
+        p = Math.max(0, Math.min(1, p))
+        paletteAt(cols, p, false, out)
+      }
       break
     }
     case 'flash': {
@@ -319,6 +382,7 @@ export function effectSwatch(e: Effect): string {
     case 'chase': return `linear-gradient(90deg, ${e.a}, ${e.b})`
     case 'wave': return `linear-gradient(90deg, ${e.a}, ${e.b}, ${e.a})`
     case 'image': return 'linear-gradient(90deg,#f87171,#38bdf8)'
+    case 'palette': return e.mode === 'radial' ? `radial-gradient(circle, ${e.colors.join(', ')})` : `linear-gradient(90deg, ${e.colors.join(', ')})`
     case 'react': return `linear-gradient(90deg, #000, ${e.color}, #000, ${e.color})`
     case 'meter': return `linear-gradient(0deg, ${e.a}, ${e.b})`
     case 'write': return `linear-gradient(90deg, ${e.a} 0 60%, ${e.pen} 60% 70%, ${e.b} 70%)`

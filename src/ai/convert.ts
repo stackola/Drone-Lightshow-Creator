@@ -3,8 +3,8 @@
 // suggests, the engine decides what is physically safe.
 
 import { safeSpacing } from '@/core/site'
-import type { Effect, Layer, LightCue, Scene, ShapeSpec, ShowDoc, Vec3 } from '@/core/types'
-import type { IdleMotionInput, KeyframeInput, LightInput, SceneInput, ShapeInput, ShowPlan, SplitInput, StepInput, TransitionInput } from './schemas'
+import type { Effect, Layer, LayerJoint, LightCue, Scene, ShapeSpec, ShowDoc, Vec3 } from '@/core/types'
+import type { IdleMotionInput, KeyframeInput, LightInput, PartMotionInput, SceneInput, ShapeInput, ShowPlan, SplitInput, StepInput, TransitionInput } from './schemas'
 import { separateGroups, splitSceneDoc } from '@/core/splits'
 import { sceneDroneCount } from '@/core/groups'
 import type { HoldKey, HoldMotion, SpareRole, TransitionStyle } from '@/core/types'
@@ -17,7 +17,8 @@ import { compile } from '@/core/compile'
 import { ceilTo } from '@/core/math'
 import { alignScenesToBars } from '@/core/music'
 import { arriveAt, composeScore, fitToSong, lightTheMusic, musicMoment } from '@/core/musicTools'
-import { autoFix } from '@/core/fixes'
+import { autoFix, settleParts } from '@/core/fixes'
+import { hasMovingParts } from '@/core/joints'
 
 const clamp = (v: number | undefined, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d)
 
@@ -53,7 +54,12 @@ export function effectFromInput(l: LightInput, fallbackColor = '#38bdf8'): Effec
     case 'meter': return { kind: 'meter', a: normalizeHex(l.color, '#22c55e'), b: normalizeHex(l.color2, '#ff3b3b'), brightness }
     case 'strobe': return { kind: 'strobe', color: normalizeHex(l.color, '#ffffff'), rate: clamp(l.rate, 0.5, 25, 8), brightness }
     case 'off': return defaultEffect('off')
-    case 'image': return { kind: 'image', brightness }
+    case 'image': return { kind: 'image', brightness, ...(l.animate && l.animate !== 'none' ? { anim: l.animate, speed: clamp(l.speed, 0.05, 10, 1) } : {}) }
+    case 'palette': {
+      const cols = (l.colors ?? []).slice(0, 6).map((c) => normalizeHex(c, color))
+      const colors = cols.length >= 2 ? cols : [color, normalizeHex(l.color2, '#f472b6')]
+      return { kind: 'palette', colors, mode: l.palette_mode === 'radial' ? 'radial' : 'linear', angle: clamp(l.angle, -360, 360, 90), speed: clamp(l.speed, -5, 5, 0), brightness }
+    }
     case 'write': return { kind: 'write', a: color, b: '#000000', pen: normalizeHex(l.color2, '#ffffff'), duration: clamp(l.duration, 0.5, 60, 4), brightness }
     case 'type': return { kind: 'type', a: color, b: '#000000', cursor: normalizeHex(l.color2, '#ffffff'), duration: clamp(l.duration, 0.5, 60, 3), brightness }
     case 'flip': return { kind: 'flip', a: color, b: normalizeHex(l.color2, '#10131c'), duration: clamp(l.duration, 0.5, 60, 3), rate: clamp(l.rate, 1, 30, 12), brightness }
@@ -89,6 +95,23 @@ function resolveShape(shapeIn: ShapeInput, custom: ShapeSpec | null | undefined)
   return shapeFromInput(shapeIn)
 }
 
+/** A shape's own motion inside the formation. */
+export function jointFromInput(m: PartMotionInput | undefined): LayerJoint | undefined {
+  if (!m || !Number.isFinite(m.amount) || m.amount === 0) return undefined
+  const anchors: Record<string, Vec3> = { centre: [0, 0, 0], left: [-1, 0, 0], right: [1, 0, 0], top: [0, 1, 0], bottom: [0, -1, 0] }
+  const rot: Record<string, Vec3> = { facing: [0, 0, 1], upright: [0, 1, 0], across: [1, 0, 0] }
+  const slide: Record<string, Vec3> = { facing: [0, 0, 1], upright: [0, 1, 0], across: [1, 0, 0] }
+  const axis = (m.kind === 'slide' ? slide : rot)[m.axis ?? (m.kind === 'slide' ? 'upright' : 'facing')]!
+  return {
+    kind: m.kind,
+    anchor: anchors[m.pivot ?? 'centre']!,
+    axis: m.reverse ? (axis.map((v) => -v) as Vec3) : axis,
+    amount: clamp(Math.abs(m.amount), 0, m.kind === 'swing' ? 90 : m.kind === 'turn' ? 120 : 50, 10),
+    period: clamp(m.period_seconds, 1, 120, 8),
+    phase: clamp(m.phase, -1, 1, 0),
+  }
+}
+
 /** The light for a shape: custom drawings keep their own colours unless the model picked a colour. */
 function lightFor(light: LightInput, shape: ShapeSpec, fallbackColor: string): Effect {
   const fromDrawing = (shape.kind === 'image' || shape.kind === 'model') && (light.effect === 'image' || (light.effect === 'solid' && !light.color))
@@ -113,6 +136,8 @@ export function sceneFromInput(doc: ShowDoc, input: SceneInput | StepInput, opts
   } else {
     const shape = resolveShape(shapeIn, opts.custom ?? opts.customs?.get(shapeIn))
     scene = newScene(doc, shape.kind, { name: input.name.slice(0, 60) || SHAPE_BY_KIND[shape.kind].label, shape, effect: lightFor(input.light, shape, fallbackColor), position })
+    const joint = jointFromInput(shapeIn.moves)
+    if (joint) scene = { ...scene, layers: scene.layers.map((l, k) => (k === 0 ? { ...l, joint } : l)) }
   }
   scene = {
     ...scene,
@@ -140,7 +165,8 @@ export function sceneFromInput(doc: ShowDoc, input: SceneInput | StepInput, opts
     const unit = mainWeight / Math.max(0.1, 1 - total)
     const added: Layer[] = extras.map((e, j) => {
       const sh = resolveShape(e.shape, opts.customs?.get(e.shape))
-      return { ...newLayer(sh, lightFor(e.light, sh, fallbackColor)), weight: unit * shares[j]! * k, offset: [clamp(e.across, -500, 500, 0), clamp(e.up, -500, 500, 0), 0] as Vec3 }
+      const joint = jointFromInput(e.shape.moves)
+      return { ...newLayer(sh, lightFor(e.light, sh, fallbackColor)), weight: unit * shares[j]! * k, offset: [clamp(e.across, -500, 500, 0), clamp(e.up, -500, 500, 0), 0] as Vec3, ...(joint ? { joint } : {}) }
     })
     scene = { ...scene, layers: [main!, ...added, ...rest] }
   }
@@ -148,7 +174,9 @@ export function sceneFromInput(doc: ShowDoc, input: SceneInput | StepInput, opts
   scene = fitScene(scene, doc.droneCount, comfortableSpacing(safeSpacing(doc.limits)), 'grow')
   scene = fitToAirspace(scene, doc)
   if (input.spare_role && input.spare_role !== 'park') scene = withSpareRole(scene, doc, input.spare_role, input.spare_fraction)
-  return calmMotion(scene, doc)
+  scene = calmMotion(scene, doc)
+  // Moving parts: calmed to what the drones can fly, keeping their beat.
+  return hasMovingParts(scene) ? settleParts(scene, doc, { prefer: 'calm' }) : scene
 }
 
 /**

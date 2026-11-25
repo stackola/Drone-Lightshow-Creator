@@ -1,19 +1,21 @@
 import { useMemo, useRef, useState } from 'react'
 import { findScene, sceneDroneCount } from '@/core/groups'
 import { Box, Check, Eye, Loader2, Sparkles, Wrench } from 'lucide-react'
-import { createModel, lookAndFix, modelShape, type ModelAttempt } from '@/ai/model3d'
-import { fourViews } from '@/ai/render'
+import { attemptFrom, createModel, lookAndFix, modelShape, type ModelAttempt } from '@/ai/model3d'
+import { fourViews, frontStrip } from '@/ai/render'
 import { aiConfigured, describeError } from '@/ai/client'
 import { sampleModel } from '@/core/model3d'
 import { allocate } from '@/core/compile'
 import { defaultEffect } from '@/core/effects'
 import { getState, useStore } from '@/state/store'
-import { addScene, setLayerShape, updateScene } from '@/state/actions'
+import { addScene, setLayerShape, settleSceneParts, updateScene } from '@/state/actions'
 import { Modal, Segmented } from '../components/controls'
 import { SpinPreview } from './SpinPreview'
 import { ApiKeyForm } from './AiSettings'
 
-const EXAMPLES = ['a rocket lifting off', 'a hot-air balloon', 'a trophy cup', 'a globe on a stand', 'a Christmas tree with a star', 'a whale breaching']
+const RENDER = { views: fourViews, strip: frontStrip }
+
+const EXAMPLES = ['an eagle flapping its wings', 'a rocket lifting off', 'a hot-air balloon', 'a trophy cup', 'a globe on a stand', 'a Christmas tree with a star', 'a whale breaching']
 
 /** Existing model being improved (opened from the inspector), as attempt 1. */
 function initialAttempts(): { attempts: ModelAttempt[]; description: string; drones: number } {
@@ -24,12 +26,11 @@ function initialAttempts(): { attempts: ModelAttempt[]; description: string; dro
   const layer = scene?.layers[li]
   const drones = scene && li >= 0 ? allocate(sceneDroneCount(s.doc, scene.id), scene.layers.map((l) => l.weight))[li]! : s.doc.droneCount
   if (!layer || layer.shape.kind !== 'model') return { attempts: [], description: '', drones }
-  const sample = sampleModel(layer.shape.parts, drones)
-  if (!sample) return { attempts: [], description: layer.shape.name, drones }
-  return {
-    attempts: [{ name: layer.shape.name, parts: layer.shape.parts, image: fourViews(sample.points, sample.colors, layer.shape.name), hiddenParts: sample.hiddenParts }],
-    description: layer.shape.name,
-    drones,
+  try {
+    const m = layer.shape
+    return { attempts: [attemptFrom({ name: m.name, parts: m.parts, joints: m.joints, relief: m.relief }, drones, RENDER)], description: m.name, drones }
+  } catch {
+    return { attempts: [], description: layer.shape.name, drones }
   }
 }
 
@@ -50,7 +51,7 @@ export function Model3DDialog({ onClose }: { onClose: () => void }) {
   const n = init.drones
 
   const current = attempts[selected]
-  const preview = useMemo(() => (current ? sampleModel(current.parts, n) : null), [current, n])
+  const preview = useMemo(() => (current ? sampleModel(current.parts, n, { relief: current.relief }) : null), [current, n])
   const close = () => { controller.current?.abort(); getState().set({ aiTarget: null }); onClose() }
 
   const create = async () => {
@@ -60,7 +61,7 @@ export function Model3DDialog({ onClose }: { onClose: () => void }) {
       await createModel(description, {
         n,
         rounds: Number(rounds),
-        render: fourViews,
+        render: RENDER,
         signal: controller.current.signal,
         onUpdate: (a, b) => { setAttempts(a); setSelected(Math.max(0, a.length - 1)); setBusy(b) },
       })
@@ -78,7 +79,7 @@ export function Model3DDialog({ onClose }: { onClose: () => void }) {
     setBusy('looking')
     controller.current = new AbortController()
     try {
-      const { critique, next } = await lookAndFix(description || current.name, current, n, fourViews, { feedback: withFeedback ? feedback : undefined, signal: controller.current.signal })
+      const { critique, next } = await lookAndFix(description || current.name, current, n, RENDER, { feedback: withFeedback ? feedback : undefined, signal: controller.current.signal })
       const updated = attempts.slice(0, selected + 1).map((a, i) => (i === selected ? { ...a, critique, verdict: next ? ('fixed' as const) : ('good' as const), feedback: withFeedback ? feedback : undefined } : a))
       if (next) updated.push(next)
       setAttempts(updated)
@@ -97,7 +98,8 @@ export function Model3DDialog({ onClose }: { onClose: () => void }) {
 
   const add = () => {
     if (!current) return
-    addScene('model', { shape: modelShape(current), name: current.name })
+    const scene = addScene('model', { shape: modelShape(current), name: current.name })
+    if (scene && current.joints?.length) settleSceneParts(scene.id)
     getState().toast(`Added “${current.name}”`)
     close()
   }
@@ -107,6 +109,7 @@ export function Model3DDialog({ onClose }: { onClose: () => void }) {
     const layer = replaceScene.layers.find((l) => l.id === target?.layerId) ?? replaceScene.layers[0]!
     const wasModel = layer.shape.kind === 'model'
     setLayerShape(replaceScene.id, layer.id, { ...modelShape(current), size: layer.shape.size }, `3D model: ${current.name}`)
+    if (current.joints?.length) settleSceneParts(replaceScene.id)
     if (!wasModel) updateScene(replaceScene.id, (s) => { const l = s.layers.find((x) => x.id === layer.id); if (l) l.effect = defaultEffect('image') }, 'Shape colours')
     getState().toast(`“${replaceScene.name}” is now ${current.name}`)
     close()
@@ -170,6 +173,7 @@ export function Model3DDialog({ onClose }: { onClose: () => void }) {
               </div>
               <div className="m3d-side">
                 {preview ? <SpinPreview points={preview.points} colors={preview.colors} /> : <div className="m3d-empty"><Loader2 size={16} className="spin" /></div>}
+                {current?.motion && <img className="m3d-motion" alt={`${current.name}: moving parts at rest and at both ends of the motion`} src={`data:image/png;base64,${current.motion}`} />}
                 {current && (
                   <>
                     <label className="field-label" htmlFor="m3d-feedback">Tell Claude what to change</label>

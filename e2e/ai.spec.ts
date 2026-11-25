@@ -169,17 +169,34 @@ test('Show Director turns a brief into a safe show', async ({ page }) => {
 
 const ROCKET_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400"><path d="M200 30 C260 90 270 190 250 290 L150 290 C130 190 140 90 200 30 Z" fill="#e8f1ff"/><path d="M150 230 L95 320 L155 300 Z M250 230 L305 320 L245 300 Z" fill="#ff5a5a"/><path d="M165 290 L235 290 L200 380 Z" fill="#ffb02e"/></svg>'
 
+const ROCKET_LINES_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400"><path d="M200 30 C260 90 270 190 250 290 L150 290 C130 190 140 90 200 30 Z" fill="none" stroke="#e8f1ff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="200" cy="140" r="26" fill="none" stroke="#38bdf8" stroke-width="6"/><path d="M165 290 L235 290 L200 380 Z" fill="#ffb02e"/></svg>'
+
 test('Describe a formation: words become a drawing become drones', async ({ page }) => {
-  await mockClaude(page, () => ({ blocks: [{ type: 'tool_use', id: 'draw_1', name: 'submit_drawing', input: { name: 'Rocket', svg: ROCKET_SVG } }], stop: 'tool_use' }))
+  const seen = await mockClaude(page, (body) => {
+    const tool = (body.tools as { name: string }[] | undefined)?.[0]?.name
+    if (tool === 'submit_review') return { blocks: [{ type: 'tool_use', id: 'rev_1', name: 'submit_review', input: { critique: 'The outline needs to be bolder.', done: false, name: 'Rocket', svg: ROCKET_LINES_SVG } }], stop: 'tool_use' }
+    return { blocks: [{ type: 'tool_use', id: 'draw_1', name: 'submit_drawing', input: { name: 'Rocket', svg: ROCKET_SVG } }], stop: 'tool_use' }
+  })
   await open(page)
   await page.getByRole('button', { name: 'AI', exact: true }).click()
   await page.getByText('Describe a formation…').click()
   await page.getByLabel('What should the drones draw?').fill('a rocket taking off')
   await page.getByRole('button', { name: 'Draw' }).click()
   await expect(page.getByAltText('Drawing of Rocket')).toBeVisible({ timeout: 15000 })
+  // Claude compared its drawing with the drones (both as images) and redrew it with strokes.
+  await expect(page.getByText(/Claude checked the drones: The outline needs to be bolder/)).toBeVisible()
+  const review = (seen[1]!.body.messages as Msg[])[0]!.content as { type: string; text?: string }[]
+  expect(review.filter((b) => b.type === 'image')).toHaveLength(2)
+  expect(review.some((b) => b.text?.includes('Drone budget: 200 drones'))).toBe(true)
   await page.getByRole('button', { name: 'Add as new scene' }).click()
   await expect(page.locator('.srow', { hasText: 'Rocket' })).toBeVisible()
   await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 15000 })
+  // The strokes are lines of drones in the saved shape.
+  await expect.poll(() => page.evaluate(() => {
+    const doc = JSON.parse(localStorage.getItem('dsd.doc.v1') ?? 'null')
+    const rocket = doc?.scenes?.find((s: { name: string }) => s.name === 'Rocket')
+    return rocket?.layers?.[0]?.shape?.lines?.length ?? -1
+  })).toBeGreaterThanOrEqual(2)
 })
 
 test('Client pitch is written from the real show (with images) and streams in', async ({ page }) => {

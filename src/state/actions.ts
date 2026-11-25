@@ -61,6 +61,16 @@ export function addFlappingBird() {
   getState().update((d) => { replaceSceneIn(d as ShowDoc, scene.id, settled) }, 'Add Bird', 'add-bird')
 }
 
+/** Calm a formation's moving parts to what its drones can fly (keeping the beat). */
+export function settleSceneParts(sceneId: string) {
+  const s = getState()
+  const ref = findScene(s.doc, sceneId)
+  if (!ref) return
+  const sub = { ...s.doc, droneCount: sceneDroneCount(s.doc, sceneId) }
+  const settled = settleParts(ref.scene, sub, { prefer: 'calm' })
+  if (settled !== ref.scene) s.update((d) => { replaceSceneIn(d as ShowDoc, sceneId, settled) }, 'Calm moving parts', `settle:${sceneId}`)
+}
+
 /** Add an LED sign (scrolling dot-matrix text) after the selection. */
 export function addLedSign(text = 'WELCOME') {
   const s = getState()

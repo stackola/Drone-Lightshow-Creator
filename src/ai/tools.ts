@@ -13,16 +13,16 @@ import { comfortableSpacing } from '@/core/validate'
 import { fitScene, fitToAirspace, newId, newLayer } from '@/core/defaults'
 import { alignScenesToBars } from '@/core/music'
 import { MUSIC_TAG, arriveAt, composeScore, fitToSong, lightTheMusic, musicMoment } from '@/core/musicTools'
-import { autoFix, tidySplit } from '@/core/fixes'
+import { autoFix, settleParts, tidySplit } from '@/core/fixes'
 import { ceilTo } from '@/core/math'
 import { defaultEffect } from '@/core/effects'
 import { CueTiming, GroupInput, IdleMotionInput, KeyframeInput, LightInput, SceneInput, ShapeInput, SpareRoleInput, StepInput, TransitionInput } from './schemas'
-import { type CustomShapes, applySplit, cueFromInput, keysFromInput, effectFromInput, motionFromInput, sceneFromInput, shapeFromInput, stepFromInput, transitionFromInput, withSpareRole } from './convert'
+import { type CustomShapes, applySplit, cueFromInput, keysFromInput, effectFromInput, jointFromInput, motionFromInput, sceneFromInput, shapeFromInput, stepFromInput, transitionFromInput, withSpareRole } from './convert'
+import { hasMovingParts } from '@/core/joints'
 import { calmMotion } from '@/core/idle'
 import { describeMusic, summarizeShow } from './context'
-import { contactSheet, fourViews } from './render'
-import { createModel, lookAndFix, modelShape } from './model3d'
-import { sampleModel } from '@/core/model3d'
+import { contactSheet, fourViews, frontStrip } from './render'
+import { attemptFrom, createModel, lookAndFix, modelShape } from './model3d'
 import { allocate, findSceneTime, scenePointColors } from '@/core/compile'
 import { drawAndCheck } from './shapeGen'
 import { MAX_CUSTOM, customJobs, resolveCustoms } from './customs'
@@ -33,6 +33,9 @@ import { ACCURACY_PRESETS, ZONE_KINDS, reanchorSite } from '@/core/site'
 import { simVerdict } from '@/core/simulate'
 import { runSimAsync } from '@/state/sim'
 import { play, seek } from '@/state/playback'
+
+/** Renderers for 3D look-and-fix: four views, and a front strip for moving parts. */
+const RENDER = { views: fourViews, strip: frontStrip }
 
 export type ToolContent = BetaToolResultBlockParam['content']
 
@@ -103,8 +106,8 @@ async function resolveCustom(shape: z.infer<typeof ShapeInput>, signal?: AbortSi
   if (shape.kind !== 'custom' && shape.kind !== 'model3d') return null
   if (!shape.description?.trim()) throw new ToolError(`A ${shape.kind} shape needs a description.`)
   if (shape.kind === 'custom') return (await drawAndCheck(shape.description, n, signal)).shape
-  // 3D: generate, then one look-and-fix round.
-  const attempts = await createModel(shape.description, { n, rounds: 1, render: fourViews, signal })
+  // 3D: generate, then up to two look-and-fix rounds.
+  const attempts = await createModel(shape.description, { n, rounds: 2, render: RENDER, signal })
   return modelShape(attempts[attempts.length - 1]!)
 }
 
@@ -281,11 +284,13 @@ export const TOOLS = [
       const custom = await resolveCustom(i.shape, ctx.signal, sub.droneCount)
       const shape = custom ?? shapeFromInput(i.shape)
       const effect = custom ? defaultEffect('image') : layer.effect.kind === 'image' ? effectFromInput({ effect: 'solid' }) : layer.effect
-      let s: Scene = { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, shape, effect } : l)) }
+      const joint = jointFromInput(i.shape.moves)
+      let s: Scene = { ...scene, layers: scene.layers.map((l, k) => { if (k !== li) return l; const { joint: _old, ...rest } = l; void _old; return { ...rest, shape, effect, ...(joint ? { joint } : {}) } }) }
       s = fitScene(s, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'exact')
       const scale = Math.max(1, Math.min(4, i.shape.scale ?? 1))
       if (scale > 1.001) s = { ...s, layers: s.layers.map((l, k) => (k === li ? { ...l, shape: { ...l.shape, size: ceilTo(l.shape.size * scale, 0.1) } as ShapeSpec } : l)) }
       s = fitToAirspace(s, sub)
+      if (hasMovingParts(s)) s = settleParts(s, sub, { prefer: 'calm' })
       replaceScene(scene.id, s, `Change shape of ${s.name}`)
       return ok(`Changed “${s.name}” to ${custom ? `a custom drawing (${(shape as { name?: string }).name ?? ''})` : shape.kind}`, `Scene "${s.name}" layer ${li} is now ${shape.kind}${custom ? ' (custom drawing, lights use the drawing’s colours)' : ''}, size ${s.layers[li]!.shape.size} m.`)
     },
@@ -318,13 +323,13 @@ export const TOOLS = [
       if (!layer || layer.shape.kind !== 'model') throw new ToolError('That layer is not a 3D model. Use set_shape with kind "model3d" to create one.')
       const shape = layer.shape
       const count = allocate(sub.droneCount, scene.layers.map((l) => l.weight))[li]!
-      const current = sampleModel(shape.parts, count)
-      if (!current) throw new ToolError('The current model has no usable parts.')
-      const attempt = { name: shape.name, parts: shape.parts, image: fourViews(current.points, current.colors, shape.name), hiddenParts: current.hiddenParts }
-      const { critique, next } = await lookAndFix(shape.name, attempt, count, fourViews, { feedback: i.feedback, signal: ctx.signal })
+      let attempt
+      try { attempt = attemptFrom({ name: shape.name, parts: shape.parts, joints: shape.joints, relief: shape.relief }, count, RENDER) } catch { throw new ToolError('The current model has no usable parts.') }
+      const { critique, next } = await lookAndFix(shape.name, attempt, count, RENDER, { feedback: i.feedback, signal: ctx.signal })
       if (!next) return { summary: `Looks right: ${critique}`, content: `No change needed. ${critique}\n${safetyLine()}` }
-      let s: Scene = { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, shape: { ...shape, name: next.name, parts: next.parts } } : l)) }
+      let s: Scene = { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, shape: { ...modelShape(next), size: shape.size } } : l)) }
       s = fitToAirspace(fitScene(s, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'exact'), sub)
+      s = settleParts(s, sub, { prefer: 'calm' })
       replaceScene(scene.id, s, `Improve ${shape.name}`)
       return {
         summary: `Improved the 3D model: ${critique}`,
