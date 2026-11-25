@@ -19,8 +19,9 @@ import { accuracyOf, areaClearanceFn, centroid2, planningLimits, zoneClearanceFn
 import { droneStateAt, evaluate } from './evaluate'
 import { findScene } from './groups'
 import { choreoPairs, choreoPeaks, sampledPeaks, scalePeaks, wrapPos, type Choreo, type PairResult, type UPeaks } from './transitions'
-import { NO_MOTION, holdPeaks, holdRange, isMoving, moveExtents, profileInverse, profilePeaks, type HoldRange, type MotionPeaks } from './motion'
-import type { HoldMotion, Limits, Scene, ShowDoc } from './types'
+import { NO_MOTION, holdPeaks, holdPose, holdRange, isMoving, moveExtents, profileInverse, profilePeaks, type HoldRange, type MotionPeaks } from './motion'
+import type { HoldKey, HoldMotion, Limits, Scene, ShowDoc } from './types'
+import { applyKey, keyMatrix, keyPose, minKeyScale, scaleKeys } from './keys'
 import { DEG } from './math'
 
 export type FixAction =
@@ -111,8 +112,8 @@ function withinLimits(p: MotionPeaks, L: Limits): boolean {
 }
 
 /** Largest factor f ∈ [0, 1] such that spin × f and motion amount × f respect every limit. */
-export function safeHoldFactor(rels: Rel[], omega: number, hold: number, motion: HoldMotion | undefined, L: Limits): number {
-  const at = (f: number) => holdPeaks(rels, omega * f, hold, motion ? { ...motion, amount: motion.amount * f } : NO_MOTION)
+export function safeHoldFactor(rels: Rel[], omega: number, hold: number, motion: HoldMotion | undefined, L: Limits, keys: HoldKey[] = []): number {
+  const at = (f: number) => holdPeaks(rels, omega * f, hold, motion ? { ...motion, amount: motion.amount * f } : NO_MOTION, keys.length ? scaleKeys(keys, f) : [])
   if (withinLimits(at(1), L)) return 1
   let lo = 0, hi = 1
   for (let k = 0; k < 22; k++) {
@@ -305,6 +306,64 @@ interface Seq {
   drone: (i: number) => number
 }
 
+/**
+ * Lowest and highest drone and furthest reach of a held formation, with spin,
+ * idle motion and keyframes calmed by factor f. Without keyframes this is
+ * exact (closed form over the pose range). With keyframes the hold is sampled
+ * every dt and widened by vMax·dt/2: between samples no drone can move further
+ * than that from both of its neighbouring samples, so the bounds are proven.
+ */
+function holdExtents(cs: CompiledScene, f: number, vMax: number): { minY: number; maxY: number; lowK: number; highK: number; r: number; farK: number } {
+  const motion = f === 1 ? cs.motion : scaleMotion(cs.motion, f)
+  if (!cs.keys.length) {
+    const range = holdRange(cs.omega, cs.hold, motion)
+    const v = verticalExtent(cs, range)
+    const m = maxRadius(cs, range)
+    return { ...v, r: m.r, farK: m.k }
+  }
+  const keys = f === 1 ? cs.keys : scaleKeys(cs.keys, f)
+  const n = cs.points.length / 3
+  const steps = Math.max(40, Math.min(1500, Math.ceil(cs.hold / 0.05)))
+  const dt = cs.hold / steps
+  const [cx, cy, cz] = cs.center
+  let minY = Infinity, maxY = -Infinity, r = 0, lowK = 0, highK = 0, farK = 0
+  const out = [0, 0, 0]
+  for (let s = 0; s <= steps; s++) {
+    const t = s * dt
+    const pose = holdPose(cs.omega * f, cs.hold, motion, t)
+    const ca = Math.cos(pose.angle) * pose.scale, sa = Math.sin(pose.angle) * pose.scale
+    const kp = keyPose(keys, t), M = keyMatrix(kp)
+    for (let k = 0; k < n; k++) {
+      const x = cs.points[k * 3]! - cx, y = cs.points[k * 3 + 1]! - cy, z = cs.points[k * 3 + 2]! - cz
+      applyKey(kp, M, cs.center, ca * x + sa * z, pose.dy + pose.scale * y, -sa * x + ca * z, out)
+      if (out[1]! < minY) { minY = out[1]!; lowK = k }
+      if (out[1]! > maxY) { maxY = out[1]!; highK = k }
+      const rr = Math.hypot(out[0]!, out[2]!)
+      if (rr > r) { r = rr; farK = k }
+    }
+  }
+  const margin = (vMax * dt) / 2
+  return { minY: minY - margin, maxY: maxY + margin, lowK, highK, r: r + margin, farK }
+}
+
+/** Points whose trajectories bound a keyframed hold's speed, acceleration and jerk (all of them, for fleets up to 600). */
+function keyedRels(cs: CompiledScene): Rel[] {
+  const n = cs.points.length / 3
+  const [cx, cy, cz] = cs.center
+  const rel = (k: number): Rel => [cs.points[k * 3]! - cx, cs.points[k * 3 + 1]! - cy, cs.points[k * 3 + 2]! - cz]
+  if (n <= 600) return Array.from({ length: n }, (_, k) => rel(k))
+  // Motion is affine in each point's position, so its peaks are at the formation's extreme points.
+  const best = new Map<number, number>()
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) {
+    if (!a && !b && !c) continue
+    let bk = 0, bv = -Infinity
+    for (let k = 0; k < n; k++) { const p = rel(k); const v = a * p[0] + b * p[1] + c * p[2]; if (v > bv) { bv = v; bk = k } }
+    best.set(bk, bk)
+  }
+  for (let k = 0; k < n; k += Math.ceil(n / 300)) best.set(k, k)
+  return [...best.keys()].map(rel)
+}
+
 function segmentLabel(seg: Segment | TrackSegment, sceneName: (i: number) => string): string {
   if (seg.kind === 'flight') return seg.into >= 0 ? `Flight into “${sceneName(seg.into)}”` : 'Return flight'
   return seg.kind === 'takeoff' ? 'Takeoff' : seg.kind === 'land' ? 'Landing' : 'Hold'
@@ -358,12 +417,38 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
             time: ts.holdStart, drones: [droneOfPoint[cp.i]!, droneOfPoint[cp.j]!],
             fix: { label: 'Enlarge to safe spacing', action: { kind: 'fit-spacing', sceneId: cs.id, target: comfy } },
           })
+        } else if (cs.keys.length) {
+          // Keyframes move the formation as a whole: only their scale changes spacing (exactly by that factor).
+          const ms = minKeyScale(cs.keys)
+          const d = cp.d * ms
+          const atKey = cs.keys.reduce((a, k) => (k.scale < a.scale ? k : a), cs.keys[0]!)
+          if (d < stats.minDistance) { stats.minDistance = d; stats.minDistanceTime = ts.holdStart + atKey.t }
+          if (d + EPS < L.minSpacing) {
+            const need = L.minSpacing / cp.d
+            const f = Math.floor(((1 - need) / (1 - ms)) * 100) / 100
+            issues.push({
+              id: `key-scale:${cs.id}`, severity: 'error', kind: 'spacing', sceneId: cs.id,
+              title: `“${name}” shrinks too far while held`,
+              detail: `A keyframe scales it to ${Math.round(ms * 100)}%, bringing drones ${fmt(d, 2)} m apart (limit ${fmt(L.minSpacing)} m). It can shrink to ${Math.floor(need * 1000) / 10}% at most.`,
+              time: ts.holdStart + atKey.t, drones: [droneOfPoint[cp.i]!, droneOfPoint[cp.j]!],
+              fix: { label: `Calm keyframes to ${Math.round(Math.max(0, f) * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor: Math.max(0, f) } },
+            })
+          }
         }
       }
 
-      // Altitude: spin and sway keep it; breathe scales heights about the centre, bob shifts them.
+      // Hold dynamics (spin, idle motion, keyframes), measured on the fastest-moving points.
+      const keyed = cs.keys.length > 0
+      const movingHold = cs.omega !== 0 || isMoving(cs.motion) || keyed
+      const rels = keyed ? keyedRels(cs) : extremeRels(cs)
+      const peaks = movingHold ? holdPeaks(rels, cs.omega, cs.hold, cs.motion, cs.keys) : null
+
+      // Altitude: spin and sway keep it; breathe scales heights about the centre, bob shifts them;
+      // keyframes are sampled with a proven margin (see holdExtents).
+      const vMax = peaks ? 1.1 * Math.hypot(peaks.speedH, Math.max(peaks.up, peaks.down)) + 0.05 : 0
       const range = holdRange(cs.omega, cs.hold, cs.motion)
-      const { minY, maxY, lowK, highK } = verticalExtent(cs, range)
+      const ext = holdExtents(cs, 1, vMax)
+      const { minY, maxY, lowK, highK } = ext
       stats.maxAltitude = Math.max(stats.maxAltitude, maxY)
       const room = L.maxAltitude - L.minAltitude - 2
       // Moving can't help a formation taller than the airspace. If the formation
@@ -373,10 +458,16 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
       const baseTooTall = base.maxY - base.minY > room
       const tooTall = maxY - minY > room
       let shrink: Issue['fix'] = { label: 'Shrink to fit (park spare drones)', action: { kind: 'fit-airspace' as const, sceneId: cs.id } }
-      if (tooTall && !baseTooTall && cs.motion.kind !== 'none') {
-        const f = calmFactor((k) => { const e = verticalExtent(cs, holdRange(cs.omega, cs.hold, scaleMotion(cs.motion, k))); return e.maxY - e.minY <= room })
-        shrink = { label: `Calm motion to ${Math.round(f * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor: f } }
+      if (tooTall && !baseTooTall && (cs.motion.kind !== 'none' || keyed)) {
+        const f = calmFactor((k) => { const e = holdExtents(cs, k, vMax); return e.maxY - e.minY <= room })
+        shrink = { label: `Calm ${keyed ? 'keyframes' : 'motion'} to ${Math.round(f * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor: f } }
       }
+      // Keyframes that carry a formation (which fits as placed) out of the airspace: calm them rather than move it.
+      if (keyed && !tooTall && base.minY >= L.minAltitude - EPS && base.maxY <= L.maxAltitude + EPS && (minY + EPS < L.minAltitude || maxY - EPS > L.maxAltitude)) {
+        const f = calmFactor((k) => { const e = holdExtents(cs, k, vMax); return e.minY >= L.minAltitude && e.maxY <= L.maxAltitude })
+        shrink = { label: `Calm keyframes to ${Math.round(f * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor: f } }
+      }
+      const keyedOut = keyed && shrink.action.kind === 'calm-hold'
       if (minY + EPS < L.minAltitude) {
         const dy = Math.ceil((L.minAltitude - minY) * 2) / 2
         issues.push({
@@ -384,7 +475,7 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
           title: `“${name}” is too low`,
           detail: `Lowest drone at ${fmt(minY)} m; formations must stay above ${fmt(L.minAltitude)} m.`,
           time: ts.holdStart, drones: [droneOfPoint[lowK]!],
-          fix: tooTall ? shrink : { label: `Raise ${fmt(dy)} m`, action: { kind: 'move', sceneId: cs.id, delta: [0, dy, 0] } },
+          fix: tooTall || keyedOut ? shrink : { label: `Raise ${fmt(dy)} m`, action: { kind: 'move', sceneId: cs.id, delta: [0, dy, 0] } },
         })
       }
       if (maxY - EPS > L.maxAltitude) {
@@ -394,18 +485,18 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
           title: `“${name}” is too high`,
           detail: `Highest drone at ${fmt(maxY)} m; the ceiling is ${fmt(L.maxAltitude)} m.`,
           time: ts.holdStart, drones: [droneOfPoint[highK]!],
-          fix: tooTall ? shrink : { label: `Lower ${fmt(dy)} m`, action: { kind: 'move', sceneId: cs.id, delta: [0, -dy, 0] } },
+          fix: tooTall || keyedOut ? shrink : { label: `Lower ${fmt(dy)} m`, action: { kind: 'move', sceneId: cs.id, delta: [0, -dy, 0] } },
         })
       }
 
-      // Geofence radius, exact over the whole range of turn and scale.
-      const { r, k: farK } = maxRadius(cs, range)
+      // Geofence radius, exact over the whole range of turn and scale (sampled with a proven margin for keyframes).
+      const { r, farK } = ext
       stats.maxRadius = Math.max(stats.maxRadius, r)
       if (r - EPS > L.maxRadius) {
         // If the formation itself fits inside the circle, move it toward the centre; otherwise shrink it.
         const ch = Math.hypot(cs.center[0], cs.center[2])
         const excess = Math.ceil((r - L.maxRadius + 1) * 2) / 2
-        const canMove = cs.spinRadius * range.scaleMax < L.maxRadius - 2 && ch > excess
+        const canMove = !keyed && cs.spinRadius * range.scaleMax < L.maxRadius - 2 && ch > excess
         issues.push({
           id: `fence:${cs.id}`, severity: 'error', kind: 'geofence', sceneId: cs.id,
           title: `“${name}” leaves the flight area`,
@@ -413,14 +504,12 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
           time: ts.holdStart, drones: [droneOfPoint[farK]!],
           fix: canMove
             ? { label: `Move ${fmt(excess)} m toward the centre`, action: { kind: 'move', sceneId: cs.id, delta: [(-cs.center[0] / ch) * excess, 0, (-cs.center[2] / ch) * excess] } }
-            : shrink,
+            : keyed ? { label: 'Calm keyframes', action: { kind: 'calm-hold', sceneId: cs.id, factor: calmFactor((k) => holdExtents(cs, k, vMax).r <= L.maxRadius) } } : shrink,
         })
       }
 
-      // Spin and hold-motion dynamics, measured on the fastest-moving points.
-      if (cs.omega !== 0 || isMoving(cs.motion)) {
-        const rels = extremeRels(cs)
-        const p = holdPeaks(rels, cs.omega, cs.hold, cs.motion)
+      if (peaks) {
+        const p = peaks
         stats.peakSpeedH = Math.max(stats.peakSpeedH, p.speedH)
         stats.peakClimb = Math.max(stats.peakClimb, p.up)
         stats.peakDescent = Math.max(stats.peakDescent, p.down)
@@ -435,9 +524,9 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
                   : over(p.jerk, L.maxJerk) ? `acceleration changes at ${fmt(p.jerk)} m/s³ (jerk limit ${fmt(L.maxJerk)})`
                     : null
         if (what) {
-          const moving = isMoving(cs.motion)
-          const factor = safeHoldFactor(rels, cs.omega, cs.hold, cs.motion, L)
-          const motionName = moving ? cs.motion.kind === 'breathe' ? 'breathing' : cs.motion.kind === 'bob' ? 'bobbing' : 'swaying' : ''
+          const moving = isMoving(cs.motion) || keyed
+          const factor = safeHoldFactor(rels, cs.omega, cs.hold, cs.motion, L, cs.keys)
+          const motionName = keyed ? 'moving through its keyframes' : moving ? cs.motion.kind === 'breathe' ? 'breathing' : cs.motion.kind === 'bob' ? 'bobbing' : 'swaying' : ''
           const fix: Issue['fix'] = moving
             ? { label: `Calm ${scene.spin ? 'spin and motion' : 'motion'} to ${Math.round(factor * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor } }
             : { label: `Slow to ${fmt(Math.trunc(scene.spin * factor * 10) / 10)}°/s`, action: { kind: 'set-spin', sceneId: cs.id, value: Math.trunc(scene.spin * factor * 10) / 10 } }

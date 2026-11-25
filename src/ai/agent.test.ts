@@ -159,6 +159,17 @@ describe('tools', () => {
     expect(getState().camera).toBe('orbit')
   })
 
+  it('sets and clears keyframes; the summary shows them', async () => {
+    const id = getState().doc.scenes[0]!.id
+    let out = await runTool('edit_scene', { scene_id: id, hold_seconds: 16, keyframes: [{ at_seconds: 12, up: 12, turn: 45, scale: 1.1 }] })
+    expect(out.error, String(out.content)).toBeUndefined()
+    expect(getState().doc.scenes[0]!.keys).toEqual([{ t: 12, move: [0, 12, 0], rotate: [0, 45, 0], scale: 1.1 }])
+    expect(summarizeShow(getState().doc)).toMatch(/keyframes while held: at 12 s move \(0, 12, 0\) m rotate tilt 0° turn 45° roll 0° size 110%/)
+    expect(String(out.content)).toMatch(/Safety: all checks pass/)
+    out = await runTool('edit_scene', { scene_id: id, keyframes: 'clear' })
+    expect(getState().doc.scenes[0]!.keys).toBeUndefined()
+  })
+
   it('summaries carry ids and the safety status', () => {
     const s = summarizeShow(getState().doc)
     expect(s).toContain(getState().doc.scenes[0]!.id)

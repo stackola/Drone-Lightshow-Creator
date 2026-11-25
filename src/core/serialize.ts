@@ -167,6 +167,9 @@ function scene(s: Obj, nested = false): Scene {
     position: vec(s.position, [0, 55, 0]),
     rotation: vec(s.rotation, [0, 0, 0]),
     spin: num(s.spin, 0, -720, 720),
+    ...(Array.isArray(s.keys) && s.keys.length
+      ? { keys: s.keys.filter(isObj).slice(0, 64).map((k) => ({ t: num(k.t, 0, 0, 3600), move: vec(k.move, [0, 0, 0]), rotate: vec(k.rotate, [0, 0, 0]), scale: num(k.scale, 1, 0.05, 20) })) }
+      : {}),
     ...(isObj(s.motion) && ['breathe', 'bob', 'sway'].includes(s.motion.kind as string)
       ? { motion: { kind: s.motion.kind as 'breathe' | 'bob' | 'sway', amount: num(s.motion.amount, 0, 0, s.motion.kind === 'breathe' ? 1 : s.motion.kind === 'bob' ? 50 : 90), period: num(s.motion.period, 4, 0.5, 120) } }
       : {}),

@@ -132,6 +132,30 @@ test('position accuracy widens the spacing everything keeps', async ({ page }) =
   await expect(status).not.toContainText('Safe to fly')
 })
 
+test('keyframes: a formation rises and turns while held, shown on the timeline', async ({ page }) => {
+  await fresh(page)
+  await page.locator('.slist .srow:not(.fixed)', { hasText: 'Heart' }).first().click()
+  await page.getByRole('button', { name: /Key/ }).first().click()
+  const card = page.locator('.key-card').first()
+  await expect(card).toBeVisible()
+  // Rise 8 m by the key.
+  const up = card.locator('.grid3').first().locator('input').nth(1)
+  await up.fill('8')
+  await up.press('Enter')
+  await expect(page.locator('.blk.hold .key-mark')).toHaveCount(1)
+  // The key sits at the end of the 6 s hold: rising 8 m over it is within the climb limit.
+  await expect(card.locator('input').first()).toHaveValue('6')
+  await expect(page.locator('.computing')).toHaveCount(0)
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly')
+  // Too far, too fast: the checks catch it and the fix calms it.
+  await up.fill('200')
+  await up.press('Enter')
+  await expect(page.locator('.status-btn')).not.toContainText('Safe to fly', { timeout: 15000 })
+  await page.locator('.status-btn').click()
+  await page.getByRole('button', { name: /Fix \d+ automatically/ }).click()
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 15000 })
+})
+
 test('logo import becomes a safe formation with image colours', async ({ page }) => {
   await fresh(page)
   await page.locator('.panel-head .btn.primary').click()

@@ -25,6 +25,7 @@ The medium
 - Text can be revealed: light effects write (stroke-by-stroke handwriting), type (typewriter) and flip (split-flap board) on text formations. For a scrolling marquee use shape kind led_sign (a dot-matrix panel; light.color is the LED colour, light.speed the scroll speed).
 - A formation can combine shapes: extra_shapes adds e.g. a name under a logo or a heart beside text, each with its own light, placed with across/up. Place whole formations left or right with across (keep them inside the airspace radius).
 - The flight home after the last formation can have its own transition (return_flight), e.g. rain for a gentle landing.
+- Keyframes move, turn or resize a whole formation while it is held (a rocket rising, a logo turning to face the audience, a heart growing on the drop); it eases into each key and the next flight starts from where it ends. Use them for a few signature moments, slowly.
 - Long holds stay alive with a gentle idle_motion (breathe 4–8%, bob 1–2 m, sway 5–10°); use it on a few scenes, not all. When a formation uses only part of the fleet, give the spares a role instead of hiding them: a starfield behind a quiet scene, a halo or frame around a logo or name, a base band under text.
 - Light: each scene has a base light; cues add accents over time (flashes, washes, sweeps, blackouts), anchored to a scene's arrival. Use cues sparingly and with intent.
 

@@ -1,6 +1,7 @@
 // Pure document transforms used by the editor's "Fix" buttons and by AI features.
 
-import type { Scene, ShowDoc } from './types'
+import type { Scene, ShowDoc, Vec3 } from './types'
+import { scaleKeys } from './keys'
 import { compile } from './compile'
 import { comfortableSpacing, validate, type FixAction, type Validation } from './validate'
 import { fitScene, fitToAirspace, placeAboveFloor } from './defaults'
@@ -62,10 +63,11 @@ export function tidySplit(doc: ShowDoc, sceneId: string): ShowDoc {
   return doc
 }
 
-/** Scale spin and hold motion down together (rounded toward calmer). */
+/** Scale spin, hold motion and keyframes down together (rounded toward calmer). */
 export function calmHold(s: Scene, factor: number): Scene {
   const f = Math.max(0, Math.min(1, factor))
   const spin = Math.trunc(s.spin * f * 10) / 10
+  if (s.keys?.length) s = { ...s, keys: scaleKeys(s.keys, f).map((k) => ({ ...k, move: k.move.map((v) => Math.round(v * 10) / 10) as Vec3, rotate: k.rotate.map((v) => Math.round(v * 10) / 10) as Vec3, scale: Math.round(k.scale * 1000) / 1000 })) }
   if (!s.motion || s.motion.kind === 'none') return { ...s, spin }
   const step = s.motion.kind === 'breathe' ? 100 : 10
   return { ...s, spin, motion: { ...s.motion, amount: Math.floor(s.motion.amount * f * step) / step } }

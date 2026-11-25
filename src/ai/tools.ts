@@ -16,8 +16,8 @@ import { MUSIC_TAG, arriveAt, composeScore, fitToSong, lightTheMusic, musicMomen
 import { autoFix, tidySplit } from '@/core/fixes'
 import { ceilTo } from '@/core/math'
 import { defaultEffect } from '@/core/effects'
-import { CueTiming, GroupInput, IdleMotionInput, LightInput, SceneInput, ShapeInput, SpareRoleInput, StepInput, TransitionInput } from './schemas'
-import { type CustomShapes, applySplit, cueFromInput, effectFromInput, motionFromInput, sceneFromInput, shapeFromInput, stepFromInput, transitionFromInput, withSpareRole } from './convert'
+import { CueTiming, GroupInput, IdleMotionInput, KeyframeInput, LightInput, SceneInput, ShapeInput, SpareRoleInput, StepInput, TransitionInput } from './schemas'
+import { type CustomShapes, applySplit, cueFromInput, keysFromInput, effectFromInput, motionFromInput, sceneFromInput, shapeFromInput, stepFromInput, transitionFromInput, withSpareRole } from './convert'
 import { calmMotion } from '@/core/idle'
 import { describeMusic, summarizeShow } from './context'
 import { contactSheet, fourViews } from './render'
@@ -193,7 +193,7 @@ export const TOOLS = [
   }),
   tool({
     name: 'edit_scene',
-    description: 'Change a scene’s name, timing, placement, rotation, spin, idle motion, spare drones, transition style (how drones fly in) or overall size. Sizes can only grow beyond the safe minimum; flights can be set longer than their fastest safe time but never shorter.',
+    description: 'Change a scene’s name, timing, placement, rotation, spin, idle motion, keyframes (moving, turning or resizing the whole formation while held), spare drones, transition style (how drones fly in) or overall size. Sizes can only grow beyond the safe minimum; flights can be set longer than their fastest safe time but never shorter.',
     schema: z.object({
       scene_id: sceneRef,
       name: z.string().optional(),
@@ -211,6 +211,7 @@ export const TOOLS = [
       idle_motion: IdleMotionInput.optional(),
       spare_role: SpareRoleInput.optional().describe('Give the scene’s spare drones a role (adds 25% spares if it has none)'),
       transition: TransitionInput.optional().describe('How drones fly into this scene'),
+      keyframes: z.union([z.literal('clear'), z.array(KeyframeInput)]).optional().describe('Replace the keyframes (move, turn or resize the whole formation while held; eases into each key and rests; the next flight starts from the last key), or "clear"'),
     }),
     label: () => 'Editing a scene',
     run: (i) => {
@@ -253,6 +254,11 @@ export const TOOLS = [
         if (st) out.flight.style = st
         else delete out.flight.style
         changes.push(`transition ${i.transition.style}`)
+      }
+      if (i.keyframes !== undefined) {
+        out = { ...out }
+        if (i.keyframes === 'clear' || !i.keyframes.length) { delete out.keys; changes.push('no keyframes') }
+        else { out.keys = keysFromInput(i.keyframes, out.hold); changes.push(`${out.keys.length} keyframe(s)`) }
       }
       if (i.spare_role) {
         out = withSpareRole(out, sub, i.spare_role)

@@ -4,10 +4,10 @@
 
 import { safeSpacing } from '@/core/site'
 import type { Effect, Layer, LightCue, Scene, ShapeSpec, ShowDoc, Vec3 } from '@/core/types'
-import type { IdleMotionInput, LightInput, SceneInput, ShapeInput, ShowPlan, SplitInput, StepInput, TransitionInput } from './schemas'
+import type { IdleMotionInput, KeyframeInput, LightInput, SceneInput, ShapeInput, ShowPlan, SplitInput, StepInput, TransitionInput } from './schemas'
 import { separateGroups, splitSceneDoc } from '@/core/splits'
 import { sceneDroneCount } from '@/core/groups'
-import type { HoldMotion, SpareRole, TransitionStyle } from '@/core/types'
+import type { HoldKey, HoldMotion, SpareRole, TransitionStyle } from '@/core/types'
 import { applySpareRole, addSpareLayer, calmMotion, defaultMotion } from '@/core/idle'
 import { defaultEffect } from '@/core/effects'
 import { DEFAULT_CENTER, fitScene, fitToAirspace, newId, newLayer, newLedSign, newScene, newShape, rasterizeText, withSpareDrones } from '@/core/defaults'
@@ -122,6 +122,7 @@ export function sceneFromInput(doc: ShowDoc, input: SceneInput | StepInput, opts
     flight: { duration: null, dim: input.dim_flight ?? false, ...(input.transition && transitionFromInput(input.transition) ? { style: transitionFromInput(input.transition) } : {}) },
   }
   if (input.idle_motion) scene = { ...scene, motion: motionFromInput(input.idle_motion) }
+  if (input.keyframes?.length) scene = { ...scene, keys: keysFromInput(input.keyframes, scene.hold) }
   if (shapeIn.kind !== 'led_sign' && input.spare_fraction && input.spare_fraction > 0.02) scene = withSpareDrones(scene, doc, clamp(input.spare_fraction, 0, 0.7, 0))
   const scale = clamp(shapeIn.scale, 1, 4, 1)
   if (scale > 1.001) {
@@ -184,6 +185,16 @@ function addRemainingSteps(doc: ShowDoc, sceneId: string, split: SplitInput, cus
     return { ...g, steps, name: split.groups[gi]?.name?.slice(0, 40) || g.name, delay: clamp(split.groups[gi]?.delay_seconds, 0, 120, 0) }
   })
   return { ...doc, scenes: doc.scenes.map((s) => (s.id === sceneId ? { ...s, groups } : s)) }
+}
+
+/** Keyframes from model input, clamped to the hold and to sane amounts. */
+export function keysFromInput(list: KeyframeInput[], hold: number): HoldKey[] {
+  return list.slice(0, 24).map((k) => ({
+    t: clamp(k.at_seconds, 0, Math.max(0, hold), 0),
+    move: [clamp(k.across, -500, 500, 0), clamp(k.up, -300, 300, 0), clamp(k.toward, -500, 500, 0)] as Vec3,
+    rotate: [clamp(k.tilt, -360, 360, 0), clamp(k.turn, -1080, 1080, 0), clamp(k.roll, -360, 360, 0)] as Vec3,
+    scale: clamp(k.scale, 0.2, 5, 1),
+  })).sort((a, b) => a.t - b.t)
 }
 
 /** Give the scene's spare drones a role, creating a spare layer (25% of drones) if it has none. */

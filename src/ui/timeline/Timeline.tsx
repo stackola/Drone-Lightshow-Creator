@@ -12,7 +12,7 @@ import { formatTime } from '@/core/validate'
 import { loadMusic, pickFile, removeMusic } from '@/state/persist'
 import { MenuButton } from '@/ui/components/controls'
 import { TRANSITIONS } from '@/core/transitions'
-import type { Scene } from '@/core/types'
+import type { HoldKey, Scene } from '@/core/types'
 
 const trLabel = (k: string) => TRANSITIONS.find((x) => x.kind === k)?.label ?? k
 
@@ -205,6 +205,7 @@ export function Timeline() {
         >
           {issueScenes.has(scene.id) && <span className="err-dot" />}
           {hw > 50 ? scene.name : ''}
+          <KeyMarks sceneId={scene.id} keys={scene.keys} hold={scene.hold} holdStart={t.holdStart} pps={pps} drag={drag} snapT={snapT} />
           <div
             className="grip r"
             onPointerDown={(e) =>
@@ -255,6 +256,7 @@ export function Timeline() {
                       >
                         {issueScenes.has(step.id) && <span className="err-dot" />}
                         {hw > 46 ? step.name : ''}
+                        <KeyMarks sceneId={step.id} keys={step.keys} hold={step.hold} holdStart={stt.holdStart} pps={pps} drag={drag} snapT={snapT} />
                         <div className="grip r" onPointerDown={(e) => drag(e, (tt, ev) => {
                           const hold = Math.max(0, snapT(tt, ev.altKey) - stt.holdStart)
                           updateScene(step.id, (s) => { s.hold = Math.round(hold * 100) / 100 }, 'Hold duration', `hold:${step.id}`)
@@ -551,6 +553,32 @@ export function runFitToSong() {
   s.replaceDoc(doc, 'Fit show to song')
   const bar = 240 / Math.max(1, s.doc.audio.bpm)
   s.toast(Math.abs(endGap) <= bar + 0.01 ? 'The show now lands on the bars and ends with the song' : endGap < 0 ? `The show runs ${Math.round(-endGap)} s past the song even at minimum holds` : `Fitted — the song continues ${Math.round(endGap)} s after the finale`)
+}
+
+type DragFn = (e: React.PointerEvent, onMove: (t: number, ev: PointerEvent, dt: number) => void, onClick?: () => void) => void
+
+/** Keyframe diamonds on a hold block: drag to retime, click to jump there. */
+function KeyMarks({ sceneId, keys, hold, holdStart, pps, drag, snapT }: { sceneId: string; keys?: HoldKey[]; hold: number; holdStart: number; pps: number; drag: DragFn; snapT: (t: number, free: boolean) => number }) {
+  if (!keys?.length) return null
+  return (
+    <>
+      {keys.map((k, ki) => (
+        <span
+          key={ki}
+          className="key-mark"
+          style={{ left: Math.min(Math.max(0, k.t), hold) * pps }}
+          title={`Keyframe at ${k.t.toFixed(1)} s into the hold — drag to retime`}
+          onPointerDown={(e) => {
+            e.stopPropagation()
+            drag(e, (tt, ev) => {
+              const nt = Math.round(Math.max(0, Math.min(hold, snapT(tt, ev.altKey) - holdStart)) * 100) / 100
+              updateScene(sceneId, (s) => { const key = s.keys?.[ki]; if (key) key.t = nt }, 'Keyframe time', `kt:${sceneId}:${ki}`)
+            }, () => { getState().select({ kind: 'scene', id: sceneId }); seek(holdStart + k.t) })
+          }}
+        />
+      ))}
+    </>
+  )
 }
 
 function cueLabel(kind: string): string {

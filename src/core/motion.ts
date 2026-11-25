@@ -13,7 +13,8 @@
 //   peak d³s/dt³  = 6·h / r²           (smoothstep'' peaks at 6, at the ends of each ramp)
 // so a drone travelling D metres peaks at D·h m/s, 1.5·D·h/r m/s² and 6·D·h/r² m/s³.
 
-import type { HoldMotion, Limits } from './types'
+import type { HoldKey, HoldMotion, Limits } from './types'
+import { applyKey, keyMatrix, keyPose, type KeyPose } from './keys'
 
 export const RAMP_ACC = 1.5
 export const RAMP_JERK = 6
@@ -278,18 +279,27 @@ export interface MotionPeaks {
  * enough to be accurate to well under 1%). Pass the points that move most:
  * the farthest from the centre and the farthest from the spin axis.
  */
-export function holdPeaks(rels: [number, number, number][], omega: number, hold: number, motion: HoldMotion | undefined): MotionPeaks {
+export function holdPeaks(rels: [number, number, number][], omega: number, hold: number, motion: HoldMotion | undefined, keys: HoldKey[] = []): MotionPeaks {
   const out: MotionPeaks = { speedH: 0, up: 0, down: 0, accel: 0, jerk: 0 }
-  const moving = omega !== 0 || (motion && motion.kind !== 'none' && motion.amount > 0)
+  const moving = omega !== 0 || (motion && motion.kind !== 'none' && motion.amount > 0) || keys.length > 0
   if (!moving || hold <= 0 || !rels.length) return out
   const steps = Math.min(6000, Math.max(400, Math.ceil(hold / 0.01)))
   const dt = hold / steps
   const c: [number, number, number] = [0, 0, 0]
+  // Poses per time step, shared by every point.
+  const poses: HoldPose[] = [], keyed: { p: KeyPose; M: number[] }[] = []
+  for (let k = -2; k <= steps + 2; k++) {
+    const t = Math.max(0, Math.min(hold, k * dt))
+    poses.push(holdPose(omega, hold, motion, t))
+    if (keys.length) { const kp = keyPose(keys, t); keyed.push({ p: kp, M: keyMatrix(kp) }) }
+  }
+  const tmp = [0, 0, 0]
   for (const rel of rels) {
     const P: [number, number, number][] = []
-    for (let k = -2; k <= steps + 2; k++) {
-      const t = Math.max(0, Math.min(hold, k * dt))
-      P.push(holdPoint(rel, c, holdPose(omega, hold, motion, t)))
+    for (let k = 0; k < poses.length; k++) {
+      const q = holdPoint(rel, c, poses[k]!)
+      if (keys.length) { applyKey(keyed[k]!.p, keyed[k]!.M, c, q[0], q[1], q[2], tmp); P.push([tmp[0]!, tmp[1]!, tmp[2]!]) }
+      else P.push(q)
     }
     for (let k = 2; k < P.length - 2; k++) {
       const v = [0, 1, 2].map((i) => (P[k + 1]![i]! - P[k - 1]![i]!) / (2 * dt))

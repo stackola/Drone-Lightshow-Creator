@@ -262,3 +262,20 @@ describe('plans use every feature', () => {
     expect(step.layers[0]!.effect.kind).toBe('image')
   })
 })
+
+describe('plans with keyframes', () => {
+  it('a rocket rises while held, safely', () => {
+    const plan: Plan = {
+      title: 'Lift-off', concept: '',
+      scenes: [
+        { name: 'Rocket', shape: { kind: 'cone' }, light: { effect: 'solid', color: '#ffffff' }, hold_seconds: 16, keyframes: [{ at_seconds: 14, up: 15, turn: 90 }] },
+        { name: 'Stars', shape: { kind: 'star' }, light: { effect: 'twinkle' } },
+      ],
+      cues: [],
+    }
+    expect(ShowPlan.safeParse(plan).success).toBe(true)
+    const built = buildShowFromPlan(plan, newShow(80))
+    expect(built.doc.scenes[0]!.keys?.[0]).toMatchObject({ t: 14, move: [0, 15, 0], rotate: [0, 90, 0] })
+    expect(built.validation.issues).toEqual([])
+  })
+})

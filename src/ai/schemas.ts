@@ -89,6 +89,18 @@ export const TransitionInput = z.object({
 })
 export type TransitionInput = z.infer<typeof TransitionInput>
 
+export const KeyframeInput = z.object({
+  at_seconds: z.number().describe('Seconds into the hold'),
+  across: z.number().optional().describe('Move across from where the formation is placed (m, + = audience’s right)'),
+  up: z.number().optional().describe('Move up (m)'),
+  toward: z.number().optional().describe('Move toward the audience (m)'),
+  tilt: z.number().optional().describe('Extra tilt (degrees)'),
+  turn: z.number().optional().describe('Extra turn about the vertical axis (degrees)'),
+  roll: z.number().optional().describe('Extra roll in the audience’s view (degrees)'),
+  scale: z.number().optional().describe('Size: 1 = as designed (default), 1.2 = 20% larger; below 1 only as far as safe spacing allows'),
+})
+export type KeyframeInput = z.infer<typeof KeyframeInput>
+
 /** A second (third, …) shape in the same formation, sharing its drones. */
 export const ExtraShapeInput = z.object({
   shape: ShapeInput,
@@ -105,6 +117,7 @@ const SceneBase = z.object({
   light: LightInput,
   extra_shapes: z.array(ExtraShapeInput).optional().describe('More shapes in the same formation, e.g. a name under a logo or a heart beside text (1–3). Place them with across/up so they don’t overlap.'),
   across: z.number().optional().describe('Horizontal centre of the formation in metres (+ = audience’s right, default 0). Group formations default to their group’s own side.'),
+  keyframes: z.array(KeyframeInput).optional().describe('Move, turn or resize the whole formation while it is held: it eases into each key and rests there, and the next flight starts from the last key (e.g. a rocket rising 30 m, a logo turning 90°, a heart growing 20% on the drop). Peak speed between keys is about 1.9 × distance ÷ seconds: keep it under the fleet limits (typically 6 m/s across, 3 up, 2 down).'),
   hold_seconds: z.number().optional().describe('How long the formation is held (default 6). With music, holds are rounded to whole bars.'),
   spin: z.number().optional().describe('Degrees per second about the vertical axis while held (0 = still; 10–25 looks good on 3D shapes)'),
   tilt: z.number().optional().describe('Tilt toward the audience in degrees (rotation about the horizontal axis)'),

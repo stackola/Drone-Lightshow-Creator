@@ -546,3 +546,12 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent-2); c
 .site-advanced .text-input { width: 100%; margin-top: 6px; }
 .site-summary { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
 .site-summary .btn { align-self: flex-start; }
+
+/* Keyframes */
+.keyframes { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.keyframes-head { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12px; font-weight: 600; }
+.key-card { border: 1px solid var(--line); border-radius: 8px; padding: 6px; margin-top: 6px; background: var(--panel-2); display: flex; flex-direction: column; gap: 4px; }
+.key-row { display: grid; grid-template-columns: 22px 1fr 1fr 26px; gap: 4px; align-items: center; }
+.key-diamond { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0; }
+.blk .key-mark, .split-row .sub .key-mark { position: absolute; top: 50%; width: 9px; height: 9px; margin: -5px 0 0 -5px; transform: rotate(45deg); background: var(--accent); border: 1px solid rgba(0,0,0,0.6); cursor: ew-resize; z-index: 3; }
+.blk .key-mark:hover { background: #fff; }

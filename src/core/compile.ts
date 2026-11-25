@@ -7,7 +7,8 @@
 // `evaluate()` turns it into positions and colours at any time, and the same
 // function feeds the preview, the validator and the exporters.
 
-import type { Blend, Effect, Group, HoldMotion, Limits, Scene, ShowDoc, TransitionStyle, Vec3 } from './types'
+import type { Blend, Effect, Group, HoldKey, HoldMotion, Limits, Scene, ShowDoc, TransitionStyle, Vec3 } from './types'
+import { applyKey, hasKeys, keyMatrix, keyPose, normalizeKeys } from './keys'
 import {
   PLAIN, buildAnt, buildCascade, buildRain, choreoPairs, choreoPeaks, choreoPos, legCentroids, minDurationFor, sampledPeaks, wrapPos,
   TRANSITIONS, type Choreo, type FlightStyle, type TransitionInfo, type Wrap,
@@ -57,6 +58,8 @@ export interface CompiledScene {
   spinRadius: number
   /** Motion while held (breathe / bob / sway), on top of spin. */
   motion: HoldMotion
+  /** Keyframes while held (normalized: sorted, inside the hold); empty = none. */
+  keys: HoldKey[]
 }
 
 /**
@@ -738,11 +741,12 @@ export function compile(doc: ShowDoc): Compiled {
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
   const allScenes = [...scenes, ...segments.flatMap((sg) => (sg.kind === 'split' ? sg.tracks.flatMap((tr) => tr.steps) : []))]
   for (const cs of allScenes)
-    for (let k = 0; k < cs.points.length / 3; k++) {
-      const x = cs.points[k * 3]!, y = cs.points[k * 3 + 1]!
-      if (x < minX) minX = x; if (x > maxX) maxX = x
-      if (y < minY) minY = y; if (y > maxY) maxY = y
-    }
+    for (const pts of cs.keys.length ? [cs.points, cs.endPoints] : [cs.points])
+      for (let k = 0; k < pts.length / 3; k++) {
+        const x = pts[k * 3]!, y = pts[k * 3 + 1]!
+        if (x < minX) minX = x; if (x > maxX) maxX = x
+        if (y < minY) minY = y; if (y > maxY) maxY = y
+      }
   const stage = Number.isFinite(minX)
     ? { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, r: Math.max(1, (maxX - minX) / 2, (maxY - minY) / 2), minX, maxX, minY, maxY }
     : { cx: 0, cy: site.takeoffAltitude, r: 20, minX: -20, maxX: 20, minY: 0, maxY: site.takeoffAltitude + 20 }
@@ -804,14 +808,22 @@ export function compileScene(scene: Scene, index: number, n: number): CompiledSc
   const g = sceneGeometry(scene, n)
   const center: Vec3 = [scene.position[0], scene.position[1], scene.position[2]]
   const omega = scene.spin * DEG
-  const endPoints = omega === 0 ? g.points : rotateAboutVertical(g.points, center, spinAngle(omega, scene.hold, scene.hold))
+  const keys = hasKeys(scene.keys) ? normalizeKeys(scene.keys, Math.max(0, scene.hold)) : []
+  let endPoints = omega === 0 ? g.points : rotateAboutVertical(g.points, center, spinAngle(omega, scene.hold, scene.hold))
+  if (keys.length) {
+    // Where the keyframes leave the formation at the end of the hold (the next flight starts there).
+    const kp = keyPose(keys, Math.max(0, scene.hold)), M = keyMatrix(kp)
+    const out = new Float32Array(n * 3)
+    for (let k = 0; k < n; k++) applyKey(kp, M, center, endPoints[k * 3]! - center[0], endPoints[k * 3 + 1]! - center[1], endPoints[k * 3 + 2]! - center[2], out, k * 3)
+    endPoints = out
+  }
   let spinRadius = 0
   for (let k = 0; k < n; k++) spinRadius = Math.max(spinRadius, Math.hypot(g.points[k * 3]! - center[0], g.points[k * 3 + 2]! - center[2]))
   return {
     id: scene.id, index, points: g.points, endPoints, center, omega, hold: Math.max(0, scene.hold),
     slot: new Int32Array(n), layerOf: g.layerOf, layerCounts: g.layerCounts,
     effects: scene.layers.map((l) => l.effect), look: g.look, image: g.image,
-    spacing: minPairDistance(g.points), spinRadius, motion: scene.motion ?? NO_MOTION,
+    spacing: minPairDistance(g.points), spinRadius, motion: scene.motion ?? NO_MOTION, keys,
   }
 }
 

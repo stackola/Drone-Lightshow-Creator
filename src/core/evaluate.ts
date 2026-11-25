@@ -4,6 +4,7 @@
 import type { Compiled, CompiledScene, FlightSegment, Leg, Segment, Track, TrackSegment } from './compile'
 import { GROUND_COLOR, LOOK, beatPhaseFn, pointColor, readLook } from './compile'
 import { holdPose, profileS } from './motion'
+import { applyKey, keyMatrix, keyPose } from './keys'
 import { choreoPos, choreoProgress, wrapPos } from './transitions'
 import type { RGB } from './color'
 import { TEXT_EFFECTS, blankLook, effectColor, type BeatPhase, type DroneLook } from './effects'
@@ -110,16 +111,21 @@ function evalFlight(seg: FlightSegment, t: number, n: number, pos: Float32Array,
  * waiting for a merge hold still); colours keep animating.
  */
 function evalHold(cs: CompiledScene, slot: Int32Array, tau: number, t: number, n: number, pos: Float32Array, col: Float32Array | null, beat: BeatPhase): void {
-  const pose = holdPose(cs.omega, cs.hold, cs.motion, Math.min(tau, cs.hold))
+  const tt = Math.min(tau, cs.hold)
+  const pose = holdPose(cs.omega, cs.hold, cs.motion, tt)
   const ca = Math.cos(pose.angle) * pose.scale, sa = Math.sin(pose.angle) * pose.scale
   const [cx, cy, cz] = cs.center
   const ys = pose.scale, oy = cy + pose.dy
+  // Keyframes move, turn and scale the whole (spinning, breathing…) formation.
+  const kp = cs.keys.length ? keyPose(cs.keys, tt) : null
+  const M = kp ? keyMatrix(kp) : null
   for (let i = 0; i < n; i++) {
     const k = slot[i]!
     const x = cs.points[k * 3]! - cx, y = cs.points[k * 3 + 1]! - cy, z = cs.points[k * 3 + 2]! - cz
     pos[i * 3] = cx + ca * x + sa * z
     pos[i * 3 + 1] = oy + ys * y
     pos[i * 3 + 2] = cz - sa * x + ca * z
+    if (kp) applyKey(kp, M!, cs.center, pos[i * 3]! - cx, pos[i * 3 + 1]! - cy, pos[i * 3 + 2]! - cz, pos, i * 3)
     if (col) {
       pointColor(cs, k, tau, t, beat, tmp)
       col[i * 3] = tmp[0]; col[i * 3 + 1] = tmp[1]; col[i * 3 + 2] = tmp[2]

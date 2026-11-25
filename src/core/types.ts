@@ -248,6 +248,13 @@ export interface Scene {
   spin: number
   /** Gentle motion while held; always eases in and out and returns to rest. */
   motion?: HoldMotion
+  /**
+   * Keyframes while held: the formation moves, turns and scales as a whole,
+   * easing smoothly into each key (it comes to rest at every key). Times are
+   * seconds from the start of the hold; values are relative to the
+   * formation as designed. It stays at the last key until the hold ends.
+   */
+  keys?: HoldKey[]
   layers: Layer[]
   /**
    * Splits: after this formation's hold, some of its shapes break away as
@@ -272,6 +279,17 @@ export interface Group {
   delay: number
   /** The group's own formations, flown in order. */
   steps: Scene[]
+}
+
+export interface HoldKey {
+  /** Seconds from the start of the hold. */
+  t: number
+  /** Offset from the formation's position (m): across, up, toward the audience. */
+  move: Vec3
+  /** Extra rotation (degrees): tilt, turn, roll (applied like the scene's rotation). */
+  rotate: Vec3
+  /** Uniform size (1 = as designed). Below 1 the drones close in, never below safe spacing. */
+  scale: number
 }
 
 /**

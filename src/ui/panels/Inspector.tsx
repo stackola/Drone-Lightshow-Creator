@@ -17,7 +17,9 @@ import { comfortableSpacing, extremeRels, maxSafeMotionAmount, maxSafeSpin, form
 import { MOTION_KINDS, SPARE_ROLES, defaultMotion, motionAmountUnit } from '@/core/idle'
 import { motionCycles } from '@/core/motion'
 import { fitScene, fitToAirspace, rasterizeText, unitSpacing } from '@/core/defaults'
-import type { Group, HoldMotion, Layer, LightCue, Scene, ShapeKind, ShapeSpec, ShowDoc, TextFont, Vec3 } from '@/core/types'
+import type { Group, HoldKey, HoldMotion, Layer, LightCue, Scene, ShapeKind, ShapeSpec, ShowDoc, TextFont, Vec3 } from '@/core/types'
+import { keyPose, normalizeKeys } from '@/core/keys'
+import { seek } from '@/state/playback'
 import { NumberField, Row, Segmented, Toggle, MenuButton } from '@/ui/components/controls'
 import { EffectEditor } from './EffectEditor'
 import { TransitionEditor } from './TransitionEditor'
@@ -203,6 +205,7 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
           <div className="hint" style={{ margin: '4px 0 6px 100px' }}>Safe up to {Math.abs(safeSpin).toFixed(1)}°/s for this size</div>
         )}
         <HoldMotionEditor scene={scene} />
+        <KeyframeEditor scene={scene} />
       </Section>
     </>
   )
@@ -284,6 +287,48 @@ function GroupCard({ scene, group, drones }: { scene: Scene; group: Group; drone
           {(close) => <ShapePicker scenePresets={false} onPick={(k) => { close(); if (k !== 'describe' && k !== 'image' && k !== 'led') addGroupStep(group.id, k) }} />}
         </MenuButton>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Keyframes while held: the whole formation moves, turns and scales, easing
+ * into each key and resting there. Values are relative to the formation as
+ * placed; the next flight starts wherever the keys leave it.
+ */
+function KeyframeEditor({ scene }: { scene: Scene }) {
+  const times = useStore((s) => (s.compiled ? findSceneTime(s.compiled, scene.id) : undefined))
+  const time = useStore((s) => s.time)
+  const keys = [...(scene.keys ?? [])].sort((a, b) => a.t - b.t)
+  const setKeys = (next: HoldKey[], label: string, key?: string) => updateScene(scene.id, (s) => { if (next.length) s.keys = next; else delete s.keys }, label, key)
+  // At the playhead once it's well into this hold; otherwise at the end of the hold, so the motion has all of it.
+  const inHold = !!times && time >= times.holdStart + 1 && time <= times.holdEnd + 1e-6
+  const addKey = () => {
+    const t = inHold ? Math.round((time - times!.holdStart) * 10) / 10 : Math.round(scene.hold * 10) / 10
+    // Start from the pose at that moment, so adding a key changes nothing until it's edited.
+    const p = keyPose(normalizeKeys(keys, scene.hold), t)
+    setKeys([...keys.filter((k) => Math.abs(k.t - t) > 1e-6), { t, move: [...p.move].map((v) => Math.round(v * 10) / 10) as Vec3, rotate: [...p.rotate].map((v) => Math.round(v * 10) / 10) as Vec3, scale: Math.round(p.scale * 100) / 100 }].sort((a, b) => a.t - b.t), 'Add keyframe')
+  }
+  const upKey = (i: number, patch: Partial<HoldKey>, label: string) => setKeys(keys.map((k, j) => (j === i ? { ...k, ...patch } : k)), label, `key:${scene.id}:${i}:${Object.keys(patch)[0]}`)
+  return (
+    <div className="keyframes">
+      <div className="keyframes-head">
+        <span>Keyframes</span>
+        <button className="btn ghost sm" title={inHold ? 'Add a keyframe at the playhead' : 'Add a keyframe at the end of the hold (move the playhead into the hold to place one there)'} onClick={addKey}><Plus size={12} /> Key {inHold ? 'at playhead' : 'at end of hold'}</button>
+      </div>
+      {!keys.length && <p className="hint" style={{ margin: '2px 0 0' }}>Move, turn or resize the whole formation while it’s held. It eases into each key and rests there; the next flight starts from the last key.</p>}
+      {keys.map((k, i) => (
+        <div key={i} className="key-card">
+          <div className="key-row">
+            <button className="key-diamond" title="Go to this key" aria-label={`Go to key ${i + 1}`} onClick={() => times && seek(times.holdStart + k.t)}>◆</button>
+            <NumberField value={k.t} step={0.5} unit="s" min={0} max={scene.hold} title="Seconds into the hold" onChange={(v) => upKey(i, { t: v }, 'Keyframe time')} />
+            <NumberField value={Math.round(k.scale * 100)} step={5} unit="%" min={10} max={500} title="Size (100% = as designed)" onChange={(v) => upKey(i, { scale: v / 100 }, 'Keyframe size')} />
+            <button className="btn ghost icon sm danger" aria-label="Delete keyframe" title="Delete keyframe" onClick={() => setKeys(keys.filter((_, j) => j !== i), 'Delete keyframe')}><Trash2 size={12} /></button>
+          </div>
+          <Vec3Field value={k.move} labels={['X', 'Up', 'Z']} onChange={(v) => upKey(i, { move: v }, 'Keyframe move')} />
+          <Vec3Field value={k.rotate} labels={['Tilt', 'Turn', 'Roll']} step={5} onChange={(v) => upKey(i, { rotate: v }, 'Keyframe turn')} />
+        </div>
+      ))}
     </div>
   )
 }
