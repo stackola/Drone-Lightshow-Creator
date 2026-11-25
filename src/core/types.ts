@@ -193,7 +193,8 @@ export type ShapeSpec =
   | { kind: 'cone'; size: number; radius: number }
   | { kind: 'text'; size: number; text: string; font: TextFont; mask: Mask }
   | { kind: 'image'; size: number; name: string; mask: Mask; colors: string | null; cw: number; ch: number }
-  | { kind: 'model'; size: number; name: string; parts: ModelPart[] }
+  /** relief: drones only on the side the audience sees (twice as dense there); leave off for models that turn. */
+  | { kind: 'model'; size: number; name: string; parts: ModelPart[]; joints?: ModelJoint[]; relief?: boolean }
 
 export type ShapeKind = ShapeSpec['kind']
 
@@ -202,7 +203,12 @@ export type ShapeKind = ShapeSpec['kind']
 // any units — it is normalised so its largest extent is 1, then scaled by `size`).
 // Drones are spread evenly over the outer surface of the union.
 
-export type ModelPart =
+export type ModelPart = ModelSolid & {
+  /** Id of the joint this part moves with (see ModelJoint); none = it stays still. */
+  joint?: string
+}
+
+export type ModelSolid =
   | { type: 'sphere'; center: Vec3; radius: number; color: Hex }
   | { type: 'ellipsoid'; center: Vec3; radii: Vec3; rotation: Vec3; color: Hex }
   | { type: 'box'; center: Vec3; size: Vec3; rotation: Vec3; color: Hex }
@@ -214,8 +220,54 @@ export type ModelPart =
   | { type: 'capsule'; from: Vec3; to: Vec3; radius: number; color: Hex }
   /** Ring lying in its local XZ plane (rotate [90,0,0] to face the audience). */
   | { type: 'torus'; center: Vec3; radius: number; tube: number; rotation: Vec3; color: Hex }
+  /** A flat outline with some thickness: `points` [x, y] in its own plane (facing +z before rotation), centred on `center`. */
+  | { type: 'plate'; center: Vec3; points: [number, number][]; depth: number; rotation: Vec3; color: Hex }
+  /** A round tube along a path (necks, tails, tentacles, vines, curls). Thin tubes become one line of drones. */
+  | { type: 'tube'; path: Vec3[]; radius: number; color: Hex }
+  /** A turned shape: `profile` [radius, height] pairs revolved about its own vertical axis (vases, bells, bottles, bodies). */
+  | { type: 'lathe'; center: Vec3; profile: [number, number][]; rotation: Vec3; color: Hex }
 
 export type ModelPartType = ModelPart['type']
+
+// --- Moving parts ----------------------------------------------------------------------
+// Parts of a formation can move on their own while it is held: a bird's wings
+// flap, a pendulum swings, a windmill's blades turn. A joint moves the drones
+// of its parts as one rigid piece, about a pivot. Every motion eases in at the
+// start of the hold and back to rest at the end (only 'turn' can leave the
+// part turned), so flights in and out start and end in the designed pose.
+
+/**
+ * swing: rotate back and forth about the axis by `amount` degrees either way, once per `period` seconds.
+ * turn:  rotate continuously at `amount` degrees per second (ramping up and down like spin).
+ * slide: move back and forth along the axis by `amount` metres either way, once per `period` seconds.
+ */
+export type JointKind = 'swing' | 'turn' | 'slide'
+
+export interface JointMotion {
+  kind: JointKind
+  /** Direction of the hinge (swing, turn) or of the slide; normalised when used. */
+  axis: Vec3
+  amount: number
+  /** Seconds per cycle (swing, slide). */
+  period: number
+  /** Offset within the cycle, 0–1 (0.5 = the opposite way; legs walking, a wave along a tail). */
+  phase: number
+}
+
+/** A hinge in a 3D model, in model units (the same coordinates as the parts). */
+export interface ModelJoint extends JointMotion {
+  id: string
+  name: string
+  pivot: Vec3
+  /** Joint this one is attached to (a forearm to an upper arm): it moves with its parent too. */
+  parent?: string
+}
+
+/** A whole shape moving on its own within the formation. */
+export interface LayerJoint extends JointMotion {
+  /** Pivot as a fraction of the shape's own extent: [-1..1] per axis, [0,0,0] = its centre, [1,0,0] = its right edge. */
+  anchor: Vec3
+}
 
 /** What a secondary layer of otherwise idle drones is doing. */
 export type SpareRole = 'park' | 'starfield' | 'halo' | 'frame' | 'base'
@@ -231,6 +283,8 @@ export interface Layer {
   /** Degrees, applied X then Y then Z. */
   rotation: Vec3
   effect: Effect
+  /** The whole shape moves on its own while held (swings, turns or slides about its anchor). */
+  joint?: LayerJoint
 }
 
 export interface Scene {

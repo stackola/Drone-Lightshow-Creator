@@ -267,3 +267,13 @@ export function Modal({ title, onClose, children, footer, wide }: { title: strin
     document.body,
   )
 }
+
+export function Vec3Field({ value, onChange, labels, step = 0.5 }: { value: [number, number, number]; onChange: (v: [number, number, number]) => void; labels: [string, string, string]; step?: number }) {
+  return (
+    <div className="grid3">
+      {[0, 1, 2].map((i) => (
+        <NumberField key={i} label={labels[i]} value={value[i]!} step={step} onChange={(v) => { const n = [...value] as [number, number, number]; n[i] = v; onChange(n) }} />
+      ))}
+    </div>
+  )
+}

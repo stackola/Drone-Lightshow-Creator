@@ -4,11 +4,11 @@ import type { Effect, Group, LightCue, Scene, ShapeKind, ShapeSpec, ShowDoc, Spa
 import { SPARE_ROLES, addSpareLayer, applySpareRole, calmMotion } from '@/core/idle'
 import { fitScene, fitToAirspace, newId, newLayer, newLedSign, newScene, newShape } from '@/core/defaults'
 import { comfortableSpacing, type FixAction, type Issue } from '@/core/validate'
-import { applyFixToDoc, autoFix, tidySplit } from '@/core/fixes'
+import { applyFixToDoc, autoFix, settleParts, tidySplit } from '@/core/fixes'
 import { defaultEffect } from '@/core/effects'
 import { getState } from './store'
 import { seek } from './playback'
-import { SHAPE_BY_KIND } from '@/core/shapes'
+import { SAMPLE_BIRD, SHAPE_BY_KIND } from '@/core/shapes'
 import { allocate, findCompiledScene, findSceneTime } from '@/core/compile'
 import { SPLIT_MODES, splitSceneDoc, type SplitMode } from '@/core/splits'
 import { MIN_KEY_TIME, keyPose, normalizeKeys } from '@/core/keys'
@@ -46,6 +46,19 @@ export function addScene(kind: ShapeKind, opts: { shape?: ShapeSpec; name?: stri
   s.update((d) => { d.scenes.splice(at, 0, scene as Draft<Scene>) }, `Add ${scene.name}`)
   s.select({ kind: 'scene', id: scene.id })
   return scene
+}
+
+/** Add a bird that flaps its wings (a 3D model with moving parts), as fully as the drones can fly. */
+export function addFlappingBird() {
+  const s = getState()
+  const scene = addScene('model', { name: 'Bird', shape: { kind: 'model', size: 30, name: 'Bird', parts: SAMPLE_BIRD.parts.map((p) => ({ ...p })), joints: SAMPLE_BIRD.joints.map((j) => ({ ...j })) } })
+  if (!scene) return
+  const ref = findScene(getState().doc, scene.id)
+  if (!ref) return
+  const sub = { ...s.doc, droneCount: sceneDroneCount(getState().doc, scene.id) }
+  // The fullest flap these drones can fly at this beat.
+  const settled = settleParts({ ...ref.scene, hold: Math.max(ref.scene.hold, 36) }, sub, { prefer: 'calm' })
+  getState().update((d) => { replaceSceneIn(d as ShowDoc, scene.id, settled) }, 'Add Bird', 'add-bird')
 }
 
 /** Add an LED sign (scrolling dot-matrix text) after the selection. */
@@ -232,7 +245,7 @@ export function fitSceneToSpacing(sceneId: string, mode: 'exact' | 'grow' = 'exa
 
 export function applyFix(action: FixAction) {
   const s = getState()
-  const labels: Record<FixAction['kind'], string> = { 'fit-spacing': 'Fit to safe spacing', 'set-spin': 'Slow spin', move: 'Move scene', 'grid-spacing': 'Pad spacing', 'fit-airspace': 'Shrink to fit airspace', 'calm-hold': 'Calm hold motion', 'flight-style': 'Fly direct', 'separate-groups': 'Move groups apart' }
+  const labels: Record<FixAction['kind'], string> = { 'fit-spacing': 'Fit to safe spacing', 'set-spin': 'Slow spin', move: 'Move scene', 'grid-spacing': 'Pad spacing', 'fit-airspace': 'Shrink to fit airspace', 'calm-hold': 'Calm hold motion', 'calm-parts': 'Calm moving parts', 'slow-parts': 'Slow moving parts', 'flight-style': 'Fly direct', 'separate-groups': 'Move groups apart' }
   s.replaceDoc(applyFixToDoc(s.doc, action), labels[action.kind])
   s.set({ focus: null })
 }

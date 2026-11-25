@@ -6,7 +6,7 @@ import { Drones, frame } from './Drones'
 import { SiteLayer } from './SiteLayer'
 import { Manipulator, gizmoHovered, gizmoJustUsed } from './Manipulator'
 import { getState, useStore, type CameraMode } from '@/state/store'
-import { findCompiledScene, type Compiled } from '@/core/compile'
+import { findCompiledScene, findSceneTime, type Compiled } from '@/core/compile'
 
 function presetFor(mode: CameraMode, c: Compiled | null, audience: number): { pos: THREE.Vector3; target: THREE.Vector3 } {
   const cy = c?.stage.cy ?? 50
@@ -262,6 +262,48 @@ function SelectionBox() {
   return <box3Helper args={[box]} material={mat} />
 }
 
+/**
+ * Pivots and hinge axes of the selected formation's moving parts (in its
+ * designed pose), shown while the playhead isn't in its hold.
+ */
+function JointMarkers() {
+  const sel = useStore((s) => s.selection)
+  const compiled = useStore((s) => s.compiled)
+  const playing = useStore((s) => s.playing)
+  const inHold = useStore((s) => {
+    const sl = s.selection
+    if (!s.compiled || sl.kind !== 'scene') return false
+    const t = findSceneTime(s.compiled, sl.id)
+    return !!t && s.time > t.holdStart + 0.05 && s.time < t.holdEnd - 0.05
+  })
+  const marks = useMemo(() => {
+    if (!compiled || sel.kind !== 'scene') return []
+    const cs = findCompiledScene(compiled, sel.id)
+    if (!cs?.anim) return []
+    const len = Math.max(3, cs.spinRadius * 0.12)
+    return cs.anim.joints.map((j) => {
+      const p = new THREE.Vector3(...j.pivot)
+      const a = new THREE.Vector3(...j.axis).multiplyScalar(len)
+      return { p, line: new THREE.BufferGeometry().setFromPoints(j.kind === 'slide' ? [p.clone().sub(a), p.clone().add(a)] : [p.clone().sub(a.clone().multiplyScalar(0.5)), p.clone().add(a)]), r: len * 0.12 }
+    })
+  }, [compiled, sel])
+  const mat = useMemo(() => new THREE.LineBasicMaterial({ color: '#7dd3fc', transparent: true, opacity: 0.85, depthTest: false }), [])
+  if (!marks.length || playing || inHold) return null
+  return (
+    <group>
+      {marks.map((m, i) => (
+        <group key={i}>
+          <mesh position={m.p} renderOrder={9}>
+            <sphereGeometry args={[m.r, 16, 12]} />
+            <meshBasicMaterial color="#7dd3fc" transparent opacity={0.9} depthTest={false} />
+          </mesh>
+          <primitive object={new THREE.Line(m.line, mat)} renderOrder={9} />
+        </group>
+      ))}
+    </group>
+  )
+}
+
 /** Red rings around drones involved in the focused safety issue. */
 function IssueMarkers() {
   const focus = useStore((s) => s.focus)
@@ -316,6 +358,7 @@ export function Viewport({ present = false }: { present?: boolean }) {
       <Drones present={present} />
       {!present && <SelectionBox />}
       {!present && <IssueMarkers />}
+      {!present && <JointMarkers />}
       {!present && <Manipulator />}
     </Canvas>
   )

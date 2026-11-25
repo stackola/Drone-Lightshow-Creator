@@ -92,3 +92,40 @@ describe('3D models in a show', () => {
     expect((back.scenes[0]!.layers[0]!.shape as Extract<ShapeSpec, { kind: 'model' }>).parts).toHaveLength(6)
   })
 })
+
+describe('richer parts and relief', () => {
+  const nn = (p: Float32Array) => {
+    const n = p.length / 3
+    let min = Infinity
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) min = Math.min(min, Math.hypot(p[i * 3]! - p[j * 3]!, p[i * 3 + 1]! - p[j * 3 + 1]!, p[i * 3 + 2]! - p[j * 3 + 2]!))
+    return min
+  }
+  it('plate, tube and lathe become drones on their surfaces', () => {
+    const star: [number, number][] = Array.from({ length: 10 }, (_, i) => { const r = i % 2 ? 0.2 : 0.5, a = Math.PI / 2 + (i * Math.PI) / 5; return [r * Math.cos(a), r * Math.sin(a)] })
+    const plate = sampleModel([{ type: 'plate', center: [0, 0, 0], points: star, depth: 0.3, rotation: [0, 0, 0], color: '#ffcc00' }], 150)!
+    expect(plate.points.length).toBe(450)
+    const tube = sampleModel([{ type: 'tube', path: [[-1, 0, 0], [0, 0.6, 0], [1, 0, 0]], radius: 0.15, color: '#00ccff' }], 120)!
+    expect(tube.hiddenParts).toEqual([])
+    const vase = sampleModel([{ type: 'lathe', center: [0, 0, 0], profile: [[0.3, -1], [0.5, -0.4], [0.2, 0.4], [0.35, 1]], rotation: [0, 0, 0], color: '#ff66aa' }], 200)!
+    // Rotationally symmetric: drones all round, at the profile's radius for their height.
+    let left = 0, right = 0
+    for (let i = 0; i < 200; i++) { if (vase.points[i * 3]! < -0.05) left++; if (vase.points[i * 3]! > 0.05) right++ }
+    expect(Math.abs(left - right)).toBeLessThan(40)
+  })
+
+  it('a thin plate or a thin tube is one sheet or one line of drones, so it stays compact', () => {
+    const wing = sampleModel([{ type: 'plate', center: [0, 0, 0], points: [[-1, 0], [1, 0], [0.6, 0.5], [-0.6, 0.5]], depth: 0.01, rotation: [0, 0, 0], color: '#fff' }], 80)!
+    for (let i = 0; i < 80; i++) expect(Math.abs(wing.points[i * 3 + 2]!)).toBeLessThan(1e-6)
+    const whisker = sampleModel([{ type: 'tube', path: [[0, 0, 0], [1, 0.2, 0], [2, 0, 0]], radius: 0.005, color: '#fff' }], 30)!
+    expect(nn(whisker.points)).toBeGreaterThan(0.025)
+  })
+
+  it('relief puts the drones on the side the audience sees, closer together there', () => {
+    const ball = [{ type: 'sphere' as const, center: [0, 0, 0] as [number, number, number], radius: 1, color: '#fff' }]
+    const all = sampleModel(ball, 200)!, front = sampleModel(ball, 200, { relief: true })!
+    const behind = (p: Float32Array) => { let k = 0; for (let i = 0; i < 200; i++) if (p[i * 3 + 2]! < -0.1) k++; return k }
+    expect(behind(all.points)).toBeGreaterThan(60)
+    expect(behind(front.points)).toBe(0)
+    expect(nn(front.points)).toBeLessThan(nn(all.points))
+  })
+})

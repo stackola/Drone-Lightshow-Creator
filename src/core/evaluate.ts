@@ -5,6 +5,7 @@ import type { Compiled, CompiledScene, FlightSegment, Leg, Segment, Track, Track
 import { GROUND_COLOR, LOOK, beatPhaseFn, pointColor, readLook } from './compile'
 import { holdPose, profileS } from './motion'
 import { applyKey, keyMatrix, keyPose } from './keys'
+import { applyChain, chainPoses } from './joints'
 import { choreoPos, choreoProgress, wrapPos } from './transitions'
 import type { RGB } from './color'
 import { TEXT_EFFECTS, blankLook, effectColor, type BeatPhase, type DroneLook } from './effects'
@@ -32,6 +33,7 @@ export function dimFactor(tau: number): number {
 
 const beatCache = new WeakMap<Compiled, BeatPhase>()
 const tmp: RGB = [0, 0, 0]
+const art = [0, 0, 0]
 
 export function evaluate(c: Compiled, t: number, pos: Float32Array, col: Float32Array | null): Segment {
   t = Math.max(0, Math.min(c.duration, t))
@@ -119,9 +121,16 @@ function evalHold(cs: CompiledScene, slot: Int32Array, tau: number, t: number, n
   // Keyframes move, turn and scale the whole (spinning, breathing…) formation.
   const kp = cs.keys.length ? keyPose(cs.keys, tt) : null
   const M = kp ? keyMatrix(kp) : null
+  // Moving parts are posed first, in the formation's rest frame.
+  const P = cs.anim ? chainPoses(cs.anim, cs.hold, tt) : null
   for (let i = 0; i < n; i++) {
     const k = slot[i]!
-    const x = cs.points[k * 3]! - cx, y = cs.points[k * 3 + 1]! - cy, z = cs.points[k * 3 + 2]! - cz
+    let x = cs.points[k * 3]! - cx, y = cs.points[k * 3 + 1]! - cy, z = cs.points[k * 3 + 2]! - cz
+    const ch = P ? cs.anim!.chainOf[k]! : -1
+    if (ch >= 0) {
+      applyChain(P!, ch, cs.points[k * 3]!, cs.points[k * 3 + 1]!, cs.points[k * 3 + 2]!, art, 0)
+      x = art[0]! - cx; y = art[1]! - cy; z = art[2]! - cz
+    }
     pos[i * 3] = cx + ca * x + sa * z
     pos[i * 3 + 1] = oy + ys * y
     pos[i * 3 + 2] = cz - sa * x + ca * z

@@ -1,5 +1,6 @@
 // Pure document transforms used by the editor's "Fix" buttons and by AI features.
 
+import { scaleJoints, slowJoints } from './joints'
 import type { Scene, ShowDoc, Vec3 } from './types'
 import { scaleKeys } from './keys'
 import { compile } from './compile'
@@ -32,6 +33,10 @@ export function applyFixToDoc(doc: ShowDoc, action: FixAction): ShowDoc {
       return replaceScene(doc, action.sceneId, (s, sub) => (s.layers.some((l) => l.role && l.role !== 'park') ? fitRolesToAirspace(s, sub) : fitToAirspace(s, sub)))
     case 'calm-hold':
       return replaceScene(doc, action.sceneId, (s) => calmHold(s, action.factor))
+    case 'calm-parts':
+      return replaceScene(doc, action.sceneId, (s) => scaleJoints(s, action.factor))
+    case 'slow-parts':
+      return replaceScene(doc, action.sceneId, (s) => slowJoints(s, action.factor))
     case 'separate-groups':
       return separateGroups(doc, action.sceneId)
     case 'flight-style':
@@ -67,6 +72,7 @@ export function tidySplit(doc: ShowDoc, sceneId: string): ShowDoc {
 export function calmHold(s: Scene, factor: number): Scene {
   const f = Math.max(0, Math.min(1, factor))
   const spin = Math.trunc(s.spin * f * 10) / 10
+  s = scaleJoints(s, f)
   if (s.keys?.length) s = { ...s, keys: scaleKeys(s.keys, f).map((k) => ({ ...k, move: k.move.map((v) => Math.round(v * 10) / 10) as Vec3, rotate: k.rotate.map((v) => Math.round(v * 10) / 10) as Vec3, scale: Math.round(k.scale * 1000) / 1000 })) }
   if (!s.motion || s.motion.kind === 'none') return { ...s, spin }
   const step = s.motion.kind === 'breathe' ? 100 : 10
@@ -98,3 +104,24 @@ export function autoFix(doc: ShowDoc, maxPasses = 4): { doc: ShowDoc; validation
 }
 
 export { comfortableSpacing }
+
+/**
+ * Make a formation's moving parts safe on their own: slow, calm or enlarge
+ * (whatever the validator suggests for its parts) until its hold is clean.
+ * Used when parts come from a preset or the AI, so they start out flyable.
+ */
+export function settleParts(scene: Scene, doc: ShowDoc, opts: { prefer?: 'slow' | 'calm'; passes?: number } = {}): Scene {
+  const kinds = new Set<FixAction['kind']>(['slow-parts', 'calm-parts', 'calm-hold'])
+  let cur = scene
+  for (let pass = 0; pass < (opts.passes ?? 6); pass++) {
+    const sub: ShowDoc = { ...doc, scenes: [cur], cues: [] }
+    const v = validate(sub, compile(sub))
+    const issue = v.issues.find((i) => i.sceneId === cur.id && i.fix && (kinds.has(i.fix.action.kind) || i.id.startsWith('parts:')))
+    if (!issue) return cur
+    let action = issue.fix!.action
+    // Keep the beat, swing less: speed goes with swing ÷ beat, so 1/k of the swing matches k× slower.
+    if (opts.prefer === 'calm' && action.kind === 'slow-parts') action = { kind: 'calm-parts', sceneId: action.sceneId, factor: Math.floor((100 * 0.97) / action.factor) / 100 }
+    cur = applyFixToDoc(sub, action).scenes[0]!
+  }
+  return cur
+}

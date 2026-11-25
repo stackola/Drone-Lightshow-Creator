@@ -20,7 +20,8 @@ import { fitScene, fitToAirspace, rasterizeText, unitSpacing } from '@/core/defa
 import type { Group, HoldKey, HoldMotion, Layer, LightCue, Scene, ShapeKind, ShapeSpec, ShowDoc, TextFont, Vec3 } from '@/core/types'
 import { keyPose, normalizeKeys } from '@/core/keys'
 import { seek } from '@/state/playback'
-import { NumberField, Row, Segmented, Toggle, MenuButton } from '@/ui/components/controls'
+import { NumberField, Row, Segmented, Toggle, MenuButton, Vec3Field } from '@/ui/components/controls'
+import { LayerMotion, ModelJoints } from './MotionEditor'
 import { EffectEditor } from './EffectEditor'
 import { TransitionEditor } from './TransitionEditor'
 import { ShapePicker } from './ScenesPanel'
@@ -71,16 +72,6 @@ export function IssueCard({ issue }: { issue: Issue }) {
           </button>
         </div>
       </div>
-    </div>
-  )
-}
-
-function Vec3Field({ value, onChange, labels, step = 0.5 }: { value: Vec3; onChange: (v: Vec3) => void; labels: [string, string, string]; step?: number }) {
-  return (
-    <div className="grid3">
-      {[0, 1, 2].map((i) => (
-        <NumberField key={i} label={labels[i]} value={value[i]!} step={step} onChange={(v) => { const n = [...value] as Vec3; n[i] = v; onChange(n) }} />
-      ))}
     </div>
   )
 }
@@ -175,7 +166,7 @@ function SceneInspector({ id, focusFlight }: { id: string; focusFlight: boolean 
                   </button>
                 ))}
                 <div className="menu-sep" />
-                <ShapePicker scenePresets={false} onPick={(k) => { close(); if (k === 'describe') getState().set({ dialog: 'describe' }); else if (k !== 'image' && k !== 'led') addLayer(id, k) }} />
+                <ShapePicker scenePresets={false} onPick={(k) => { close(); if (k === 'describe') getState().set({ dialog: 'describe' }); else if (k !== 'image' && k !== 'led' && k !== 'bird') addLayer(id, k) }} />
               </>
             )}
           </MenuButton>
@@ -284,7 +275,7 @@ function GroupCard({ scene, group, drones }: { scene: Scene; group: Group; drone
           })}
         </ol>
         <MenuButton className="btn ghost sm" title="Add a formation to this group" width={300} button={<><Plus size={12} /> Formation</>}>
-          {(close) => <ShapePicker scenePresets={false} onPick={(k) => { close(); if (k !== 'describe' && k !== 'image' && k !== 'led') addGroupStep(group.id, k) }} />}
+          {(close) => <ShapePicker scenePresets={false} onPick={(k) => { close(); if (k !== 'describe' && k !== 'image' && k !== 'led' && k !== 'bird') addGroupStep(group.id, k) }} />}
         </MenuButton>
       </div>
     </div>
@@ -505,6 +496,8 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
             </Row>
           </>
         )}
+        {shape.kind === 'model' && <ModelJoints scene={scene} layer={layer} />}
+        {!layer.role && <LayerMotion scene={scene} layer={layer} />}
         <div className="subhead">Light</div>
         <EffectEditor effect={layer.effect} allowImage={shape.kind === 'image' || shape.kind === 'model'} keyPrefix={`fx:${k}`} hasBeats={hasBeats} onChange={(e, label, key) => upLayer((l) => { l.effect = e }, label, key)} />
       </div>

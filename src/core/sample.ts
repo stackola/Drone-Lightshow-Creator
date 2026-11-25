@@ -181,7 +181,110 @@ export function spreadPick(cand: Float32Array, n: number, lloydIters = 6): Int32
     cur = far
   }
   for (let it = 0; it < lloydIters; it++) lloydStep(cand, picks)
+  repairSpacing(cand, picks, 4)
   return picks
+}
+
+/**
+ * Raise the smallest gap. Lloyd relaxation evens out the average spacing,
+ * but a formation's size is set by its closest pair: it has to grow until
+ * that pair is safe. So, worst gaps first, each drone moves to the nearby
+ * candidate (within one spacing) farthest from its neighbours — a local
+ * version of farthest-point optimisation. Only moves that widen the drone's
+ * own gap are kept, so the smallest gap never shrinks.
+ */
+export function repairSpacing(cand: Float32Array, picks: Int32Array, rounds: number): void {
+  const m = cand.length / 3, n = picks.length
+  if (n < 3 || m <= n) return
+  const pos = new Float64Array(n * 3)
+  for (let k = 0; k < n; k++) for (let a = 0; a < 3; a++) pos[k * 3 + a] = cand[picks[k]! * 3 + a]!
+  // Typical spacing: the median nearest-neighbour distance (brute force on a sample for big sets).
+  const nn = (k: number, others: (j: number) => boolean) => {
+    let best = Infinity
+    for (let j = 0; j < n; j++) {
+      if (j === k || !others(j)) continue
+      const d = (pos[j * 3]! - pos[k * 3]!) ** 2 + (pos[j * 3 + 1]! - pos[k * 3 + 1]!) ** 2 + (pos[j * 3 + 2]! - pos[k * 3 + 2]!) ** 2
+      if (d < best) best = d
+    }
+    return Math.sqrt(best)
+  }
+  const probe = Array.from({ length: Math.min(n, 64) }, (_, i) => Math.floor((i * n) / Math.min(n, 64)))
+  const ds = probe.map((k) => nn(k, () => true)).sort((x, y) => x - y)
+  const s = ds[Math.floor(ds.length / 2)]!
+  if (!(s > 0)) return
+  const cell = 1.5 * s
+  const key = (a: number, b: number, c: number) => (a * 73856093) ^ (b * 19349663) ^ (c * 83492791)
+  const ci = (v: number) => Math.floor(v / cell)
+  const candGrid = new Map<number, number[]>()
+  for (let i = 0; i < m; i++) {
+    const kk = key(ci(cand[i * 3]!), ci(cand[i * 3 + 1]!), ci(cand[i * 3 + 2]!))
+    const l = candGrid.get(kk)
+    if (l) l.push(i)
+    else candGrid.set(kk, [i])
+  }
+  const pickGrid = new Map<number, number[]>()
+  const cellOfPick = new Int32Array(n * 3)
+  const place = (k: number) => {
+    const a = ci(pos[k * 3]!), b = ci(pos[k * 3 + 1]!), c = ci(pos[k * 3 + 2]!)
+    cellOfPick[k * 3] = a; cellOfPick[k * 3 + 1] = b; cellOfPick[k * 3 + 2] = c
+    const kk = key(a, b, c)
+    const l = pickGrid.get(kk)
+    if (l) l.push(k)
+    else pickGrid.set(kk, [k])
+  }
+  const unplace = (k: number) => {
+    const l = pickGrid.get(key(cellOfPick[k * 3]!, cellOfPick[k * 3 + 1]!, cellOfPick[k * 3 + 2]!))
+    if (l) { const i = l.indexOf(k); if (i >= 0) l.splice(i, 1) }
+  }
+  for (let k = 0; k < n; k++) place(k)
+  // Distance from (x, y, z) to the nearest pick other than k, capped at the grid reach.
+  const gap = (x: number, y: number, z: number, k: number) => {
+    const a = ci(x), b = ci(y), c = ci(z)
+    let best = cell * cell
+    for (let da = -1; da <= 1; da++) for (let db = -1; db <= 1; db++) for (let dc = -1; dc <= 1; dc++) {
+      const l = pickGrid.get(key(a + da, b + db, c + dc))
+      if (!l) continue
+      for (const j of l) {
+        if (j === k) continue
+        const d = (pos[j * 3]! - x) ** 2 + (pos[j * 3 + 1]! - y) ** 2 + (pos[j * 3 + 2]! - z) ** 2
+        if (d < best) best = d
+      }
+    }
+    return best
+  }
+  const used = new Set<number>(picks)
+  for (let round = 0; round < rounds; round++) {
+    const order = Array.from({ length: n }, (_, k) => k)
+    const g0 = order.map((k) => gap(pos[k * 3]!, pos[k * 3 + 1]!, pos[k * 3 + 2]!, k))
+    order.sort((x, y) => g0[x]! - g0[y]!)
+    let moved = 0
+    for (const k of order) {
+      const x = pos[k * 3]!, y = pos[k * 3 + 1]!, z = pos[k * 3 + 2]!
+      let best = gap(x, y, z, k), bestI = -1
+      if (best >= cell * cell * 0.99) continue
+      const a = ci(x), b = ci(y), c = ci(z)
+      for (let da = -1; da <= 1; da++) for (let db = -1; db <= 1; db++) for (let dc = -1; dc <= 1; dc++) {
+        const l = candGrid.get(key(a + da, b + db, c + dc))
+        if (!l) continue
+        for (const i of l) {
+          if (used.has(i)) continue
+          const cx = cand[i * 3]!, cy = cand[i * 3 + 1]!, cz = cand[i * 3 + 2]!
+          if ((cx - x) ** 2 + (cy - y) ** 2 + (cz - z) ** 2 > s * s) continue
+          const g = gap(cx, cy, cz, k)
+          if (g > best * 1.0001) { best = g; bestI = i }
+        }
+      }
+      if (bestI < 0) continue
+      unplace(k)
+      used.delete(picks[k]!)
+      picks[k] = bestI
+      used.add(bestI)
+      pos[k * 3] = cand[bestI * 3]!; pos[k * 3 + 1] = cand[bestI * 3 + 1]!; pos[k * 3 + 2] = cand[bestI * 3 + 2]!
+      place(k)
+      moved++
+    }
+    if (!moved) break
+  }
 }
 
 function lloydStep(cand: Float32Array, picks: Int32Array): void {

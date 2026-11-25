@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { Copy, Plus, Trash2, PlaneTakeoff, PlaneLanding, AlertTriangle, Type, ImageUp, Sparkles, Split } from 'lucide-react'
 import { getState, useStore } from '@/state/store'
-import { addLedSign, addScene, deleteScene, duplicateScene, moveScene, seekToScene } from '@/state/actions'
+import { addFlappingBird, addLedSign, addScene, deleteScene, duplicateScene, moveScene, seekToScene } from '@/state/actions'
 import { seek } from '@/state/playback'
-import { SHAPES, generateShape } from '@/core/shapes'
+import { SAMPLE_BIRD, SHAPES, generateShape } from '@/core/shapes'
 import { findSceneTime, scenePointColors } from '@/core/compile'
 import { newShape } from '@/core/defaults'
 import { sceneAt } from '@/core/evaluate'
@@ -31,6 +31,12 @@ function tilePoints(kind: ShapeKind): Float32Array {
   return p
 }
 
+let birdPoints: Float32Array | null = null
+function birdTile(): Float32Array {
+  birdPoints ??= generateShape({ kind: 'model', size: 10, name: 'Bird', parts: SAMPLE_BIRD.parts }, 90).points
+  return birdPoints
+}
+
 export async function addImageScene() {
   const file = await pickFile('image/png,image/jpeg,image/svg+xml,image/webp,image/gif')
   if (!file) return
@@ -42,7 +48,7 @@ export async function addImageScene() {
   }
 }
 
-export type PickKind = ShapeKind | 'describe' | 'led'
+export type PickKind = ShapeKind | 'describe' | 'led' | 'bird'
 
 export function ShapePicker({ onPick, scenePresets = true }: { onPick: (kind: PickKind) => void; scenePresets?: boolean }) {
   const groups: ('2D' | '3D' | 'Content')[] = ['2D', '3D', 'Content']
@@ -64,6 +70,12 @@ export function ShapePicker({ onPick, scenePresets = true }: { onPick: (kind: Pi
                 {s.label}
               </button>
             ))}
+            {g === '3D' && scenePresets && (
+              <button className="shape-tile" onClick={() => onPick('bird')} title="A bird that flaps its wings — a 3D model with moving parts, slowed to what your drones can fly">
+                <Thumb points={birdTile()} width={52} height={40} />
+                Flapping bird
+              </button>
+            )}
             {g === 'Content' && scenePresets && (
               <button className="shape-tile" onClick={() => onPick('led')} title="A dot-matrix LED sign: scrolling text on a grid of drones 7 tall">
                 <span className="led-tile" aria-hidden />
@@ -86,6 +98,7 @@ export function ShapePicker({ onPick, scenePresets = true }: { onPick: (kind: Pi
 export function pickAndAdd(kind: PickKind) {
   if (kind === 'describe') getState().set({ dialog: 'describe' })
   else if (kind === 'led') addLedSign()
+  else if (kind === 'bird') addFlappingBird()
   else if (kind === 'model') getState().set({ dialog: 'model3d', aiTarget: null })
   else if (kind === 'image') void addImageScene()
   else addScene(kind)

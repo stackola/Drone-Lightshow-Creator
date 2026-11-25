@@ -558,3 +558,12 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent-2); c
 .blk .key-mark.through, .split-row .sub .key-mark.through { background: transparent; border: 2px solid var(--accent); }
 .toolbar .autokey.on { color: #111; background: var(--accent); }
 .toolbar .autokey-status { align-self: center; font-size: 11.5px; color: var(--accent); padding: 0 6px 0 2px; white-space: nowrap; }
+
+/* Moving parts */
+.joint-card { border: 1px solid var(--line); border-radius: 8px; padding: 6px; margin-top: 6px; background: var(--panel); display: flex; flex-direction: column; gap: 4px; }
+.joint-head { display: flex; gap: 6px; align-items: center; }
+.joint-head .input { flex: 1; min-width: 0; }
+.part-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.part-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+.part-chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+.part-chip.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 16%, transparent); }

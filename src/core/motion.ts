@@ -14,7 +14,7 @@
 // so a drone travelling D metres peaks at D·h m/s, 1.5·D·h/r m/s² and 6·D·h/r² m/s³.
 
 import type { HoldKey, HoldMotion, Limits } from './types'
-import { applyKey, keyMatrix, keyPose, type KeyPose } from './keys'
+import { applyKey, keyMatrix, keyPose } from './keys'
 
 export const RAMP_ACC = 1.5
 export const RAMP_JERK = 6
@@ -279,37 +279,84 @@ export interface MotionPeaks {
  * enough to be accurate to well under 1%). Pass the points that move most:
  * the farthest from the centre and the farthest from the spin axis.
  */
-export function holdPeaks(rels: [number, number, number][], omega: number, hold: number, motion: HoldMotion | undefined, keys: HoldKey[] = []): MotionPeaks {
+/**
+ * Moving parts for holdPeaks: each rel's chain of joints (-1 = none), and the
+ * chains' rigid poses (p ↦ R·p + t in world coordinates) at a hold time.
+ */
+export interface HoldArt {
+  chains: number[]
+  center: [number, number, number]
+  poses: (t: number) => Float64Array
+}
+
+export function holdPeaks(rels: [number, number, number][], omega: number, hold: number, motion: HoldMotion | undefined, keys: HoldKey[] = [], art?: HoldArt): MotionPeaks {
   const out: MotionPeaks = { speedH: 0, up: 0, down: 0, accel: 0, jerk: 0 }
-  const moving = omega !== 0 || (motion && motion.kind !== 'none' && motion.amount > 0) || keys.length > 0
+  const moving = omega !== 0 || (motion && motion.kind !== 'none' && motion.amount > 0) || keys.length > 0 || (art && art.chains.some((c) => c >= 0))
   if (!moving || hold <= 0 || !rels.length) return out
   const steps = Math.min(6000, Math.max(400, Math.ceil(hold / 0.01)))
   const dt = hold / steps
-  const c: [number, number, number] = [0, 0, 0]
-  // Poses per time step, shared by every point.
-  const poses: HoldPose[] = [], keyed: { p: KeyPose; M: number[] }[] = []
-  for (let k = -2; k <= steps + 2; k++) {
-    const t = Math.max(0, Math.min(hold, k * dt))
-    poses.push(holdPose(omega, hold, motion, t))
-    if (keys.length) { const kp = keyPose(keys, t); keyed.push({ p: kp, M: keyMatrix(kp) }) }
-  }
-  const tmp = [0, 0, 0]
-  for (const rel of rels) {
-    const P: [number, number, number][] = []
-    for (let k = 0; k < poses.length; k++) {
-      const q = holdPoint(rel, c, poses[k]!)
-      if (keys.length) { applyKey(keyed[k]!.p, keyed[k]!.M, c, q[0], q[1], q[2], tmp); P.push([tmp[0]!, tmp[1]!, tmp[2]!]) }
-      else P.push(q)
+  const m = steps + 5
+  // Poses per time step, shared by every point: turn (cos·s, sin·s), scale, dy, keyframe matrix and move, parts.
+  const ca = new Float64Array(m), sa = new Float64Array(m), sc = new Float64Array(m), dy = new Float64Array(m)
+  const KM = keys.length ? new Float64Array(m * 12) : null
+  const parts: Float64Array[] = []
+  for (let k = 0; k < m; k++) {
+    const t = Math.max(0, Math.min(hold, (k - 2) * dt))
+    const p = holdPose(omega, hold, motion, t)
+    ca[k] = Math.cos(p.angle) * p.scale; sa[k] = Math.sin(p.angle) * p.scale; sc[k] = p.scale; dy[k] = p.dy
+    if (KM) {
+      // applyKey is affine in the point: read off its matrix and offset once per step.
+      const kp = keyPose(keys, t), M = keyMatrix(kp), o = [0, 0, 0], e = [0, 0, 0]
+      applyKey(kp, M, [0, 0, 0], 0, 0, 0, o)
+      for (let a = 0; a < 3; a++) {
+        const u: [number, number, number] = [0, 0, 0]; u[a] = 1
+        applyKey(kp, M, [0, 0, 0], u[0], u[1], u[2], e)
+        for (let b = 0; b < 3; b++) KM[k * 12 + b * 3 + a] = e[b]! - o[b]!
+      }
+      KM[k * 12 + 9] = o[0]!; KM[k * 12 + 10] = o[1]!; KM[k * 12 + 11] = o[2]!
     }
-    for (let k = 2; k < P.length - 2; k++) {
-      const v = [0, 1, 2].map((i) => (P[k + 1]![i]! - P[k - 1]![i]!) / (2 * dt))
-      const a = [0, 1, 2].map((i) => (P[k + 1]![i]! - 2 * P[k]![i]! + P[k - 1]![i]!) / (dt * dt))
-      const j = [0, 1, 2].map((i) => (P[k + 2]![i]! - 2 * P[k + 1]![i]! + 2 * P[k - 1]![i]! - P[k - 2]![i]!) / (2 * dt * dt * dt))
-      out.speedH = Math.max(out.speedH, Math.hypot(v[0]!, v[2]!))
-      out.up = Math.max(out.up, v[1]!)
-      out.down = Math.max(out.down, -v[1]!)
-      out.accel = Math.max(out.accel, Math.hypot(a[0]!, a[1]!, a[2]!))
-      out.jerk = Math.max(out.jerk, Math.hypot(j[0]!, j[1]!, j[2]!))
+    if (art) parts.push(art.poses(t))
+  }
+  const X = new Float64Array(m), Y = new Float64Array(m), Z = new Float64Array(m)
+  const dt2 = dt * dt, dt3 = 2 * dt * dt * dt
+  for (let r = 0; r < rels.length; r++) {
+    const rel = rels[r]!
+    const ch = art ? art.chains[r]! : -1
+    for (let k = 0; k < m; k++) {
+      let x = rel[0], y = rel[1], z = rel[2]
+      if (ch >= 0) {
+        // Pose the point's parts (world rest frame), back to centre-relative.
+        const T = parts[k]!, o = ch * 12, [cx, cy, cz] = art!.center
+        const wx = x + cx, wy = y + cy, wz = z + cz
+        x = T[o]! * wx + T[o + 1]! * wy + T[o + 2]! * wz + T[o + 9]! - cx
+        y = T[o + 3]! * wx + T[o + 4]! * wy + T[o + 5]! * wz + T[o + 10]! - cy
+        z = T[o + 6]! * wx + T[o + 7]! * wy + T[o + 8]! * wz + T[o + 11]! - cz
+      }
+      // Spin / sway / breathe / bob (holdPoint about the origin).
+      let px = ca[k]! * x + sa[k]! * z, py = sc[k]! * y + dy[k]!, pz = -sa[k]! * x + ca[k]! * z
+      if (KM) {
+        const o = k * 12
+        const qx = KM[o]! * px + KM[o + 1]! * py + KM[o + 2]! * pz + KM[o + 9]!
+        const qy = KM[o + 3]! * px + KM[o + 4]! * py + KM[o + 5]! * pz + KM[o + 10]!
+        const qz = KM[o + 6]! * px + KM[o + 7]! * py + KM[o + 8]! * pz + KM[o + 11]!
+        px = qx; py = qy; pz = qz
+      }
+      X[k] = px; Y[k] = py; Z[k] = pz
+    }
+    for (let k = 2; k < m - 2; k++) {
+      const vx = (X[k + 1]! - X[k - 1]!) / (2 * dt), vy = (Y[k + 1]! - Y[k - 1]!) / (2 * dt), vz = (Z[k + 1]! - Z[k - 1]!) / (2 * dt)
+      const ax = (X[k + 1]! - 2 * X[k]! + X[k - 1]!) / dt2, ay = (Y[k + 1]! - 2 * Y[k]! + Y[k - 1]!) / dt2, az = (Z[k + 1]! - 2 * Z[k]! + Z[k - 1]!) / dt2
+      const jx = (X[k + 2]! - 2 * X[k + 1]! + 2 * X[k - 1]! - X[k - 2]!) / dt3
+      const jy = (Y[k + 2]! - 2 * Y[k + 1]! + 2 * Y[k - 1]! - Y[k - 2]!) / dt3
+      const jz = (Z[k + 2]! - 2 * Z[k + 1]! + 2 * Z[k - 1]! - Z[k - 2]!) / dt3
+      const h = Math.sqrt(vx * vx + vz * vz)
+      if (h > out.speedH) out.speedH = h
+      if (vy > out.up) out.up = vy
+      if (-vy > out.down) out.down = -vy
+      const a = Math.sqrt(ax * ax + ay * ay + az * az)
+      if (a > out.accel) out.accel = a
+      const j = Math.sqrt(jx * jx + jy * jy + jz * jz)
+      if (j > out.jerk) out.jerk = j
     }
   }
   return out

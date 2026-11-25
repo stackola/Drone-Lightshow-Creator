@@ -106,7 +106,7 @@ test('site: place the show, draw a keep-out zone, and fix the formation that int
   // Draw a no-fly zone over the right of the show.
   await page.getByRole('radio', { name: /Zone/ }).first().click()
   const box = (await page.locator('svg.site-map').boundingBox())!
-  for (const [fx, fy] of [[0.62, 0.28], [0.75, 0.28], [0.75, 0.42], [0.62, 0.42], [0.62, 0.28]] as const) await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy)
+  for (const [fx, fy] of [[0.58, 0.24], [0.72, 0.24], [0.72, 0.36], [0.58, 0.36], [0.58, 0.24]] as const) await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy)
   await expect(page.locator('.zone-card')).toHaveCount(1)
   await page.getByRole('button', { name: 'Done' }).click()
   await expect(page.locator('.status-btn')).toContainText('1 issue')

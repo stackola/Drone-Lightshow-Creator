@@ -2,8 +2,8 @@
 // on the origin, in the XY "picture plane" (facing the audience) unless the
 // shape is 3D. Every generator is linear in `size`.
 
-import type { Fill, ModelPart, ShapeKind, ShapeSpec } from './types'
-import { sampleModel } from './model3d'
+import type { Fill, ModelJoint, ModelPart, ShapeKind, ShapeSpec } from './types'
+import { sampleModel, solidsKey } from './model3d'
 import { hash01 } from './math'
 import { glyphMap, textPointOrder, type GlyphMap } from './textOrder'
 import {
@@ -20,6 +20,9 @@ export interface ShapePoints {
   order?: Float32Array
   /** Number of letters (text shapes), for letter-by-letter effects. */
   glyphs?: number
+  /** 3D models: the part each point lies on, and model units → unit shape (before × size). */
+  parts?: Uint16Array
+  frame?: { center: [number, number, number]; extent: number }
 }
 
 export interface ParamDef {
@@ -127,6 +130,31 @@ export const SAMPLE_MODEL: ModelPart[] = [
   { type: 'cone', from: [0, -0.5, 0], to: [0, -0.95, 0], radius: 0.18, radiusTop: 0.02, color: '#ffb02e' },
 ]
 
+/**
+ * A bird seen from the front, wings spread: each wing hinges at the shoulder
+ * and its outer half at the wrist, lagging a little behind. The swing is
+ * the most a big flock could fly; settleParts() calms it to what a given
+ * fleet can (wingtips of a 100 m bird travel metres per beat).
+ */
+export const SAMPLE_BIRD: { parts: ModelPart[]; joints: ModelJoint[] } = {
+  parts: [
+    { type: 'ellipsoid', center: [0, 0, 0], radii: [0.13, 0.32, 0.12], rotation: [0, 0, 0], color: '#ffb347' },
+    { type: 'sphere', center: [0, 0.42, 0.02], radius: 0.11, color: '#ffd27a' },
+    { type: 'cone', from: [0, 0.41, 0.1], to: [0, 0.38, 0.24], radius: 0.04, radiusTop: 0, color: '#ff5e3a' },
+    { type: 'box', center: [0, -0.5, 0], size: [0.32, 0.36, 0.05], rotation: [0, 0, 0], color: '#ff5e3a' },
+    { type: 'ellipsoid', center: [0.4, 0.08, 0], radii: [0.3, 0.11, 0.04], rotation: [0, 0, 8], color: '#ff8c2e', joint: 'wing-r' },
+    { type: 'ellipsoid', center: [0.82, 0.14, 0], radii: [0.26, 0.08, 0.03], rotation: [0, 0, 4], color: '#ff5e3a', joint: 'tip-r' },
+    { type: 'ellipsoid', center: [-0.4, 0.08, 0], radii: [0.3, 0.11, 0.04], rotation: [0, 0, -8], color: '#ff8c2e', joint: 'wing-l' },
+    { type: 'ellipsoid', center: [-0.82, 0.14, 0], radii: [0.26, 0.08, 0.03], rotation: [0, 0, -4], color: '#ff5e3a', joint: 'tip-l' },
+  ],
+  joints: [
+    { id: 'wing-r', name: 'Right wing', kind: 'swing', pivot: [0.12, 0.08, 0], axis: [0, 0, 1], amount: 14, period: 12, phase: 0 },
+    { id: 'tip-r', name: 'Right wingtip', kind: 'swing', pivot: [0.6, 0.12, 0], axis: [0, 0, 1], amount: 10, period: 12, phase: -0.08, parent: 'wing-r' },
+    { id: 'wing-l', name: 'Left wing', kind: 'swing', pivot: [-0.12, 0.08, 0], axis: [0, 0, -1], amount: 14, period: 12, phase: 0 },
+    { id: 'tip-l', name: 'Left wingtip', kind: 'swing', pivot: [-0.6, 0.12, 0], axis: [0, 0, -1], amount: 10, period: 12, phase: -0.08, parent: 'wing-l' },
+  ],
+}
+
 export const SHAPE_BY_KIND = Object.fromEntries(SHAPES.map((s) => [s.kind, s])) as Record<ShapeKind, ShapeDef>
 
 /** Human label for what `size` means for a shape. */
@@ -204,10 +232,12 @@ export function generateShape(spec: ShapeSpec, n: number): ShapePoints {
     cache.set(key, unit)
     if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value as string)
   }
-  return { points: scale(unit.points.slice(), spec.size), colors: unit.colors ? unit.colors.slice() : null, order: unit.order, glyphs: unit.glyphs }
+  return { points: scale(unit.points.slice(), spec.size), colors: unit.colors ? unit.colors.slice() : null, order: unit.order, glyphs: unit.glyphs, parts: unit.parts, frame: unit.frame }
 }
 
 function cacheKey(spec: ShapeSpec, n: number): string {
+  // Joints only animate the drones; they don't change where drones sit.
+  if (spec.kind === 'model') return `${n}|model|${spec.relief ? 'relief|' : ''}${solidsKey(spec.parts)}`
   const { size: _size, ...rest } = spec as ShapeSpec & { size: number }
   return `${n}|${JSON.stringify(rest)}`
 }
@@ -254,8 +284,8 @@ function generateUnit(spec: ShapeSpec, n: number): ShapePoints {
     case 'image':
       return imageShape(spec, n)
     case 'model': {
-      const m = sampleModel(spec.parts, n)
-      return m ? { points: m.points, colors: m.colors } : plain(fibonacciSphere(n))
+      const m = sampleModel(spec.parts, n, { relief: spec.relief })
+      return m ? { points: m.points, colors: m.colors, parts: m.parts, frame: m.frame } : plain(fibonacciSphere(n))
     }
   }
 }

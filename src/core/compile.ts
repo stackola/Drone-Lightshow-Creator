@@ -9,6 +9,7 @@
 
 import type { Blend, Effect, Group, HoldKey, HoldMotion, Limits, Scene, ShowDoc, TransitionStyle, Vec3 } from './types'
 import { applyKey, hasKeys, keyMatrix, keyPose, normalizeKeys } from './keys'
+import { AnimBuilder, articulate, type Anim } from './joints'
 import {
   PLAIN, buildAnt, buildCascade, buildRain, choreoPairs, choreoPeaks, choreoPos, legCentroids, minDurationFor, sampledPeaks, wrapPos,
   TRANSITIONS, type Choreo, type FlightStyle, type TransitionInfo, type Wrap,
@@ -54,12 +55,16 @@ export interface CompiledScene {
   image: Float32Array | null
   /** Smallest distance between two drones in this formation. */
   spacing: number
+  /** The same at the end of the hold (keyframes can leave it smaller, turning parts rearranged). */
+  endSpacing: number
   /** Largest horizontal distance of any drone from the spin axis. */
   spinRadius: number
   /** Motion while held (breathe / bob / sway), on top of spin. */
   motion: HoldMotion
   /** Keyframes while held (normalized: sorted, inside the hold); empty = none. */
   keys: HoldKey[]
+  /** Moving parts (posed in the rest frame, before spin, motion and keyframes), or null. */
+  anim: Anim | null
 }
 
 /**
@@ -213,6 +218,8 @@ export interface SceneGeometry {
   layerCounts: number[]
   look: Float32Array
   image: Float32Array | null
+  /** Moving parts (joints), or null when nothing moves on its own. */
+  anim: Anim | null
 }
 
 /** Per-point look data stride: u, v, order, rand, glyphs, half-width, half-height, grid rows (see DroneLook). */
@@ -226,11 +233,12 @@ export function sceneGeometry(scene: Scene, n: number): SceneGeometry {
   const look = new Float32Array(n * LOOK)
   let image: Float32Array | null = null
   const sceneRot = isIdentityRotation(scene.rotation) ? null : rotationMatrix(scene.rotation)
+  const anim = new AnimBuilder(n)
   let o = 0
   scene.layers.forEach((layer, li) => {
     const c = counts[li]!
     if (c === 0) return
-    const { points: local, colors, order, glyphs } = generateShape(layer.shape, c)
+    const { points: local, colors, order, glyphs, parts, frame } = generateShape(layer.shape, c)
     // Rows of drones in a grid layer (LED panels): lets dot-matrix text sit on exact rows.
     const rows = layer.shape.kind === 'grid' && layer.shape.fill !== 'outline' ? gridRows(c, layer.shape.aspect) : 0
     // Normalise for effects using the unrotated local shape.
@@ -256,12 +264,14 @@ export function sceneGeometry(scene: Scene, n: number): SceneGeometry {
       image ??= new Float32Array(n * 3).fill(1)
       image.set(colors, o * 3)
     }
-    transformPoints(local, isIdentityRotation(layer.rotation) ? null : rotationMatrix(layer.rotation), layer.offset)
+    const layerRot = isIdentityRotation(layer.rotation) ? null : rotationMatrix(layer.rotation)
+    anim.addLayer(layer, local, o, { layerRot, offset: layer.offset, sceneRot, position: scene.position }, layer.shape.size, parts, frame)
+    transformPoints(local, layerRot, layer.offset)
     transformPoints(local, sceneRot, scene.position)
     points.set(local, o * 3)
     o += c
   })
-  return { points, layerOf, layerCounts: counts, look, image }
+  return { points, layerOf, layerCounts: counts, look, image, anim: anim.build() }
 }
 
 export function rotateAboutVertical(src: Float32Array, center: Vec3, angle: number, out = new Float32Array(src.length)): Float32Array {
@@ -809,7 +819,10 @@ export function compileScene(scene: Scene, index: number, n: number): CompiledSc
   const center: Vec3 = [scene.position[0], scene.position[1], scene.position[2]]
   const omega = scene.spin * DEG
   const keys = hasKeys(scene.keys) ? normalizeKeys(scene.keys, Math.max(0, scene.hold)) : []
-  let endPoints = omega === 0 ? g.points : rotateAboutVertical(g.points, center, spinAngle(omega, scene.hold, scene.hold))
+  const hold = Math.max(0, scene.hold)
+  // Moving parts end at rest, except turning ones, which can end turned.
+  const posed = g.anim && g.anim.joints.some((j) => j.kind === 'turn') ? articulate(g.anim, g.points, hold, hold, new Float32Array(n * 3)) : g.points
+  let endPoints = omega === 0 ? posed : rotateAboutVertical(posed, center, spinAngle(omega, scene.hold, scene.hold))
   if (keys.length) {
     // Where the keyframes leave the formation at the end of the hold (the next flight starts there).
     const kp = keyPose(keys, Math.max(0, scene.hold)), M = keyMatrix(kp)
@@ -817,13 +830,15 @@ export function compileScene(scene: Scene, index: number, n: number): CompiledSc
     for (let k = 0; k < n; k++) applyKey(kp, M, center, endPoints[k * 3]! - center[0], endPoints[k * 3 + 1]! - center[1], endPoints[k * 3 + 2]! - center[2], out, k * 3)
     endPoints = out
   }
+  const spacing = minPairDistance(g.points)
   let spinRadius = 0
   for (let k = 0; k < n; k++) spinRadius = Math.max(spinRadius, Math.hypot(g.points[k * 3]! - center[0], g.points[k * 3 + 2]! - center[2]))
   return {
     id: scene.id, index, points: g.points, endPoints, center, omega, hold: Math.max(0, scene.hold),
     slot: new Int32Array(n), layerOf: g.layerOf, layerCounts: g.layerCounts,
     effects: scene.layers.map((l) => l.effect), look: g.look, image: g.image,
-    spacing: minPairDistance(g.points), spinRadius, motion: scene.motion ?? NO_MOTION, keys,
+    spacing, endSpacing: endPoints === g.points || (!keys.length && posed === g.points) ? spacing : minPairDistance(endPoints),
+    spinRadius, motion: scene.motion ?? NO_MOTION, keys, anim: g.anim,
   }
 }
 

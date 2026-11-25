@@ -19,9 +19,10 @@ import { accuracyOf, areaClearanceFn, centroid2, planningLimits, zoneClearanceFn
 import { droneStateAt, evaluate } from './evaluate'
 import { findScene } from './groups'
 import { choreoPairs, choreoPeaks, sampledPeaks, scalePeaks, wrapPos, type Choreo, type PairResult, type UPeaks } from './transitions'
-import { NO_MOTION, holdPeaks, holdPose, holdRange, isMoving, moveExtents, profileInverse, profilePeaks, type HoldRange, type MotionPeaks } from './motion'
+import { NO_MOTION, holdPeaks, holdPose, holdRange, isMoving, moveExtents, profileInverse, profilePeaks, type HoldArt, type HoldRange, type MotionPeaks } from './motion'
 import type { HoldKey, HoldMotion, Limits, Scene, ShowDoc } from './types'
 import { applyKey, keyMatrix, keyPose, minScale, scaleKeys } from './keys'
+import { articulate, chainPoses, partsSeparation, slowAnim } from './joints'
 import { DEG } from './math'
 
 export type FixAction =
@@ -31,8 +32,12 @@ export type FixAction =
   | { kind: 'grid-spacing'; value: number }
   /** The formation is bigger than the airspace: use fewer drones (park the rest) or a filled style. */
   | { kind: 'fit-airspace'; sceneId: string }
-  /** Scale down spin and hold motion together. */
+  /** Scale down spin, hold motion, keyframes and moving parts together. */
   | { kind: 'calm-hold'; sceneId: string; factor: number }
+  /** Scale down only the moving parts' motion. */
+  | { kind: 'calm-parts'; sceneId: string; factor: number }
+  /** Slow the moving parts' beat: periods × factor (turns ÷ factor). */
+  | { kind: 'slow-parts'; sceneId: string; factor: number }
   /** Change a flight's transition style (sceneId null = the return flight). */
   | { kind: 'flight-style'; sceneId: string | null; style: 'direct' }
   /** Move a scene's groups apart so their formations don't overlap. */
@@ -112,11 +117,11 @@ function withinLimits(p: MotionPeaks, L: Limits): boolean {
 }
 
 /** Largest factor f ∈ [0, 1] such that spin × f and motion amount × f respect every limit. */
-export function safeHoldFactor(rels: Rel[], omega: number, hold: number, motion: HoldMotion | undefined, L: Limits, keys: HoldKey[] = []): number {
-  const at = (f: number) => holdPeaks(rels, omega * f, hold, motion ? { ...motion, amount: motion.amount * f } : NO_MOTION, keys.length ? scaleKeys(keys, f) : [])
+export function safeHoldFactor(rels: Rel[], omega: number, hold: number, motion: HoldMotion | undefined, L: Limits, keys: HoldKey[] = [], art?: (f: number) => HoldArt | undefined): number {
+  const at = (f: number) => holdPeaks(rels, omega * f, hold, motion ? { ...motion, amount: motion.amount * f } : NO_MOTION, keys.length ? scaleKeys(keys, f) : [], art?.(f))
   if (withinLimits(at(1), L)) return 1
   let lo = 0, hi = 1
-  for (let k = 0; k < 22; k++) {
+  for (let k = 0; k < 10; k++) {
     const mid = (lo + hi) / 2
     if (withinLimits(at(mid), L)) lo = mid
     else hi = mid
@@ -315,7 +320,7 @@ interface Seq {
  */
 function holdExtents(cs: CompiledScene, f: number, vMax: number): { minY: number; maxY: number; lowK: number; highK: number; r: number; farK: number } {
   const motion = f === 1 ? cs.motion : scaleMotion(cs.motion, f)
-  if (!cs.keys.length) {
+  if (!cs.keys.length && !cs.anim) {
     const range = holdRange(cs.omega, cs.hold, motion)
     const v = verticalExtent(cs, range)
     const m = maxRadius(cs, range)
@@ -328,13 +333,15 @@ function holdExtents(cs: CompiledScene, f: number, vMax: number): { minY: number
   const [cx, cy, cz] = cs.center
   let minY = Infinity, maxY = -Infinity, r = 0, lowK = 0, highK = 0, farK = 0
   const out = [0, 0, 0]
+  const posed = cs.anim ? new Float32Array(n * 3) : cs.points
   for (let s = 0; s <= steps; s++) {
     const t = s * dt
     const pose = holdPose(cs.omega * f, cs.hold, motion, t)
     const ca = Math.cos(pose.angle) * pose.scale, sa = Math.sin(pose.angle) * pose.scale
     const kp = keyPose(keys, t), M = keyMatrix(kp)
+    if (cs.anim) articulate(cs.anim, cs.points, cs.hold, t, posed, f)
     for (let k = 0; k < n; k++) {
-      const x = cs.points[k * 3]! - cx, y = cs.points[k * 3 + 1]! - cy, z = cs.points[k * 3 + 2]! - cz
+      const x = posed[k * 3]! - cx, y = posed[k * 3 + 1]! - cy, z = posed[k * 3 + 2]! - cz
       applyKey(kp, M, cs.center, ca * x + sa * z, pose.dy + pose.scale * y, -sa * x + ca * z, out)
       if (out[1]! < minY) { minY = out[1]!; lowK = k }
       if (out[1]! > maxY) { maxY = out[1]!; highK = k }
@@ -346,22 +353,56 @@ function holdExtents(cs: CompiledScene, f: number, vMax: number): { minY: number
   return { minY: minY - margin, maxY: maxY + margin, lowK, highK, r: r + margin, farK }
 }
 
-/** Points whose trajectories bound a keyframed hold's speed, acceleration and jerk (all of them, for fleets up to 600). */
-function keyedRels(cs: CompiledScene): Rel[] {
+/**
+ * Points whose trajectories bound a hold's speed, acceleration and jerk, with
+ * each one's chain of moving parts (-1 = none). Spin, breathe, bob and sway:
+ * the extreme points. Keyframes or moving parts: all points for fleets up to
+ * 600; beyond that, each rigid piece's extreme points (its motion is affine in
+ * the point's position, so the peaks are there) plus an even sample.
+ */
+function holdRels(cs: CompiledScene): { rels: Rel[]; chains: number[] } {
   const n = cs.points.length / 3
   const [cx, cy, cz] = cs.center
+  const chainOf = (k: number) => (cs.anim ? cs.anim.chainOf[k]! : -1)
   const rel = (k: number): Rel => [cs.points[k * 3]! - cx, cs.points[k * 3 + 1]! - cy, cs.points[k * 3 + 2]! - cz]
-  if (n <= 600) return Array.from({ length: n }, (_, k) => rel(k))
-  // Motion is affine in each point's position, so its peaks are at the formation's extreme points.
-  const best = new Map<number, number>()
-  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) {
-    if (!a && !b && !c) continue
-    let bk = 0, bv = -Infinity
-    for (let k = 0; k < n; k++) { const p = rel(k); const v = a * p[0] + b * p[1] + c * p[2]; if (v > bv) { bv = v; bk = k } }
-    best.set(bk, bk)
+  if (!cs.keys.length && !cs.anim) return { rels: extremeRels(cs), chains: [] }
+  const pick = (ks: number[]) => ({ rels: ks.map(rel), chains: ks.map(chainOf) })
+  if (n <= 600) return pick(Array.from({ length: n }, (_, k) => k))
+  const groups = new Map<number, number[]>()
+  for (let k = 0; k < n; k++) { const g = chainOf(k); const l = groups.get(g); if (l) l.push(k); else groups.set(g, [k]) }
+  const best = new Set<number>()
+  for (const ks of groups.values()) {
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) {
+      if (!a && !b && !c) continue
+      let bk = ks[0]!, bv = -Infinity
+      for (const k of ks) { const p = rel(k); const v = a * p[0] + b * p[1] + c * p[2]; if (v > bv) { bv = v; bk = k } }
+      best.add(bk)
+    }
   }
-  for (let k = 0; k < n; k += Math.ceil(n / 300)) best.set(k, k)
-  return [...best.keys()].map(rel)
+  for (let k = 0; k < n; k += Math.ceil(n / 300)) best.add(k)
+  return pick([...best])
+}
+
+/** Names of a hold's moving parts, for messages. */
+function partNames(cs: CompiledScene): string {
+  const names = [...new Set(cs.anim?.joints.map((j) => j.label) ?? [])]
+  return names.slice(0, 3).join(', ') + (names.length > 3 ? '…' : '')
+}
+
+/** Moving parts of a hold for holdPeaks, with their motion scaled by f and slowed k×. */
+function holdArt(cs: CompiledScene, chains: number[], f = 1, k = 1): HoldArt | undefined {
+  if (!cs.anim) return undefined
+  const anim = slowAnim(cs.anim, k)
+  return { chains, center: cs.center, poses: (t) => chainPoses(anim, cs.hold, t, f) }
+}
+
+/** Smallest beat slow-down (≥ 1, to 0.1) that keeps a hold whose only motion is its parts within limits; null if 8× isn't enough. */
+function slowPartsFactor(cs: CompiledScene, rels: Rel[], chains: number[], L: Limits): number | null {
+  const ok = (k: number) => withinLimits(holdPeaks(rels, 0, cs.hold, NO_MOTION, [], holdArt(cs, chains, 1, k)), L)
+  if (!ok(8)) return null
+  let lo = 1, hi = 8
+  for (let i = 0; i < 9; i++) { const mid = (lo + hi) / 2; if (ok(mid)) hi = mid; else lo = mid }
+  return Math.ceil(hi * 10) / 10
 }
 
 function segmentLabel(seg: Segment | TrackSegment, sceneName: (i: number) => string): string {
@@ -417,15 +458,43 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
             time: ts.holdStart, drones: [droneOfPoint[cp.i]!, droneOfPoint[cp.j]!],
             fix: { label: 'Enlarge to safe spacing', action: { kind: 'fit-spacing', sceneId: cs.id, target: comfy } },
           })
-        } else if (cs.keys.length) {
+        } else {
+          // Moving parts: the closest approach between pieces over the hold, from their motion alone
+          // (spin, motion and keyframes move everything together; only their scale changes distances).
+          let dMin = cp.d
+          if (cs.anim) {
+            const sep = partsSeparation(cs.anim, cs.points, cs.hold, L.minSpacing)
+            if (sep && sep.d < dMin) {
+              dMin = sep.d
+              if (sep.d < stats.minDistance) { stats.minDistance = sep.d; stats.minDistanceTime = ts.holdStart + sep.t }
+              if (sep.d + EPS < L.minSpacing) {
+                const anim = cs.anim
+                const clear = (k: number) => { const r = partsSeparation(anim, cs.points, cs.hold, L.minSpacing, k); return !r || r.d + EPS >= L.minSpacing }
+                let lo = 0, hi = 1
+                for (let it = 0; it < 7; it++) { const mid = (lo + hi) / 2; if (clear(mid)) lo = mid; else hi = mid }
+                const f = Math.floor(lo * 20) / 20
+                const fix: Issue['fix'] = f >= 0.3
+                  ? { label: `Calm moving parts to ${Math.round(f * 100)}%`, action: { kind: 'calm-parts', sceneId: cs.id, factor: f } }
+                  : { label: 'Enlarge so the parts clear each other', action: { kind: 'fit-spacing', sceneId: cs.id, target: Math.ceil(comfy * (cp.d / Math.max(0.05, sep.d)) * 10) / 10 } }
+                issues.push({
+                  id: `parts:${cs.id}`, severity: 'error', kind: 'spacing', sceneId: cs.id,
+                  title: `Moving parts of “${name}” come too close`,
+                  detail: `As its parts move, ${sep.pairsBelow} pair${sep.pairsBelow === 1 ? '' : 's'} of drones pass closer than ${fmt(L.minSpacing)} m (closest ${fmt(sep.d, 2)} m).`,
+                  time: ts.holdStart + sep.t, drones: [droneOfPoint[sep.i]!, droneOfPoint[sep.j]!],
+                  fix,
+                })
+              }
+            }
+          }
+          if (cs.keys.length) {
           // Keyframes move the formation as a whole: only their scale changes spacing (exactly by that factor).
           const low = minScale(cs.keys, cs.hold)
           const ms = low.scale
-          const d = cp.d * ms
+          const d = dMin * ms
           const atKey = { t: low.t }
           if (d < stats.minDistance) { stats.minDistance = d; stats.minDistanceTime = ts.holdStart + atKey.t }
           if (d + EPS < L.minSpacing) {
-            const need = L.minSpacing / cp.d
+            const need = L.minSpacing / dMin
             const f = Math.floor(((1 - need) / (1 - ms)) * 100) / 100
             issues.push({
               id: `key-scale:${cs.id}`, severity: 'error', kind: 'spacing', sceneId: cs.id,
@@ -435,14 +504,16 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
               fix: { label: `Calm keyframes to ${Math.round(Math.max(0, f) * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor: Math.max(0, f) } },
             })
           }
+          }
         }
       }
 
       // Hold dynamics (spin, idle motion, keyframes), measured on the fastest-moving points.
       const keyed = cs.keys.length > 0
-      const movingHold = cs.omega !== 0 || isMoving(cs.motion) || keyed
-      const rels = keyed ? keyedRels(cs) : extremeRels(cs)
-      const peaks = movingHold ? holdPeaks(rels, cs.omega, cs.hold, cs.motion, cs.keys) : null
+      const animated = !!cs.anim
+      const movingHold = cs.omega !== 0 || isMoving(cs.motion) || keyed || animated
+      const { rels, chains } = holdRels(cs)
+      const peaks = movingHold ? holdPeaks(rels, cs.omega, cs.hold, cs.motion, cs.keys, holdArt(cs, chains)) : null
 
       // Altitude: spin and sway keep it; breathe scales heights about the centre, bob shifts them;
       // keyframes are sampled with a proven margin (see holdExtents).
@@ -459,7 +530,7 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
       const baseTooTall = base.maxY - base.minY > room
       const tooTall = maxY - minY > room
       let shrink: Issue['fix'] = { label: 'Shrink to fit (park spare drones)', action: { kind: 'fit-airspace' as const, sceneId: cs.id } }
-      if (tooTall && !baseTooTall && (cs.motion.kind !== 'none' || keyed)) {
+      if (tooTall && !baseTooTall && (cs.motion.kind !== 'none' || keyed || animated)) {
         const f = calmFactor((k) => { const e = holdExtents(cs, k, vMax); return e.maxY - e.minY <= room })
         shrink = { label: `Calm ${keyed ? 'keyframes' : 'motion'} to ${Math.round(f * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor: f } }
       }
@@ -497,7 +568,7 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
         // If the formation itself fits inside the circle, move it toward the centre; otherwise shrink it.
         const ch = Math.hypot(cs.center[0], cs.center[2])
         const excess = Math.ceil((r - L.maxRadius + 1) * 2) / 2
-        const canMove = !keyed && cs.spinRadius * range.scaleMax < L.maxRadius - 2 && ch > excess
+        const canMove = !keyed && !animated && cs.spinRadius * range.scaleMax < L.maxRadius - 2 && ch > excess
         issues.push({
           id: `fence:${cs.id}`, severity: 'error', kind: 'geofence', sceneId: cs.id,
           title: `“${name}” leaves the flight area`,
@@ -525,10 +596,15 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
                   : over(p.jerk, L.maxJerk) ? `acceleration changes at ${fmt(p.jerk)} m/s³ (jerk limit ${fmt(L.maxJerk)})`
                     : null
         if (what) {
-          const moving = isMoving(cs.motion) || keyed
-          const factor = safeHoldFactor(rels, cs.omega, cs.hold, cs.motion, L, cs.keys)
-          const motionName = keyed ? 'moving through its keyframes' : moving ? cs.motion.kind === 'breathe' ? 'breathing' : cs.motion.kind === 'bob' ? 'bobbing' : 'swaying' : ''
-          const fix: Issue['fix'] = moving
+          const moving = isMoving(cs.motion) || keyed || animated
+          const factor = safeHoldFactor(rels, cs.omega, cs.hold, cs.motion, L, cs.keys, (f) => holdArt(cs, chains, f))
+          const motionName = keyed ? 'moving through its keyframes' : isMoving(cs.motion) ? cs.motion.kind === 'breathe' ? 'breathing' : cs.motion.kind === 'bob' ? 'bobbing' : 'swaying' : animated ? `moving its parts (${partNames(cs)})` : ''
+          // Only the parts move: slow their beat (keeps the motion visible; acceleration drops with the square).
+          const onlyParts = animated && !keyed && !isMoving(cs.motion) && cs.omega === 0
+          const slow = onlyParts ? slowPartsFactor(cs, rels, chains, L) : null
+          const fix: Issue['fix'] = slow
+            ? { label: `Slow the moving parts ${fmt(slow)}×`, action: { kind: 'slow-parts', sceneId: cs.id, factor: slow } }
+            : moving
             ? { label: `Calm ${scene.spin ? 'spin and motion' : 'motion'} to ${Math.round(factor * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor } }
             : { label: `Slow to ${fmt(Math.trunc(scene.spin * factor * 10) / 10)}°/s`, action: { kind: 'set-spin', sceneId: cs.id, value: Math.trunc(scene.spin * factor * 10) / 10 } }
           issues.push({
@@ -552,8 +628,10 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
       const from = fromIdx >= 0 ? seq.scenes[fromIdx]! : null
       const sceneId = into?.id
       // Suggest enlarging whichever end is densest below the guarantee threshold.
-      const denser = [from, into].filter((x): x is CompiledScene => !!x && x.spacing + EPS < comfy).sort((a, b) => a.spacing - b.spacing)[0]
-      const enlarge = denser ? { label: `Enlarge “${seq.name(denser.index)}”`, action: { kind: 'fit-spacing' as const, sceneId: denser.id, target: comfy } } : undefined
+      // (The formation we leave counts as it is at the end of its hold: keyframes may have shrunk it.)
+      const ends = [from && { cs: from, d: from.endSpacing }, into && { cs: into, d: into.spacing }].filter((x): x is { cs: CompiledScene; d: number } => !!x && x.d + EPS < comfy)
+      const denser = ends.sort((a, b) => a.d - b.d)[0]
+      const enlarge = denser ? { label: `Enlarge “${seq.name(denser.cs.index)}”`, action: { kind: 'fit-spacing' as const, sceneId: denser.cs.id, target: Math.ceil(comfy * (denser.cs.spacing / Math.max(1e-3, denser.d)) * 10) / 10 } } : undefined
 
       // Dynamics: exact peaks of each leg's S-curve — or of the transition's own paths.
       const worst = { vh: 0, vu: 0, vd: 0, a: 0, j: 0, aAt: seg.t0, jAt: seg.t0, drone: 0 }

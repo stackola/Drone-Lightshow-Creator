@@ -77,16 +77,19 @@ export function alignScenesToBars(doc: ShowDoc, opts: { holdBars?: boolean } = {
         return scene
       }
       aligned++
+      // Times are stored to the millisecond; carry the rounded values forward so the error never builds up.
+      const flight = Math.round((arrival - t) * 1000) / 1000
+      const at = t + flight
       let hold = scene.hold
       if (opts.holdBars !== false) {
         const n = Math.max(1, Math.round(hold / barLen))
         // End the hold on a bar line too (if the music is still going).
         const end = bars[bars.indexOf(arrival) + n]
-        hold = end !== undefined ? end - arrival : n * barLen
+        hold = end !== undefined ? end - at : n * barLen
       }
-      const flight = Math.round((arrival - t) * 1000) / 1000
-      t = arrival + hold + split
-      return { ...scene, hold: Math.round(hold * 1000) / 1000, flight: { ...scene.flight, duration: flight } }
+      hold = Math.round(hold * 1000) / 1000
+      t = at + hold + split
+      return { ...scene, hold, flight: { ...scene.flight, duration: flight } }
     })
     doc = { ...doc, scenes }
   }

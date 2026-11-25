@@ -1,8 +1,9 @@
 // Project files: versioned JSON. Loading is defensive — any missing or
 // malformed field falls back to a sane default instead of crashing the editor.
 
-import type { AudioMeta, CascadeOrder, Effect, FlightSpec, Group, Layer, Zone, LightCue, Limits, ModelPart, Scene, ShapeSpec, ShowDoc, Site, TransitionKind, TransitionStyle, Vec3 } from './types'
+import type { AudioMeta, CascadeOrder, Effect, FlightSpec, Group, JointKind, JointMotion, Layer, Zone, LightCue, Limits, ModelJoint, ModelPart, Scene, ShapeSpec, ShowDoc, Site, TransitionKind, TransitionStyle, Vec3 } from './types'
 import { MAX_PARTS } from './model3d'
+import { MAX_JOINTS } from './joints'
 import { DEFAULT_LIMITS, DEFAULT_SITE, newId } from './defaults'
 import { SHAPE_BY_KIND } from './shapes'
 import { EFFECTS, defaultEffect } from './effects'
@@ -190,7 +191,41 @@ function layer(l: Obj): Layer | null {
     offset: vec(l.offset, [0, 0, 0]),
     rotation: vec(l.rotation, [0, 0, 0]),
     effect: effect(l.effect),
+    ...(isObj(l.joint) && jointMotion(l.joint) ? { joint: { ...jointMotion(l.joint)!, anchor: vec(l.joint.anchor, [0, 0, 0]).map((a) => Math.max(-4, Math.min(4, a))) as Vec3 } } : {}),
   }
+}
+
+const JOINT_KINDS = ['swing', 'turn', 'slide']
+
+/** A joint's motion; null if it isn't one. */
+function jointMotion(v: Obj): JointMotion | null {
+  if (!JOINT_KINDS.includes(v.kind as string)) return null
+  const kind = v.kind as JointKind
+  const axis = vec(v.axis, [0, 0, 1])
+  return {
+    kind,
+    axis: Math.hypot(...axis) > 1e-9 ? axis : [0, 0, 1],
+    amount: num(v.amount, 0, kind === 'turn' ? -720 : kind === 'slide' ? -100 : 0, kind === 'turn' ? 720 : kind === 'slide' ? 100 : 180),
+    period: num(v.period, 6, 0.5, 120),
+    phase: num(v.phase, 0, -1, 1),
+  }
+}
+
+/** Up to 64 finite [a, b] pairs. */
+function pairs(v: unknown): [number, number][] {
+  return Array.isArray(v) ? v.filter((p): p is [number, number] => Array.isArray(p) && p.length >= 2 && Number.isFinite(p[0]) && Number.isFinite(p[1])).slice(0, 64).map((p) => [num(p[0], 0, -1e4, 1e4), num(p[1], 0, -1e4, 1e4)]) : []
+}
+
+/** A 3D model's joints (dropping any that aren't). */
+function modelJoints(v: unknown): ModelJoint[] {
+  if (!Array.isArray(v)) return []
+  const out: ModelJoint[] = []
+  for (const j of v.filter(isObj).slice(0, MAX_JOINTS)) {
+    const m = jointMotion(j)
+    if (!m) continue
+    out.push({ ...m, id: str(j.id, newId('joint')).slice(0, 60), name: str(j.name, 'Joint').slice(0, 60), pivot: vec(j.pivot, [0, 0, 0]), ...(typeof j.parent === 'string' && j.parent ? { parent: j.parent.slice(0, 60) } : {}) })
+  }
+  return out
 }
 
 function shapeSpec(v: unknown): ShapeSpec | null {
@@ -205,7 +240,12 @@ function shapeSpec(v: unknown): ShapeSpec | null {
     else if (k === 'colors') out[k] = typeof x === 'string' ? x : null
   }
   out.size = num(v.size, 30, 0.1, 5000)
-  if (v.kind === 'model') out.parts = Array.isArray(v.parts) ? v.parts.map(modelPart).filter((x): x is ModelPart => !!x).slice(0, MAX_PARTS) : []
+  if (v.kind === 'model') {
+    out.parts = Array.isArray(v.parts) ? v.parts.map(modelPart).filter((x): x is ModelPart => !!x).slice(0, MAX_PARTS) : []
+    const joints = modelJoints(v.joints)
+    if (joints.length) out.joints = joints
+    if (v.relief === true) out.relief = true
+  }
   if ('fill' in base) out.fill = v.fill === 'outline' ? 'outline' : 'filled'
   if ('font' in base) out.font = v.font === 'serif' || v.font === 'pixel' ? v.font : 'sans'
   return out as unknown as ShapeSpec
@@ -213,6 +253,12 @@ function shapeSpec(v: unknown): ShapeSpec | null {
 
 /** Validate one 3D model part; malformed parts are dropped rather than crashing the editor. */
 export function modelPart(v: unknown): ModelPart | null {
+  const solid = modelSolid(v)
+  if (!solid || !isObj(v)) return solid
+  return typeof v.joint === 'string' && v.joint ? { ...solid, joint: v.joint.slice(0, 60) } : solid
+}
+
+function modelSolid(v: unknown): ModelPart | null {
   if (!isObj(v) || typeof v.type !== 'string') return null
   const pos = (x: unknown, d: number) => num(x, d, 1e-4, 1e4)
   const color = hex(v.color, '#ffffff')
@@ -225,6 +271,18 @@ export function modelPart(v: unknown): ModelPart | null {
     case 'capsule': return { type: 'capsule', from: vec(v.from, [0, 0, 0]), to: vec(v.to, [0, 1, 0]), radius: pos(v.radius, 0.2), color }
     case 'cone': return { type: 'cone', from: vec(v.from, [0, 0, 0]), to: vec(v.to, [0, 1, 0]), radius: num(v.radius, 0.3, 0, 1e4), radiusTop: num(v.radiusTop, 0, 0, 1e4), color }
     case 'torus': return { type: 'torus', center: vec(v.center, [0, 0, 0]), radius: pos(v.radius, 0.5), tube: pos(v.tube, 0.15), rotation: rot, color }
+    case 'plate': {
+      const pts = pairs(v.points)
+      return pts.length >= 3 ? { type: 'plate', center: vec(v.center, [0, 0, 0]), points: pts, depth: pos(v.depth, 0.05), rotation: rot, color } : null
+    }
+    case 'tube': {
+      const path = Array.isArray(v.path) ? v.path.slice(0, 64).map((p) => vec(p, [0, 0, 0])) : []
+      return path.length >= 2 ? { type: 'tube', path, radius: pos(v.radius, 0.05), color } : null
+    }
+    case 'lathe': {
+      const prof = pairs(v.profile).map(([r, y]) => [Math.max(0, r), y] as [number, number])
+      return prof.length >= 2 ? { type: 'lathe', center: vec(v.center, [0, 0, 0]), profile: prof, rotation: rot, color } : null
+    }
     default: return null
   }
 }
