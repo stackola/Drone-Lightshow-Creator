@@ -1,7 +1,7 @@
 // Project files: versioned JSON. Loading is defensive — any missing or
 // malformed field falls back to a sane default instead of crashing the editor.
 
-import type { AudioMeta, CascadeOrder, Effect, FlightSpec, Group, JointKind, JointMotion, Layer, Zone, LightCue, Limits, ModelJoint, ModelPart, Scene, ShapeSpec, ShowDoc, Site, TransitionKind, TransitionStyle, Vec3 } from './types'
+import type { AudioMeta, CascadeOrder, DrawingPart, Effect, FlightSpec, Group, JointKind, JointMotion, Layer, Zone, LightCue, Limits, ModelJoint, ModelPart, Scene, ShapeSpec, ShowDoc, Site, TransitionKind, TransitionStyle, Vec3 } from './types'
 import { MAX_PARTS } from './model3d'
 import { MAX_JOINTS } from './joints'
 import { DEFAULT_LIMITS, DEFAULT_SITE, newId } from './defaults'
@@ -228,6 +228,16 @@ export function modelJoints(v: unknown): ModelJoint[] {
   return out
 }
 
+/** A drawing's moving parts: name, joint and an optional outline on the picture (fractions, top-left origin). */
+export function drawingParts(v: unknown): DrawingPart[] {
+  if (!Array.isArray(v)) return []
+  return v.filter(isObj).slice(0, MAX_JOINTS).flatMap((p) => {
+    if (typeof p.joint !== 'string' || !p.joint) return []
+    const region = pairs(p.region).map(([a, b]) => [Math.max(-0.5, Math.min(1.5, a)), Math.max(-0.5, Math.min(1.5, b))] as [number, number])
+    return [{ name: str(p.name, 'Part').slice(0, 60), joint: p.joint.slice(0, 60), ...(region.length >= 3 ? { region } : {}) }]
+  })
+}
+
 function shapeSpec(v: unknown): ShapeSpec | null {
   if (!isObj(v) || typeof v.kind !== 'string' || !(v.kind in SHAPE_BY_KIND)) return null
   const base = SHAPE_BY_KIND[v.kind as ShapeSpec['kind']].create() as unknown as Obj
@@ -253,7 +263,8 @@ function shapeSpec(v: unknown): ShapeSpec | null {
       const p = Array.isArray(l.p) ? l.p.filter((x): x is number => typeof x === 'number' && Number.isFinite(x)) : []
       const pts = p.slice(0, Math.min(p.length, budget * 2) & ~1).map((x) => Math.max(-0.5, Math.min(1.5, x)))
       budget -= pts.length / 2
-      return pts.length >= 4 ? [{ p: pts, ...(l.closed === true ? { closed: true } : {}) }] : []
+      const part = typeof l.part === 'number' && Number.isInteger(l.part) && l.part >= 0 && l.part < MAX_JOINTS ? { part: l.part } : {}
+      return pts.length >= 4 ? [{ p: pts, ...(l.closed === true ? { closed: true } : {}), ...part }] : []
     })
     if (lines.length) out.lines = lines
     if (typeof v.detail === 'number') out.detail = num(v.detail, 0.5, 0, 1)
@@ -265,6 +276,14 @@ function shapeSpec(v: unknown): ShapeSpec | null {
         threshold: pic.threshold === null || pic.threshold === undefined ? null : num(pic.threshold, 0.25, 0.02, 0.95),
         ...(pic.format === 'landscape' || pic.format === 'portrait' || pic.format === 'square' ? { format: pic.format } : {}),
       }
+    }
+  }
+  if (v.kind === 'image') {
+    const parts = drawingParts(v.parts)
+    if (parts.length) {
+      out.parts = parts
+      const joints = modelJoints(v.joints)
+      if (joints.length) out.joints = joints
     }
   }
   if ('fill' in base) out.fill = v.fill === 'outline' ? 'outline' : 'filled'

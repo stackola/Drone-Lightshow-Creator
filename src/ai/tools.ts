@@ -25,7 +25,7 @@ import { contactSheet, fourViews, frontStrip } from './render'
 import { attemptFrom, createModel, lookAndFix, modelShape } from './model3d'
 import { allocate, findSceneTime, scenePointColors } from '@/core/compile'
 import { drawAndCheck } from './shapeGen'
-import { pictureFor, thresholdFor, traceSource } from './picture'
+import { animateShape, keepMotion, pictureFor, thresholdFor, traceSource } from './picture'
 import { imagesConfigured } from './openai'
 import { MAX_CUSTOM, customJobs, resolveCustoms } from './customs'
 import { findScene as findAnyScene, findGroup, groupSizes, replaceSceneIn, sceneDroneCount } from '@/core/groups'
@@ -400,15 +400,23 @@ export const TOOLS = [
   }),
   tool({
     name: 'edit_picture',
-    description: 'Adjust a drawing or traced picture formation: its style (lines, filled, adaptive), detail (fewer/bolder vs more of its lines), line sensitivity (traced pictures), or replace it with a new picture from a description. Changing style, detail or sensitivity is instant and free; a new picture is drawn and checked.',
+    description: 'Adjust a drawing or traced picture formation: its style (lines, filled, adaptive), detail (fewer/bolder vs more of its lines), line sensitivity (traced pictures), replace it with a new picture from a description, or make parts of it move on their own (wings flapping, a hand waving, a wheel turning) and adjust those moving parts. Style, detail, sensitivity and moving-part adjustments are instant and free; a new picture or new motion is drawn or marked by Claude and checked.',
     schema: z.object({
       scene_id: sceneRef, layer_index: z.number().optional(),
       style: z.enum(['lines', 'filled', 'adaptive']).optional(),
       detail: z.number().optional().describe('0–1: lower leaves out more lines (cleaner with few drones), higher keeps more'),
       sensitivity: z.number().optional().describe('Traced pictures, 0–1: higher picks up fainter lines'),
       new_description: z.string().optional().describe('Draw a new picture of this instead'),
+      motion: z.string().optional().describe('Make parts of it move on their own while held — what moves and how, e.g. "both wings flap slowly from the shoulders", "the right hand waves", "the wheel turns". Claude outlines the parts on the picture, puts their hinges and checks them in motion; unsafe amounts are calmed automatically, keeping the beat. "none" makes it still'),
+      moving_parts: z.array(z.object({
+        name: z.string().describe('The moving part’s name (as in the show state)'),
+        kind: z.enum(['swing', 'turn', 'slide']).optional(),
+        amount: z.number().optional().describe('swing: degrees either way; turn: degrees per second; slide: metres either way; 0 stops it'),
+        period_seconds: z.number().optional(),
+        phase: z.number().optional(),
+      })).optional().describe('Adjust its existing moving parts'),
     }),
-    label: (i) => (i.new_description ? `Drawing a new picture: ${i.new_description}` : 'Adjusting the picture'),
+    label: (i) => (i.new_description ? `Drawing a new picture: ${i.new_description}` : i.motion ? `Animating: ${i.motion}` : 'Adjusting the picture'),
     run: async (i, ctx) => {
       const { scene, sub } = findScene(i.scene_id)
       const li = Math.round(i.layer_index ?? 0)
@@ -420,16 +428,37 @@ export const TOOLS = [
         shape = imagesConfigured() ? await pictureFor(i.new_description, count, sub.limits, ctx.signal) : (await drawAndCheck(i.new_description, count, ctx.signal)).shape
       } else if (shape.picture && (i.detail !== undefined || i.sensitivity !== undefined)) {
         const source = { ...shape.picture, ...(i.detail !== undefined ? { detail: Math.max(0, Math.min(1, i.detail)) } : {}), ...(i.sensitivity !== undefined ? { threshold: thresholdFor(i.sensitivity) } : {}) }
-        shape = { ...(await traceSource(source, shape.name)), ...(shape.style ? { style: shape.style } : {}) }
+        // Re-traced from the same picture: its moving parts (outlines on the picture) still fit.
+        shape = keepMotion(shape, { ...(await traceSource(source, shape.name)), ...(shape.style ? { style: shape.style } : {}) })
       } else if (i.detail !== undefined) {
         shape = { ...shape, detail: Math.max(0, Math.min(1, i.detail)) }
       }
       if (i.style) shape = { ...shape, style: i.style }
+      let note = ''
+      if (i.motion !== undefined) {
+        const m = await animateShape(shape, i.motion, count, ctx.signal)
+        shape = m.shape
+        note = m.note
+      }
+      if (i.moving_parts?.length) {
+        const joints = shape.joints ?? []
+        const unknown = i.moving_parts.filter((x) => !joints.some((j) => x.name.toLowerCase() === j.name.toLowerCase() || x.name === j.id))
+        if (unknown.length) throw new ToolError(`No moving part named ${unknown.map((x) => `“${x.name}”`).join(', ')}. Its moving parts: ${joints.map((j) => j.name).join(', ') || 'none'} (use motion to add some).`)
+        shape = {
+          ...shape,
+          joints: joints.map((j) => {
+            const p = i.moving_parts!.find((x) => x.name.toLowerCase() === j.name.toLowerCase() || x.name === j.id)
+            return p ? { ...j, ...(p.kind ? { kind: p.kind } : {}), ...(p.amount !== undefined ? { amount: p.amount } : {}), ...(p.period_seconds !== undefined ? { period: Math.max(0.5, p.period_seconds) } : {}), ...(p.phase !== undefined ? { phase: p.phase } : {}) } : j
+          }),
+        }
+      }
       let s: Scene = { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, shape: { ...shape, size: layer.shape.size }, ...(i.new_description ? { effect: defaultEffect('image') } : {}) } : l)) }
       s = fitToAirspace(fitScene(s, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'exact'), sub)
+      if (hasMovingParts(s)) s = settleParts(s, sub, { prefer: 'calm' })
       replaceScene(scene.id, s, `Adjust ${shape.name}`)
       const after = s.layers[li]!.shape as typeof shape
-      return ok(`Adjusted “${after.name}”`, `Layer ${li} of “${s.name}”: ${after.lines?.length ?? 0} strokes, style ${after.style ?? 'lines'}, ${s.layers[li]!.shape.size} m wide. Use look_at_scenes to see it.`)
+      const moving = after.joints?.length ? ` Moving parts (calmed to what the drones can fly): ${after.joints.map((j) => `${j.name} ${describeJoint(j)}`).join('; ')}.${note ? ` ${note}` : ''}` : ''
+      return ok(`Adjusted “${after.name}”`, `Layer ${li} of “${s.name}”: ${after.lines?.length ?? 0} strokes, style ${after.style ?? 'lines'}, ${s.layers[li]!.shape.size} m wide.${moving} Use look_at_scenes to see it.`)
     },
   }),
   tool({

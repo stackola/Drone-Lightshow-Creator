@@ -75,9 +75,20 @@ export function jointMoves(j: JointMotion | undefined): boolean {
   return !!j && j.amount !== 0 && Number.isFinite(j.amount) && Math.hypot(...j.axis) > 1e-9
 }
 
-/** True when a scene has moving parts (a moving shape, or a model with moving joints). */
+/** A shape's moving parts and their joints: 3D models, drawings and traced pictures. Null for other shapes. */
+export function shapeJoints(shape: Layer['shape']): { parts: { joint?: string; name?: string }[]; joints: ModelJoint[] } | null {
+  if (shape.kind === 'model') return { parts: shape.parts, joints: shape.joints ?? [] }
+  if (shape.kind === 'image') return { parts: shape.parts ?? [], joints: shape.joints ?? [] }
+  return null
+}
+
+/** True when a scene has moving parts (a moving shape, or a model or drawing with moving joints). */
 export function hasMovingParts(scene: Scene): boolean {
-  return scene.layers.some((l) => jointMoves(l.joint) || (l.shape.kind === 'model' && (l.shape.joints ?? []).some((j) => jointMoves(j) && l.shape.kind === 'model' && l.shape.parts.some((p) => p.joint === j.id))))
+  return scene.layers.some((l) => {
+    if (jointMoves(l.joint)) return true
+    const sj = shapeJoints(l.shape)
+    return !!sj && sj.joints.some((j) => jointMoves(j) && usedJoints(sj.joints, sj.parts).has(j.id))
+  })
 }
 
 // --- Timing ------------------------------------------------------------------------------
@@ -196,9 +207,9 @@ export class AnimBuilder {
 
   /**
    * One layer's points (local, before its rotation and offset), from `o` on.
-   * `parts`/`frame`: a 3D model's part per point and its model → local mapping.
+   * `parts`/`frame`: a model's or drawing's part per point, and its pivot units → local mapping.
    */
-  addLayer(layer: Layer, local: Float32Array, o: number, fr: LayerFrame, size: number, parts?: Uint16Array, frame?: { center: Vec3; extent: number }): void {
+  addLayer(layer: Layer, local: Float32Array, o: number, fr: LayerFrame, size: number, parts?: Uint16Array, frame?: { center: Vec3; extent: number; scale?: Vec3 }): void {
     const c = local.length / 3
     let layerJoint = -1
     if (jointMoves(layer.joint)) {
@@ -211,12 +222,14 @@ export class AnimBuilder {
       layerJoint = this.joints.length
       this.joints.push(compiledJoint(j, toWorld(fr, p), dirToWorld(fr, j.axis), -1, 'shape'))
     }
-    // A model's own joints, hanging off the shape's joint (if any).
+    // A model's or drawing's own joints, hanging off the shape's joint (if any).
     const modelJoint = new Map<string, number>()
-    if (layer.shape.kind === 'model' && parts && frame && layer.shape.joints?.length) {
-      const defs = layer.shape.joints.slice(0, MAX_JOINTS)
+    const sj = shapeJoints(layer.shape)
+    if (sj && parts && frame && sj.joints.length) {
+      const defs = sj.joints.slice(0, MAX_JOINTS)
       const byId = new Map(defs.map((d) => [d.id, d]))
-      const used = new Set(layer.shape.parts.map((p) => p.joint).filter((x): x is string => !!x))
+      const used = new Set(sj.parts.map((p) => p.joint).filter((x): x is string => !!x))
+      const sc = frame.scale ?? [1, 1, 1]
       const resolve = (id: string, depth: number): number => {
         const known = modelJoint.get(id)
         if (known !== undefined) return known
@@ -225,7 +238,7 @@ export class AnimBuilder {
         const parent = d.parent && d.parent !== id ? resolve(d.parent, depth + 1) : layerJoint
         if (!jointMoves(d)) { modelJoint.set(id, parent); return parent }
         const s = size / (frame.extent || 1)
-        const pivot = toWorld(fr, [(d.pivot[0] - frame.center[0]) * s, (d.pivot[1] - frame.center[1]) * s, (d.pivot[2] - frame.center[2]) * s])
+        const pivot = toWorld(fr, [0, 1, 2].map((a) => ((d.pivot[a] ?? 0) - frame.center[a]!) * sc[a]! * s) as Vec3)
         const idx = this.joints.length
         this.joints.push(compiledJoint(d, pivot, dirToWorld(fr, d.axis), parent, d.name || 'part'))
         modelJoint.set(id, idx)
@@ -236,8 +249,8 @@ export class AnimBuilder {
     if (layerJoint < 0 && !modelJoint.size) return
     for (let k = 0; k < c; k++) {
       let inner = layerJoint
-      if (parts && modelJoint.size && layer.shape.kind === 'model') {
-        const id = layer.shape.parts[parts[k]!]?.joint
+      if (parts && modelJoint.size && sj) {
+        const id = sj.parts[parts[k]!]?.joint
         if (id && modelJoint.has(id)) inner = modelJoint.get(id)!
       }
       if (inner < 0) continue
@@ -414,11 +427,11 @@ export function partsSeparation(anim: Anim, rest: Float32Array, hold: number, sp
 // --- Previews ------------------------------------------------------------------------------
 
 /**
- * A 3D model's drones at rest and at both ends of its motion (the first
- * swinging or sliding joint's beat, or a quarter turn), in model space
+ * A 3D model's or drawing's drones at rest and at both ends of its motion (the
+ * first swinging or sliding joint's beat, or a quarter turn), in its own frame
  * scaled by `size`. Null when nothing moves.
  */
-export function modelPoses(spec: Extract<Layer['shape'], { kind: 'model' }>, n: number, generate: (spec: Layer['shape'], n: number) => { points: Float32Array; parts?: Uint16Array; frame?: { center: Vec3; extent: number } }): { label: string; points: Float32Array }[] | null {
+export function modelPoses(spec: Extract<Layer['shape'], { kind: 'model' | 'image' }>, n: number, generate: (spec: Layer['shape'], n: number) => { points: Float32Array; parts?: Uint16Array; frame?: { center: Vec3; extent: number; scale?: Vec3 } }): { label: string; points: Float32Array }[] | null {
   const g = generate(spec, n)
   const b = new AnimBuilder(n)
   const layer: Layer = { id: 'm', shape: spec, weight: 1, offset: [0, 0, 0], rotation: [0, 0, 0], effect: { kind: 'solid', color: '#ffffff', brightness: 1 } }
@@ -445,7 +458,7 @@ export function scaleJoints(scene: Scene, f: number): Scene {
   const layers = scene.layers.map((l) => {
     let out = l
     if (l.joint && jointMoves(l.joint)) { out = { ...out, joint: { ...l.joint, amount: round(l.joint) } }; changed = true }
-    if (l.shape.kind === 'model' && l.shape.joints?.length) {
+    if ((l.shape.kind === 'model' || l.shape.kind === 'image') && l.shape.joints?.length) {
       out = { ...out, shape: { ...l.shape, joints: l.shape.joints.map((j) => (jointMoves(j) ? { ...j, amount: round(j) } : j)) } }
       changed = true
     }
@@ -472,7 +485,7 @@ export function slowJoints(scene: Scene, k: number): Scene {
     ...scene,
     layers: scene.layers.map((l) => {
       let out = l.joint ? { ...l, joint: slow(l.joint) } : l
-      if (l.shape.kind === 'model' && l.shape.joints?.length) out = { ...out, shape: { ...l.shape, joints: l.shape.joints.map(slow) } }
+      if ((l.shape.kind === 'model' || l.shape.kind === 'image') && l.shape.joints?.length) out = { ...out, shape: { ...l.shape, joints: l.shape.joints.map(slow) } }
       return out
     }),
   }

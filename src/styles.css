@@ -581,6 +581,9 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent-2); c
 .pic-pair figcaption { font-size: 11px; color: var(--faint); margin-top: 4px; text-align: center; }
 .pic-controls { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .pic-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0; }
+.pic-motion { display: flex; flex-direction: column; gap: 4px; }
+.pic-motion ul { margin: 0; padding-left: 16px; }
+.pic-motion img { width: 100%; border-radius: 8px; border: 1px solid var(--line); background: #0b0e15; }
 .pic-history { display: flex; gap: 6px; margin-top: 10px; overflow-x: auto; }
 .pic-thumb { border: 1px solid var(--line); border-radius: 6px; padding: 2px; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; color: var(--muted); font-size: 11px; }
 .pic-thumb img { width: 56px; height: 56px; object-fit: contain; background: #000; border-radius: 4px; }

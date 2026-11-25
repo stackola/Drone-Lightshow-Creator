@@ -154,3 +154,67 @@ export function ModelJoints({ scene, layer }: { scene: Scene; layer: Layer }) {
     </>
   )
 }
+
+type Picture = Extract<Layer['shape'], { kind: 'image' }>
+
+/**
+ * A drawing's or traced picture's moving parts. The parts themselves come from the drawing (its
+ * part groups) or from outlines on the picture (marked in the studio); here their motion, hinge
+ * and attachment can be changed, or a part removed (it then stays still).
+ */
+export function DrawingJoints({ scene, layer, onMark }: { scene: Scene; layer: Layer; onMark?: () => void }) {
+  const shape = layer.shape as Picture
+  const parts = shape.parts ?? []
+  const joints = shape.joints ?? []
+  const up = (recipe: (m: Draft<Picture>) => void, label: string, key?: string) =>
+    updateScene(scene.id, (s) => { const l = s.layers.find((x) => x.id === layer.id); if (l && l.shape.kind === 'image') recipe(l.shape as Draft<Picture>) }, label, key)
+  const remove = (jointId: string) => up((m) => {
+    const gone = (m.joints ?? []).find((x) => x.id === jointId)
+    m.joints = (m.joints ?? []).filter((x) => x.id !== jointId).map((x) => (x.parent === jointId ? { ...x, parent: gone?.parent } : x))
+    for (const x of m.joints) if (!x.parent) delete x.parent
+    const idx = (m.parts ?? []).findIndex((p) => p.joint === jointId)
+    if (idx >= 0) {
+      m.parts!.splice(idx, 1)
+      // Strokes keep pointing at their own part.
+      for (const l of m.lines ?? []) { if (l.part === idx) delete l.part; else if (l.part !== undefined && l.part > idx) l.part-- }
+    }
+    if (!m.parts?.length) { delete m.parts; delete m.joints }
+  }, 'Remove moving part')
+  return (
+    <>
+      <div className="subhead">
+        Moving parts
+        {onMark && <button className="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={onMark} title="Mark the parts that move on the picture (Claude outlines them and puts their hinges)"><Plus size={12} /> Mark</button>}
+      </div>
+      {!parts.length && <p className="hint" style={{ margin: '0 0 4px' }}>{onMark ? 'Parts of the picture can move on their own: wings that flap, a hand that waves. Mark them in the studio.' : 'Parts of the drawing can move on their own: wings that flap, a hand that waves. Ask the copilot, or describe the motion when you describe the formation.'}</p>}
+      {parts.map((p) => {
+        const j = joints.find((x) => x.id === p.joint)
+        if (!j) return null
+        const k = `${scene.id}:${layer.id}:${j.id}`
+        const upJ = (recipe: (x: Draft<ModelJoint>) => void, label: string, key?: string) => up((m) => { const x = m.joints?.find((y) => y.id === j.id); if (x) recipe(x) }, label, key)
+        return (
+          <div key={j.id} className="joint-card">
+            <div className="joint-head">
+              <input className="input" value={j.name} aria-label="Part name" onChange={(e) => upJ((x) => { x.name = e.target.value }, 'Rename part', `jname:${k}`)} />
+              <button className="btn ghost icon sm danger" aria-label="Remove moving part" title="Remove moving part (it stays still)" onClick={() => remove(j.id)}><Trash2 size={12} /></button>
+            </div>
+            <p className="hint" style={{ margin: '0 0 4px' }}>{p.region ? 'Everything inside its outline on the picture moves.' : 'Its lines in the drawing move.'}</p>
+            <Row label="Hinge at" title="Where it is hinged, on the picture: from its left edge and from its top (0–1)">
+              <NumberField value={j.pivot[0]} step={0.01} min={-0.5} max={1.5} label="→" onChange={(v) => upJ((x) => { x.pivot = [v, x.pivot[1], 0] }, 'Move pivot', `jpx:${k}`)} />
+              <NumberField value={j.pivot[1]} step={0.01} min={-0.5} max={1.5} label="↓" onChange={(v) => upJ((x) => { x.pivot = [x.pivot[0], v, 0] }, 'Move pivot', `jpy:${k}`)} />
+            </Row>
+            {joints.length > 1 && (
+              <Row label="Attached to" title="Moves along with another part, like a wingtip with its wing">
+                <select className="select" style={{ flex: 1 }} value={j.parent ?? ''} aria-label="Attached to" onChange={(e) => upJ((x) => { if (e.target.value) x.parent = e.target.value; else delete x.parent }, 'Attach part')}>
+                  <option value="">The body (nothing)</option>
+                  {joints.filter((x) => x.id !== j.id && x.parent !== j.id).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                </select>
+              </Row>
+            )}
+            <JointFields value={j} k={k} onChange={(patch, label, key) => upJ((x) => { Object.assign(x, patch) }, label, key)} />
+          </div>
+        )
+      })}
+    </>
+  )
+}

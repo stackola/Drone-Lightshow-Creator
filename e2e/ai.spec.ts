@@ -199,6 +199,47 @@ test('Describe a formation: words become a drawing become drones', async ({ page
   })).toBeGreaterThanOrEqual(2)
 })
 
+// A bird whose wings are part groups with hinges at the shoulders (mirrored, so they rise together).
+const BIRD_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
+<ellipse cx="200" cy="230" rx="22" ry="50" fill="none" stroke="#ffb020" stroke-width="6"/>
+<circle cx="200" cy="165" r="14" fill="none" stroke="#ffd060" stroke-width="6"/>
+<g data-part="Left wing" data-motion="swing" data-pivot="182 205" data-axis="0 0 -1" data-amount="16" data-period="10">
+  <path d="M182 205 Q120 150 40 130 Q90 200 182 212" fill="none" stroke="#38bdf8" stroke-width="6"/>
+</g>
+<g data-part="Right wing" data-motion="swing" data-pivot="218 205" data-amount="16" data-period="10">
+  <path d="M218 205 Q280 150 360 130 Q310 200 218 212" fill="none" stroke="#818cf8" stroke-width="6"/>
+</g>
+</svg>`
+
+test('Describe a formation with moving parts: the wings flap, hinged at the shoulders', async ({ page }) => {
+  const seen = await mockClaude(page, (body) => {
+    const tool = (body.tools as { name: string }[] | undefined)?.[0]?.name
+    if (tool === 'submit_review') return { blocks: [{ type: 'tool_use', id: 'rev_1', name: 'submit_review', input: { critique: 'The wings hinge cleanly at the shoulders.', done: true } }], stop: 'tool_use' }
+    return { blocks: [{ type: 'tool_use', id: 'draw_1', name: 'submit_drawing', input: { name: 'Bird', svg: BIRD_SVG } }], stop: 'tool_use' }
+  })
+  await open(page)
+  await page.getByRole('button', { name: 'AI', exact: true }).click()
+  await page.getByText('Describe a formation…').click()
+  await page.getByLabel('What should the drones draw?').fill('a bird flapping its wings')
+  await page.getByRole('button', { name: 'Draw' }).click()
+  await expect(page.getByText(/Moving parts: Left wing swings ±16° every 10 s; Right wing swings ±16° every 10 s/)).toBeVisible({ timeout: 15000 })
+  await expect(page.getByAltText('Bird in motion')).toBeVisible()
+  // Claude saw the drones at rest and at both ends of the motion.
+  const review = (seen[1]!.body.messages as Msg[])[0]!.content as { type: string; text?: string }[]
+  expect(review.filter((b) => b.type === 'image')).toHaveLength(3)
+  expect(review.some((b) => b.text?.includes('Its moving parts (Left wing swings ±16° every 10 s'))).toBe(true)
+  await page.getByRole('button', { name: 'Add as new scene' }).click()
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 20000 })
+  // The inspector shows both wings with their hinges; the strokes are tagged with their wing.
+  await expect(page.locator('.joint-card')).toHaveCount(2)
+  await expect(page.locator('.joint-card').first()).toContainText('Its lines in the drawing move')
+  await expect.poll(() => page.evaluate(() => {
+    const doc = JSON.parse(localStorage.getItem('dsd.doc.v1') ?? 'null')
+    const s = doc?.scenes?.find((x: { name: string }) => x.name === 'Bird')?.layers?.[0]?.shape
+    return [s?.parts?.map((p: { name: string }) => p.name), s?.lines?.filter((l: { part?: number }) => l.part !== undefined).length, s?.joints?.[0]?.axis]
+  })).toEqual([['Left wing', 'Right wing'], 2, [0, 0, -1]])
+})
+
 test('Client pitch is written from the real show (with images) and streams in', async ({ page }) => {
   const seen = await mockClaude(page, () => ({ blocks: [{ type: 'text', text: '# A sky that says hello\n\nFor **[client]**, 200 drones…\n\n## The show\n- 0:36 A sunrise disc\n- 0:59 HELLO' }], stop: 'end_turn' }))
   await open(page)
@@ -360,4 +401,46 @@ test('Picture to drones: Claude writes the picture, it is traced into drones at 
   await expect(page.locator('.cost-pop-row', { hasText: /^.*Picture\s*1×/ })).toContainText('$0.05')
   await page.getByRole('button', { name: 'Prices & history…' }).click()
   await expect(page.getByRole('dialog', { name: 'AI settings' })).toContainText('Look & fix (picture)')
+})
+
+test('Picture to drones with motion: Claude outlines the moving part on the picture, checks it, and it survives a re-trace', async ({ page }) => {
+  await page.route('https://api.openai.com/**', async (route) => {
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })
+    return route.fulfill({ status: 200, headers: { ...CORS, 'content-type': 'application/json' }, body: JSON.stringify({ data: [{ b64_json: LINE_ART_PNG }], usage: { input_tokens: 105, output_tokens: 439 } }) })
+  })
+  const seen = await mockClaude(page, (body) => {
+    const tool = (body.tools as { name: string }[] | undefined)?.[0]?.name
+    if (tool === 'submit_description') return { blocks: [{ type: 'tool_use', id: 'd1', name: 'submit_description', input: { name: 'Swaying peak', prompt: 'A round frame around a single mountain peak with a small sun above it.', format: 'square', motion: 'the peak sways gently' } }], stop: 'tool_use' }
+    if (tool === 'submit_review') return { blocks: [{ type: 'tool_use', id: 'r1', name: 'submit_review', input: { critique: 'Reads clearly.', done: true } }], stop: 'tool_use' }
+    // Motion: first the parts, then (looking at them in motion) approval.
+    const looking = JSON.stringify(body.messages).includes('Your moving parts')
+    if (looking) return { blocks: [{ type: 'tool_use', id: 'm2', name: 'submit_motion', input: { note: 'The peak sways whole, hinged at its base.', done: true } }], stop: 'tool_use' }
+    return { blocks: [{ type: 'tool_use', id: 'm1', name: 'submit_motion', input: { note: 'The peak sways from its base.', parts: [{ name: 'Peak', outline: [[0.3, 0.38], [0.7, 0.38], [0.7, 0.66], [0.3, 0.66]], pivot: [0.5, 0.64], motion: 'swing', amount: 10, period: 12 }] } }], stop: 'tool_use' }
+  })
+  await open(page)
+  await page.evaluate(() => localStorage.setItem('dsd.openai.v1', JSON.stringify({ apiKey: 'sk-test', model: 'gpt-image-2.5-flare', quality: 'medium' })))
+  await page.getByRole('button', { name: 'AI', exact: true }).click()
+  await page.getByText('Picture to drones…').click()
+  await page.getByLabel('What should the drones show?').fill('a mountain peak swaying')
+  await page.getByRole('button', { name: /Create/ }).click()
+  const motion = page.locator('.pic-motion')
+  await expect(motion).toContainText('Peak swings ±10° every 12 s', { timeout: 20000 })
+  await expect(motion).toContainText('The peak sways whole, hinged at its base.')
+  await expect(page.getByAltText('Swaying peak in motion')).toBeVisible()
+  await expect(page.getByLabel('Motion', { exact: true })).toHaveValue('the peak sways gently')
+  // Claude marked it on the picture with a coordinate grid, then saw it at both ends of the motion.
+  const calls = seen.filter((c) => (c.body.tools as { name: string }[])[0]!.name === 'submit_motion')
+  expect(calls).toHaveLength(2)
+  expect(((calls[1]!.body.messages as Msg[])[0]!.content as { type: string }[]).filter((b) => b.type === 'image')).toHaveLength(2)
+  // A re-trace (new detail) keeps the moving part: its outline is on the picture.
+  await page.getByLabel('Detail').fill('0.3')
+  await expect(motion).toContainText('Peak swings ±10° every 12 s')
+  await page.getByRole('button', { name: /Add as new scene/ }).click()
+  await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 20000 })
+  await expect(page.locator('.joint-card')).toHaveCount(1)
+  await expect(page.locator('.joint-card')).toContainText('Everything inside its outline on the picture moves')
+  // Removing it leaves the picture still.
+  await page.getByRole('button', { name: 'Remove moving part' }).click()
+  await expect(page.locator('.joint-card')).toHaveCount(0)
+  await expect(page.getByText('Parts of the picture can move on their own')).toBeVisible()
 })

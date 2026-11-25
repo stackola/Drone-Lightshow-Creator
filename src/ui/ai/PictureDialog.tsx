@@ -1,29 +1,31 @@
 // Picture to drones: describe → Claude writes the picture description →
 // an image model draws it as glowing line art → traced into drones at any
-// count → Claude compares and fixes. Every stage can be re-run on its own:
-// the drone count and detail re-trace instantly from the kept picture.
+// count → Claude compares and fixes → (optionally) Claude marks the parts
+// that move. Every stage can be re-run on its own: the drone count and detail
+// re-trace instantly from the kept picture, and keep the motion.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ImagePlus, Loader2, RefreshCw, Sparkles, Upload, Wrench } from 'lucide-react'
+import { Check, ImagePlus, Loader2, Move, RefreshCw, Sparkles, Upload, Wrench } from 'lucide-react'
 import { findScene, sceneDroneCount } from '@/core/groups'
 import { generateShape } from '@/core/shapes'
+import { describeJoint } from '@/core/joints'
 import { defaultEffect } from '@/core/effects'
 import type { DrawingStyle, PictureSource } from '@/core/types'
 import { aiConfigured, describeError } from '@/ai/client'
 import { imagesConfigured, loadImageSettings } from '@/ai/openai'
 import { estimateImageCost, formatUsd, typicalCost, useCosts } from '@/ai/costs'
 import { CostMeter } from './CostMeter'
-import { compactPicture, createPicture, describeFit, expandPrompt, newPicture, pictureFit, reviewPicture, thresholdFor, traceSource, type PictureAttempt } from '@/ai/picture'
+import { animatePicture, compactPicture, createPicture, describeFit, expandPrompt, keepMotion, motionStrip, newPicture, pictureFit, reviewPicture, thresholdFor, traceSource, withMotion, type PictureAttempt } from '@/ai/picture'
 import { dronesPng } from '@/ai/render'
 import { getState, useStore } from '@/state/store'
-import { addPictureScene, setLayerShape, updateScene } from '@/state/actions'
+import { addPictureScene, setLayerShape, settleSceneParts, updateScene } from '@/state/actions'
 import { pickFile } from '@/state/persist'
 import { Modal, NumberField, Row, Segmented, Toggle } from '../components/controls'
 import { ApiKeyForm, ImageKeyForm } from './AiSettings'
 
 const EXAMPLES = ['bride and groom dancing', 'a bridal bouquet of roses', 'a champagne bottle popping', 'a phoenix rising', 'a lighthouse with beams', 'a dragon']
 
-type Busy = 'writing' | 'drawing' | 'looking' | 'tracing' | null
+type Busy = 'writing' | 'drawing' | 'looking' | 'moving' | 'tracing' | null
 
 /** The picture formation being improved (opened from the inspector), if any. */
 function initial(): { attempt: PictureAttempt | null; drones: number } {
@@ -50,6 +52,8 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
   const [prompt, setPrompt] = useState(init.attempt?.source.prompt ?? '')
   const [busy, setBusy] = useState<Busy>(null)
   const [error, setError] = useState<string | null>(null)
+  // What should move (from the request, or typed here).
+  const [motionText, setMotionText] = useState('')
   const controller = useRef<AbortController | null>(null)
   const current = attempts[selected]
   // Costs: everything since this studio opened, and what the next action will likely cost.
@@ -61,10 +65,15 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
     picture: typicalCost(costEntries, 'Picture', pictureFallback, imageSettings.model),
     describe: typicalCost(costEntries, 'Picture description', 0.01),
     look: typicalCost(costEntries, 'Look & fix (picture)', 0.03),
+    motion: typicalCost(costEntries, 'Motion (picture)', 0.03) * 2,
   }
   const createEst = est.describe + est.picture + est.look
 
   useEffect(() => { if (current) setPrompt(current.source.prompt) }, [current?.source.prompt]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (current?.motion) setMotionText(current.motion) }, [current?.motion])
+
+  // The moving parts at rest and at both ends of their motion (front view).
+  const strip = useMemo(() => (current?.shape.joints?.length ? motionStrip(current.shape, Math.max(20, drones)) : null), [current, drones])
 
   // Drones at the chosen count: instant, from the traced picture.
   const preview = useMemo(() => {
@@ -89,13 +98,29 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
     setSelected(out.length - 1)
   })
 
-  /** A new picture from the (edited) description, keeping everything else. */
+  /** Mark the moving parts of a picture attempt (Claude), when it should move. */
+  const animated = async (a: PictureAttempt, request: string | undefined, signal: AbortSignal): Promise<PictureAttempt> => {
+    if (!request?.trim()) return a
+    setBusy('moving')
+    const m = await animatePicture(a, request, drones, signal)
+    return { ...a, shape: m.shape, motion: request, motionNote: m.note }
+  }
+
+  /** A new picture from the (edited) description, keeping everything else (and animating it the same way). */
   const redraw = () => run(async (signal) => {
     setBusy('drawing')
-    const next = await newPicture(current?.name ?? description, prompt, drones, current?.source.detail ?? 0.6, signal, current?.source.format ?? 'square')
+    const next = await animated(await newPicture(current?.name ?? description, prompt, drones, current?.source.detail ?? 0.6, signal, current?.source.format ?? 'square'), current?.shape.joints?.length ? current.motion ?? motionText : undefined, signal)
     setAttempts((a) => [...a, next])
     setSelected(attempts.length)
   })
+
+  /** Claude marks what moves on the current picture (or the motion is removed). */
+  const animate = () => run(async (signal) => {
+    if (!current) return
+    const next = await animated(current, motionText, signal)
+    setAttempts((a) => a.map((x, i) => (i === selected ? next : x)))
+  })
+  const stopMotion = () => setAttempts((a) => a.map((x, i) => (i === selected ? { ...x, shape: withMotion(x.shape, null), motionNote: undefined } : x)))
 
   const expandOnly = () => run(async (signal) => {
     setBusy('writing')
@@ -110,7 +135,7 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
     const source = { ...current.source, ...patch }
     setBusy('tracing')
     void traceSource(source, current.name).then((traced) => {
-      const shape = { ...traced, ...(current.shape.style ? { style: current.shape.style } : {}) }
+      const shape = keepMotion(current.shape, { ...traced, ...(current.shape.style ? { style: current.shape.style } : {}) })
       setAttempts((a) => a.map((x, i) => (i === selected ? { ...x, source, shape, critique: undefined, verdict: undefined } : x)))
       setBusy(null)
     }, (err) => { setError(describeError(err)); setBusy(null) })
@@ -125,7 +150,7 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
     if (r.done || (!r.new_picture && r.detail === undefined && r.sensitivity === undefined && !r.style)) return
     if (r.new_picture?.trim()) {
       setBusy('drawing')
-      const next = await newPicture(current.name, r.new_picture, drones, r.detail ?? current.source.detail, signal, r.format ?? current.source.format ?? 'square')
+      const next = await animated(await newPicture(current.name, r.new_picture, drones, r.detail ?? current.source.detail, signal, r.format ?? current.source.format ?? 'square'), current.shape.joints?.length ? current.motion ?? motionText : undefined, signal)
       setAttempts([...marked, next])
       setSelected(marked.length)
       return
@@ -133,7 +158,7 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
     const source = { ...current.source, detail: r.detail ?? current.source.detail, threshold: r.sensitivity === undefined ? current.source.threshold : thresholdFor(r.sensitivity) }
     const traced = await traceSource(source, current.name)
     const style = r.style ?? current.shape.style
-    const next = { name: current.name, source, shape: { ...traced, ...(style ? { style } : {}) } }
+    const next = { name: current.name, source, shape: keepMotion(current.shape, { ...traced, ...(style ? { style } : {}) }), motion: current.motion, motionNote: current.motionNote }
     setAttempts([...marked, next])
     setSelected(marked.length)
   })
@@ -159,7 +184,9 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
   const add = () => {
     if (!current) return
     const grew = drones > showDrones
-    addPictureScene({ ...current.shape, size: 40 }, current.name, drones)
+    const scene = addPictureScene({ ...current.shape, size: 40 }, current.name, drones)
+    // Moving parts: the fullest motion these drones can fly, keeping the beat.
+    if (scene && current.shape.joints?.length) settleSceneParts(scene.id)
     getState().toast(grew ? `Added “${current.name}”. The show now has ${drones} drones — use Fix to resize the other formations.` : `Added “${current.name}” (${drones} drones)`)
     close()
   }
@@ -167,13 +194,14 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
     if (!current || !replaceScene) return
     const layer = replaceScene.layers.find((l) => l.id === target?.layerId) ?? replaceScene.layers[0]!
     setLayerShape(replaceScene.id, layer.id, { ...current.shape, size: layer.shape.size }, `Picture: ${current.name}`)
+    if (current.shape.joints?.length) settleSceneParts(replaceScene.id)
     updateScene(replaceScene.id, (s) => { const l = s.layers.find((x) => x.id === layer.id); if (l) l.effect = defaultEffect('image') }, 'Picture colours')
     getState().toast(`“${replaceScene.name}” is now ${current.name}`)
     close()
   }
 
   const sensitivity = current?.source.threshold === null || current?.source.threshold === undefined ? null : Math.round(((0.7 - current.source.threshold) / 0.6) * 100) / 100
-  const busyText: Record<Exclude<Busy, null>, string> = { writing: 'Claude is writing the picture description…', drawing: 'Drawing the picture (about 45 s)…', looking: 'Claude is comparing the drones with the picture…', tracing: 'Tracing…' }
+  const busyText: Record<Exclude<Busy, null>, string> = { writing: 'Claude is writing the picture description…', drawing: 'Drawing the picture (about 45 s)…', looking: 'Claude is comparing the drones with the picture…', moving: 'Claude is marking the parts that move…', tracing: 'Tracing…' }
 
   return (
     <Modal
@@ -253,6 +281,22 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
                 {current.critique && (
                   <p className={`hint ${current.verdict === 'good' ? 'ok' : ''}`}>{current.verdict === 'good' ? <Check size={11} /> : <Wrench size={11} />} {current.critique}</p>
                 )}
+                <label className="field-label" htmlFor="pic-motion">Motion</label>
+                <div className="pic-actions" style={{ marginTop: 0 }}>
+                  <input id="pic-motion" className="text-input" style={{ height: 28, flex: 1 }} placeholder="What moves? e.g. both wings flap slowly" value={motionText} onChange={(e) => setMotionText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && motionText.trim() && !busy && animate()} />
+                  <button className="btn ai sm" disabled={!!busy || !motionText.trim()} onClick={animate} title="Claude outlines the moving parts on the picture, puts their hinges, and checks them in motion"><Move size={12} /> Animate<span className="cost-est">≈{formatUsd(est.motion, true)}</span></button>
+                </div>
+                {current.shape.joints?.length ? (
+                  <div className="pic-motion">
+                    <ul className="hint">
+                      {current.shape.joints.map((j) => <li key={j.id}><b>{j.name}</b> {describeJoint(j)}</li>)}
+                    </ul>
+                    {current.motionNote && <p className="hint">{current.motionNote}</p>}
+                    {strip && <img alt={`${current.name} in motion`} src={`data:image/png;base64,${strip}`} />}
+                    <p className="hint">In the show the motion is calmed to what the drones can fly, keeping the beat.</p>
+                    <button className="btn ghost sm" disabled={!!busy} onClick={stopMotion}>Keep it still</button>
+                  </div>
+                ) : <p className="hint">Still. Say what should move (wings flapping, a hand waving, a wheel turning) and Claude marks the parts on the picture.</p>}
                 <label className="field-label" htmlFor="pic-prompt">Picture description</label>
                 <textarea id="pic-prompt" className="textarea" rows={5} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
                 <div className="pic-actions">

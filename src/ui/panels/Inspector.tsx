@@ -21,7 +21,7 @@ import type { Group, HoldKey, HoldMotion, Layer, LightCue, Scene, ShapeKind, Sha
 import { keyPose, normalizeKeys } from '@/core/keys'
 import { seek } from '@/state/playback'
 import { NumberField, Row, Segmented, Toggle, MenuButton, Vec3Field } from '@/ui/components/controls'
-import { LayerMotion, ModelJoints } from './MotionEditor'
+import { DrawingJoints, LayerMotion, ModelJoints } from './MotionEditor'
 import { EffectEditor } from './EffectEditor'
 import { TransitionEditor } from './TransitionEditor'
 import { ShapePicker } from './ScenesPanel'
@@ -515,6 +515,9 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
           </>
         )}
         {shape.kind === 'model' && <ModelJoints scene={scene} layer={layer} />}
+        {shape.kind === 'image' && (shape.lines?.length || shape.parts?.length) ? (
+          <DrawingJoints scene={scene} layer={layer} onMark={shape.picture ? () => getState().set({ dialog: 'picture', aiTarget: { sceneId: scene.id, layerId: layer.id } }) : undefined} />
+        ) : null}
         {!layer.role && <LayerMotion scene={scene} layer={layer} />}
         <div className="subhead">Light</div>
         <EffectEditor effect={layer.effect} allowImage={shape.kind === 'image' || shape.kind === 'model'} keyPrefix={`fx:${k}`} hasBeats={hasBeats} onChange={(e, label, key) => upLayer((l) => { l.effect = e }, label, key)} />

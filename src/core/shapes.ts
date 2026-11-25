@@ -20,9 +20,12 @@ export interface ShapePoints {
   order?: Float32Array
   /** Number of letters (text shapes), for letter-by-letter effects. */
   glyphs?: number
-  /** 3D models: the part each point lies on, and model units → unit shape (before × size). */
+  /**
+   * Moving parts: the part each point lies on (NO_PART for none), and the joints' pivot units →
+   * unit shape (before × size): unit = (p − center) · scale / extent.
+   */
   parts?: Uint16Array
-  frame?: { center: [number, number, number]; extent: number }
+  frame?: { center: [number, number, number]; extent: number; scale?: [number, number, number] }
 }
 
 export interface ParamDef {
@@ -48,6 +51,9 @@ export interface ShapeDef {
 
 const TAU = Math.PI * 2
 const GOLDEN = Math.PI * (3 - Math.sqrt(5))
+
+/** In ShapePoints.parts: a drone that belongs to no moving part. */
+export const NO_PART = 0xffff
 
 export const SHAPES: ShapeDef[] = [
   { kind: 'circle', label: 'Circle', group: '2D', hasFill: true, params: [], create: () => ({ kind: 'circle', size: 1, fill: 'filled' }) },
@@ -238,8 +244,8 @@ export function generateShape(spec: ShapeSpec, n: number): ShapePoints {
 function cacheKey(spec: ShapeSpec, n: number): string {
   // Joints only animate the drones; they don't change where drones sit.
   if (spec.kind === 'model') return `${n}|model|${spec.relief ? 'relief|' : ''}${solidsKey(spec.parts)}`
-  // A traced picture's source doesn't change where drones sit (its traced lines do).
-  const { size: _size, picture: _picture, ...rest } = spec as ShapeSpec & { size: number; picture?: unknown }
+  // A traced picture's source doesn't change where drones sit (its traced lines do), nor do joints.
+  const { size: _size, picture: _picture, joints: _joints, ...rest } = spec as ShapeSpec & { size: number; picture?: unknown; joints?: unknown }
   return `${n}|${JSON.stringify(rest)}`
 }
 
@@ -506,11 +512,77 @@ function imageShape(spec: Extract<ShapeSpec, { kind: 'image' }>, n: number): Sha
   const { mask } = spec
   if (!mask.w || !mask.h) return plain(sunflower(n))
   const [w, h] = maskSize(mask.w, mask.h)
-  if (spec.lines?.length || (spec.style && spec.style !== 'lines')) return drawingShape(spec, n, w, h)
-  const cand = maskCandidates(mask, w, h, Math.max(n * 30, 3000))
-  if (cand.length === 0) return plain(sunflower(n))
-  const pts = readingOrder(gather(cand, spreadPick(cand, n)), 0.02)
-  return { points: pts, colors: rasterColors(spec, pts, n, w, h) }
+  let shape: ShapePoints
+  if (spec.lines?.length || (spec.style && spec.style !== 'lines')) shape = drawingShape(spec, n, w, h)
+  else {
+    const cand = maskCandidates(mask, w, h, Math.max(n * 30, 3000))
+    if (cand.length === 0) return plain(sunflower(n))
+    const pts = readingOrder(gather(cand, spreadPick(cand, n)), 0.02)
+    shape = { points: pts, colors: rasterColors(spec, pts, n, w, h) }
+  }
+  if (!spec.parts?.length) return shape
+  // Pivots are points on the picture (fractions from its top-left): unit = (p − ½) · [w, −h].
+  return { ...shape, parts: drawingParts(spec, shape.points, n, w, h), frame: { center: [0.5, 0.5, 0], extent: 1, scale: [w, -h, 1] } }
+}
+
+/**
+ * Which moving part each drone of a drawing belongs to: a drone on a stroke tagged with a part
+ * moves with it; otherwise a drone inside a part's outline (the last listed wins where they
+ * overlap); otherwise, in a drawing with tagged strokes, a fill drone goes with its nearest stroke.
+ */
+function drawingParts(spec: Picture, pts: Float32Array, n: number, w: number, h: number): Uint16Array {
+  const parts = spec.parts ?? []
+  const out = new Uint16Array(n).fill(NO_PART)
+  const toUnit = (u: number, v: number): [number, number] => [(u - 0.5) * w, (0.5 - v) * h]
+  const valid = (i: number | undefined) => i !== undefined && Number.isInteger(i) && i >= 0 && i < parts.length
+  // Every stroke as segments [ax, ay, bx, by] with its part (−1: none).
+  const segs: number[] = [], segPart: number[] = []
+  for (const l of spec.lines ?? []) {
+    const part = valid(l.part) ? l.part! : -1
+    for (let i = 0; i + 3 < l.p.length; i += 2) {
+      const [ax, ay] = toUnit(l.p[i]!, l.p[i + 1]!), [bx, by] = toUnit(l.p[i + 2]!, l.p[i + 3]!)
+      segs.push(ax, ay, bx, by); segPart.push(part)
+    }
+    if (l.closed && l.p.length >= 6) {
+      const [ax, ay] = toUnit(l.p[l.p.length - 2]!, l.p[l.p.length - 1]!), [bx, by] = toUnit(l.p[0]!, l.p[1]!)
+      segs.push(ax, ay, bx, by); segPart.push(part)
+    }
+  }
+  const tagged = segPart.some((p) => p >= 0)
+  const regions = parts.map((p) => (p.region && p.region.length >= 3 ? p.region.map(([u, v]) => toUnit(u, v)) : null))
+  const inside = (poly: [number, number][], x: number, y: number) => {
+    let c = false
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i]!, [xj, yj] = poly[j]!
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c
+    }
+    return c
+  }
+  const d2 = (x: number, y: number, s: number) => {
+    const ax = segs[s * 4]!, ay = segs[s * 4 + 1]!, bx = segs[s * 4 + 2]!, by = segs[s * 4 + 3]!
+    const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy
+    const t = L > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L)) : 0
+    return (ax + dx * t - x) ** 2 + (ay + dy * t - y) ** 2
+  }
+  const on = (1e-4 * Math.max(w, h)) ** 2
+  const S = segPart.length
+  for (let k = 0; k < n; k++) {
+    const x = pts[k * 3]!, y = pts[k * 3 + 1]!
+    let best = Infinity, bestPart = -1, onTagged = -1
+    if (tagged) {
+      for (let s = 0; s < S; s++) {
+        const d = d2(x, y, s)
+        if (d < best) { best = d; bestPart = segPart[s]! }
+        if (d <= on && segPart[s]! >= 0) onTagged = segPart[s]!
+      }
+    }
+    if (onTagged >= 0) { out[k] = onTagged; continue }
+    let region = -1
+    for (let i = regions.length - 1; i >= 0 && region < 0; i--) if (regions[i] && inside(regions[i]!, x, y)) region = i
+    if (region >= 0) out[k] = region
+    else if (tagged && best > on && bestPart >= 0) out[k] = bestPart
+  }
+  return out
 }
 
 /**

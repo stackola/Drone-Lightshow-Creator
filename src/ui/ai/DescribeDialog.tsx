@@ -6,9 +6,11 @@ import { drawAndCheck, drawFormation, drawingPng, formationFromSvg, type DrawnFo
 import { shapePreview } from '@/ai/render'
 import { describeError } from '@/ai/client'
 import { generateShape } from '@/core/shapes'
+import { describeJoint } from '@/core/joints'
+import { motionStrip } from '@/ai/picture'
 import type { ShapeSpec } from '@/core/types'
 import { getState, useStore } from '@/state/store'
-import { addScene, setLayerShape, updateScene } from '@/state/actions'
+import { addScene, setLayerShape, settleSceneParts, updateScene } from '@/state/actions'
 import { defaultEffect } from '@/core/effects'
 import { Modal } from '../components/controls'
 import { Thumb } from '../components/Thumb'
@@ -30,6 +32,8 @@ export function DescribeDialog({ onClose }: { onClose: () => void }) {
   const controller = useRef<AbortController | null>(null)
 
   const dots = useMemo(() => (shape ? generateShape({ ...shape, size: 10 }, n) : null), [shape, n])
+  // Its moving parts at rest and at both ends of their motion.
+  const strip = useMemo(() => (shape?.joints?.length ? motionStrip(shape, n) : null), [shape, n])
 
   const run = async (refine: boolean) => {
     setBusy(true)
@@ -60,7 +64,9 @@ export function DescribeDialog({ onClose }: { onClose: () => void }) {
 
   const addNew = () => {
     if (!shape || !drawn) return
-    addScene('image', { shape, name: drawn.name })
+    const scene = addScene('image', { shape, name: drawn.name })
+    // Moving parts: the fullest motion these drones can fly, keeping the beat.
+    if (scene && shape.joints?.length) settleSceneParts(scene.id)
     getState().toast(`Added “${drawn.name}”`)
     onClose()
   }
@@ -69,6 +75,7 @@ export function DescribeDialog({ onClose }: { onClose: () => void }) {
     if (!shape || !drawn || !selectedScene) return
     const layer = selectedScene.layers[0]!
     setLayerShape(selectedScene.id, layer.id, shape, `Draw ${drawn.name}`)
+    if (shape.joints?.length) settleSceneParts(selectedScene.id)
     updateScene(selectedScene.id, (s) => { s.layers[0]!.effect = defaultEffect('image') }, 'Image colours')
     getState().toast(`“${selectedScene.name}” is now ${drawn.name}`)
     onClose()
@@ -112,6 +119,12 @@ export function DescribeDialog({ onClose }: { onClose: () => void }) {
             </figure>
           </div>
           {critique && <p className="hint">Claude checked the drones: {critique}</p>}
+          {shape?.joints?.length ? (
+            <div className="pic-motion">
+              <p className="hint">Moving parts: {shape.joints.map((j) => `${j.name} ${describeJoint(j)}`).join('; ')} — calmed to what the drones can fly when added.</p>
+              {strip && <img alt={`${drawn?.name ?? 'Drawing'} in motion`} src={`data:image/png;base64,${strip}`} />}
+            </div>
+          ) : null}
           <label className="field-label" htmlFor="feedback">Not quite right? Say what to change</label>
           <div style={{ display: 'flex', gap: 6 }}>
             <input id="feedback" className="text-input" style={{ height: 32 }} value={feedback} placeholder="e.g. make the flame bigger, point it up and to the right" onChange={(e) => setFeedback(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && !busy && run(true)} />

@@ -198,6 +198,8 @@ export type DrawingStyle = 'lines' | 'filled' | 'adaptive'
 export interface DrawnLine {
   p: number[]
   closed?: boolean
+  /** The moving part (index into the shape's `parts`) this stroke belongs to. */
+  part?: number
 }
 
 export type TextFont = 'sans' | 'serif' | 'pixel'
@@ -225,7 +227,7 @@ export type ShapeSpec =
    * strokes (each becomes one evenly spaced line of drones along its path),
    * `colors` an RGB raster the drones take their colours from.
    */
-  | { kind: 'image'; size: number; name: string; mask: Mask; colors: string | null; cw: number; ch: number; lines?: DrawnLine[]; detail?: number; style?: DrawingStyle; picture?: PictureSource }
+  | { kind: 'image'; size: number; name: string; mask: Mask; colors: string | null; cw: number; ch: number; lines?: DrawnLine[]; detail?: number; style?: DrawingStyle; picture?: PictureSource; parts?: DrawingPart[]; joints?: ModelJoint[] }
   /** relief: drones only on the side the audience sees (twice as dense there); leave off for models that turn. */
   | { kind: 'model'; size: number; name: string; parts: ModelPart[]; joints?: ModelJoint[]; relief?: boolean }
 
@@ -287,13 +289,30 @@ export interface JointMotion {
   phase: number
 }
 
-/** A hinge in a 3D model, in model units (the same coordinates as the parts). */
+/**
+ * A hinge. In a 3D model the pivot is in model units (the same coordinates as the parts); in a
+ * drawing or picture it is a point on the picture, [x, y, 0] as fractions of its width and height
+ * from the top-left. The axis is in the formation's frame either way: x right, y up, z toward the
+ * audience — a drawing's parts swing in its plane about [0, 0, 1].
+ */
 export interface ModelJoint extends JointMotion {
   id: string
   name: string
   pivot: Vec3
   /** Joint this one is attached to (a forearm to an upper arm): it moves with its parent too. */
   parent?: string
+}
+
+/**
+ * A moving part of a drawing or traced picture: the strokes tagged with it (DrawnLine.part), the
+ * drones inside its outline, and fill drones whose nearest stroke is one of its own.
+ */
+export interface DrawingPart {
+  name: string
+  /** Id of the joint it moves with. */
+  joint: string
+  /** Outline on the picture, [x, y] fractions of its width and height from the top-left. */
+  region?: [number, number][]
 }
 
 /** A whole shape moving on its own within the formation. */

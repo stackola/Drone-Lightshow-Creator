@@ -42,7 +42,8 @@ function describeShape(shape: ShowDoc['scenes'][number]['layers'][number]['shape
   if (shape.kind === 'text') extras.unshift(`"${shape.text.replace(/\n/g, '\\n')}"`, shape.font)
   if (shape.kind === 'image') {
     const lines = shape.lines?.length ?? 0
-    extras.unshift(`${shape.picture ? 'traced picture' : lines ? 'drawing' : 'image'} "${shape.name}"${lines ? `, ${lines} strokes, style ${shape.style ?? 'lines'}, detail ${Math.round((shape.picture?.detail ?? shape.detail ?? 0.5) * 100)}%` : ''}${shape.picture ? ` (picture: ${shape.picture.prompt.slice(0, 140)}${shape.picture.prompt.length > 140 ? '…' : ''})` : ''}`)
+    const moving = (shape.joints ?? []).filter((j) => (shape.parts ?? []).some((p) => p.joint === j.id))
+    extras.unshift(`${shape.picture ? 'traced picture' : lines ? 'drawing' : 'image'} "${shape.name}"${lines ? `, ${lines} strokes, style ${shape.style ?? 'lines'}, detail ${Math.round((shape.picture?.detail ?? shape.detail ?? 0.5) * 100)}%` : ''}${shape.picture ? ` (picture: ${shape.picture.prompt.slice(0, 140)}${shape.picture.prompt.length > 140 ? '…' : ''})` : ''}${moving.length ? `; moving parts: ${moving.map((j) => `${j.name} ${describeJoint(j)}`).join(', ')}` : ''}`)
   }
   if (shape.kind === 'model') {
     const moving = (shape.joints ?? []).filter((j) => shape.parts.some((p) => p.joint === j.id) || (shape.joints ?? []).some((c) => c.parent === j.id))
