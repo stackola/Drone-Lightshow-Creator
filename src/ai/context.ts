@@ -40,7 +40,10 @@ function describeShape(shape: ShowDoc['scenes'][number]['layers'][number]['shape
   const extras = def.params.map((p) => `${p.key} ${(shape as unknown as Record<string, number>)[p.key]}`)
   if ('fill' in shape) extras.unshift(shape.fill ?? 'filled')
   if (shape.kind === 'text') extras.unshift(`"${shape.text.replace(/\n/g, '\\n')}"`, shape.font)
-  if (shape.kind === 'image') extras.unshift(`image "${shape.name}"`)
+  if (shape.kind === 'image') {
+    const lines = shape.lines?.length ?? 0
+    extras.unshift(`${shape.picture ? 'traced picture' : lines ? 'drawing' : 'image'} "${shape.name}"${lines ? `, ${lines} strokes, style ${shape.style ?? 'lines'}, detail ${Math.round((shape.picture?.detail ?? shape.detail ?? 0.5) * 100)}%` : ''}${shape.picture ? ` (picture: ${shape.picture.prompt.slice(0, 140)}${shape.picture.prompt.length > 140 ? '…' : ''})` : ''}`)
+  }
   if (shape.kind === 'model') {
     const moving = (shape.joints ?? []).filter((j) => shape.parts.some((p) => p.joint === j.id) || (shape.joints ?? []).some((c) => c.parent === j.id))
     extras.unshift(`3D model "${shape.name}", ${shape.parts.length} parts${shape.relief ? ', relief (front side only)' : ''}${moving.length ? `; moving parts: ${moving.map((j) => `${j.name} ${describeJoint(j)}`).join(', ')}` : ''}`)

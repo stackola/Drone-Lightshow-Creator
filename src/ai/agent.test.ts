@@ -244,3 +244,59 @@ describe('fallback echo', () => {
     expect(echoContent(content.slice(0, 3))).toHaveLength(3)
   })
 })
+
+describe('every new feature is reachable by the copilot', () => {
+  beforeEach(freshShow)
+  const last = () => { const sc = getState().doc.scenes; return sc[sc.length - 1]! }
+
+  it('set_motion makes a shape swing on its own (calmed to what drones can fly), and stops it', async () => {
+    const id = getState().doc.scenes[1]!.id
+    let out = await runTool('set_motion', { scene_id: id, moves: { kind: 'swing', pivot: 'top', amount: 80, period_seconds: 2 } })
+    expect(out.summary).toMatch(/swings/)
+    const j = getState().doc.scenes[1]!.layers[0]!.joint!
+    expect(j.anchor).toEqual([0, 1, 0])
+    expect(j.amount).toBeLessThan(80)
+    expect(safetyLine()).toMatch(/all checks pass/i)
+    out = await runTool('set_motion', { scene_id: id, moves: null })
+    expect(getState().doc.scenes[1]!.layers[0]!.joint).toBeUndefined()
+  })
+
+  it('edit_3d_model changes relief and a moving part by name', async () => {
+    const { SAMPLE_BIRD } = await import('@/core/shapes')
+    const s = getState()
+    const doc = s.doc
+    const sc = newScene(doc, 'model', { shape: { kind: 'model', size: 30, name: 'Bird', parts: SAMPLE_BIRD.parts, joints: SAMPLE_BIRD.joints } })
+    s.loadDoc({ ...doc, scenes: [...doc.scenes, { ...sc, hold: 36 }] })
+    const out = await runTool('edit_3d_model', { scene_id: sc.id, relief: true, moving_parts: [{ name: 'Right wing', period_seconds: 16 }, { name: 'left wing', period_seconds: 16 }] })
+    expect(out.content).toMatch(/Relief on/)
+    const m = last().layers[0]!.shape
+    expect(m.kind === 'model' && m.relief).toBe(true)
+    expect(m.kind === 'model' && m.joints!.find((j: { id: string }) => j.id === 'wing-r')!.period).toBe(16)
+    const bad = await runTool('edit_3d_model', { scene_id: sc.id, moving_parts: [{ name: 'Tail' }] })
+    expect(bad.content).toMatch(/No moving part named “Tail”.*Right wing/)
+  })
+
+  it('edit_picture switches a drawing between lines, filled and adaptive', async () => {
+    const { encodeMask } = await import('@/core/sample')
+    const s = getState()
+    const doc = s.doc
+    const drawing = { kind: 'image' as const, size: 30, name: 'Ring', mask: encodeMask(64, 64, () => false), colors: null, cw: 0, ch: 0, lines: [{ p: Array.from({ length: 41 }, (_, k) => k % 2 ? 0.5 + 0.4 * Math.sin((Math.floor(k / 2) / 20) * 2 * Math.PI) : 0.5 + 0.4 * Math.cos((Math.floor(k / 2) / 20) * 2 * Math.PI)), closed: true }] }
+    const sc = newScene(doc, 'image', { shape: drawing })
+    s.loadDoc({ ...doc, scenes: [...doc.scenes, sc] })
+    await runTool('edit_picture', { scene_id: sc.id, style: 'filled', detail: 0.3 })
+    const shape = last().layers[0]!.shape
+    expect(shape.kind === 'image' && shape.style).toBe('filled')
+    expect(shape.kind === 'image' && shape.detail).toBe(0.3)
+    expect(summarizeShow(getState().doc)).toMatch(/drawing "Ring", 1 strokes, style filled, detail 30%/)
+  })
+
+  it('the AI can ask for a drawing style, a palette and living shape colours', async () => {
+    const out = await runTool('add_scene', { scene: { name: 'Glow', shape: { kind: 'heart', moves: { kind: 'turn', amount: 10 } }, light: { effect: 'palette', colors: ['#ff2d55', '#ff9500', '#ffd60a'], palette_mode: 'radial' } } })
+    expect(out.summary).toBeTruthy()
+    const sc = last()
+    expect(sc.layers[0]!.effect.kind).toBe('palette')
+    expect(sc.layers[0]!.joint?.kind).toBe('turn')
+    const names = (toolDefinitions(false) as { name: string }[]).map((t) => t.name)
+    for (const n of ['set_motion', 'edit_3d_model', 'edit_picture', 'improve_3d_model', 'add_shape', 'set_light']) expect(names).toContain(n)
+  })
+})

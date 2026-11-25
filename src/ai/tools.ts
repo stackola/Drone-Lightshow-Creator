@@ -16,16 +16,16 @@ import { MUSIC_TAG, arriveAt, composeScore, fitToSong, lightTheMusic, musicMomen
 import { autoFix, settleParts, tidySplit } from '@/core/fixes'
 import { ceilTo } from '@/core/math'
 import { defaultEffect } from '@/core/effects'
-import { CueTiming, GroupInput, IdleMotionInput, KeyframeInput, LightInput, SceneInput, ShapeInput, SpareRoleInput, StepInput, TransitionInput } from './schemas'
-import { type CustomShapes, applySplit, cueFromInput, keysFromInput, effectFromInput, jointFromInput, motionFromInput, sceneFromInput, shapeFromInput, stepFromInput, transitionFromInput, withSpareRole } from './convert'
-import { hasMovingParts } from '@/core/joints'
+import { CueTiming, GroupInput, IdleMotionInput, KeyframeInput, LightInput, PartMotionInput, SceneInput, ShapeInput, SpareRoleInput, StepInput, TransitionInput } from './schemas'
+import { type CustomShapes, applySplit, cueFromInput, keysFromInput, effectFromInput, jointFromInput, motionFromInput, withDrawingStyle, sceneFromInput, shapeFromInput, stepFromInput, transitionFromInput, withSpareRole } from './convert'
+import { describeJoint, hasMovingParts } from '@/core/joints'
 import { calmMotion } from '@/core/idle'
 import { describeMusic, summarizeShow } from './context'
 import { contactSheet, fourViews, frontStrip } from './render'
 import { attemptFrom, createModel, lookAndFix, modelShape } from './model3d'
 import { allocate, findSceneTime, scenePointColors } from '@/core/compile'
 import { drawAndCheck } from './shapeGen'
-import { pictureFor } from './picture'
+import { pictureFor, thresholdFor, traceSource } from './picture'
 import { imagesConfigured } from './openai'
 import { MAX_CUSTOM, customJobs, resolveCustoms } from './customs'
 import { findScene as findAnyScene, findGroup, groupSizes, replaceSceneIn, sceneDroneCount } from '@/core/groups'
@@ -284,7 +284,7 @@ export const TOOLS = [
       const layer = scene.layers[li]
       if (!layer) throw new ToolError(`Scene has ${scene.layers.length} layer(s); layer_index ${li} doesn't exist.`)
       const custom = await resolveCustom(i.shape, ctx.signal, sub.droneCount)
-      const shape = custom ?? shapeFromInput(i.shape)
+      const shape = custom ? withDrawingStyle(custom, i.shape) : shapeFromInput(i.shape)
       const effect = custom ? defaultEffect('image') : layer.effect.kind === 'image' ? effectFromInput({ effect: 'solid' }) : layer.effect
       const joint = jointFromInput(i.shape.moves)
       let s: Scene = { ...scene, layers: scene.layers.map((l, k) => { if (k !== li) return l; const { joint: _old, ...rest } = l; void _old; return { ...rest, shape, effect, ...(joint ? { joint } : {}) } }) }
@@ -341,6 +341,95 @@ export const TOOLS = [
           { type: 'text', text: safetyLine() },
         ],
       }
+    },
+  }),
+  tool({
+    name: 'set_motion',
+    description: 'Make one shape of a formation move on its own while held — swing, turn or slide about a pivot on its own edges (a sign swinging from its top, a star turning in place, a wing flapping) — or stop it (moves null). Unsafe amounts are calmed automatically, keeping the beat.',
+    schema: z.object({ scene_id: sceneRef, layer_index: z.number().optional().describe('Default 0 (the main shape)'), moves: PartMotionInput.nullable().describe('The motion, or null to stop it') }),
+    label: (i) => (i.moves ? `Setting a ${i.moves.kind} motion` : 'Stopping a shape’s motion'),
+    run: (i) => {
+      const { scene, sub } = findScene(i.scene_id)
+      const li = Math.round(i.layer_index ?? 0)
+      if (!scene.layers[li]) throw new ToolError(`Scene has ${scene.layers.length} layer(s); layer_index ${li} doesn't exist.`)
+      const joint = i.moves ? jointFromInput(i.moves) : undefined
+      let s: Scene = { ...scene, layers: scene.layers.map((l, k) => { if (k !== li) return l; const { joint: _old, ...rest } = l; void _old; return joint ? { ...rest, joint } : rest }) }
+      if (hasMovingParts(s)) s = settleParts(s, sub, { prefer: 'calm' })
+      replaceScene(scene.id, s, joint ? `Shape moves in ${scene.name}` : `Shape still in ${scene.name}`)
+      const j = s.layers[li]!.joint
+      return ok(j ? `Layer ${li} of “${s.name}” now ${describeJoint(j)}` : `Layer ${li} of “${s.name}” is still`, j && i.moves && j.amount < Math.abs(i.moves.amount) - 1e-6 ? `Calmed to ${describeJoint(j)} so the drones can fly it.` : undefined)
+    },
+  }),
+  tool({
+    name: 'edit_3d_model',
+    description: 'Adjust a 3D model formation without rebuilding it: relief (drones only on the side the audience sees) and its moving parts (each joint’s motion, by the name shown in the show state). To change its shape or add new moving parts, use improve_3d_model with feedback.',
+    schema: z.object({
+      scene_id: sceneRef, layer_index: z.number().optional(),
+      relief: z.boolean().optional(),
+      moving_parts: z.array(z.object({
+        name: z.string().describe('The joint’s name (or id)'),
+        kind: z.enum(['swing', 'turn', 'slide']).optional(),
+        amount: z.number().optional().describe('swing: degrees either way; turn: degrees per second; slide: model units either way; 0 stops it'),
+        period_seconds: z.number().optional(),
+        phase: z.number().optional(),
+      })).optional(),
+    }),
+    label: () => 'Adjusting the 3D model',
+    run: (i) => {
+      const { scene, sub } = findScene(i.scene_id)
+      const li = Math.round(i.layer_index ?? 0)
+      const layer = scene.layers[li]
+      if (!layer || layer.shape.kind !== 'model') throw new ToolError('That layer is not a 3D model.')
+      const m = layer.shape
+      const joints = (m.joints ?? []).map((j) => {
+        const p = i.moving_parts?.find((x) => x.name.toLowerCase() === j.name.toLowerCase() || x.name === j.id)
+        if (!p) return j
+        return { ...j, ...(p.kind ? { kind: p.kind } : {}), ...(p.amount !== undefined ? { amount: p.amount } : {}), ...(p.period_seconds !== undefined ? { period: Math.max(0.5, p.period_seconds) } : {}), ...(p.phase !== undefined ? { phase: p.phase } : {}) }
+      })
+      const unknown = (i.moving_parts ?? []).filter((x) => !(m.joints ?? []).some((j) => x.name.toLowerCase() === j.name.toLowerCase() || x.name === j.id))
+      if (unknown.length) throw new ToolError(`No moving part named ${unknown.map((x) => `“${x.name}”`).join(', ')}. Its moving parts: ${(m.joints ?? []).map((j) => j.name).join(', ') || 'none'} (use improve_3d_model to add some).`)
+      const shape = { ...m, joints, ...(i.relief === undefined ? {} : { relief: i.relief }) }
+      if (i.relief === false) delete (shape as { relief?: boolean }).relief
+      let s: Scene = { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, shape } : l)) }
+      s = fitToAirspace(fitScene(s, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'exact'), sub)
+      if (hasMovingParts(s)) s = settleParts(s, sub, { prefer: 'calm' })
+      replaceScene(scene.id, s, `Adjust ${m.name}`)
+      const after = s.layers[li]!.shape as typeof m
+      return ok(`Adjusted the 3D model “${m.name}”`, `Relief ${after.relief ? 'on' : 'off'}. Moving parts: ${(after.joints ?? []).map((j) => `${j.name} ${describeJoint(j)}`).join('; ') || 'none'}.`)
+    },
+  }),
+  tool({
+    name: 'edit_picture',
+    description: 'Adjust a drawing or traced picture formation: its style (lines, filled, adaptive), detail (fewer/bolder vs more of its lines), line sensitivity (traced pictures), or replace it with a new picture from a description. Changing style, detail or sensitivity is instant and free; a new picture is drawn and checked.',
+    schema: z.object({
+      scene_id: sceneRef, layer_index: z.number().optional(),
+      style: z.enum(['lines', 'filled', 'adaptive']).optional(),
+      detail: z.number().optional().describe('0–1: lower leaves out more lines (cleaner with few drones), higher keeps more'),
+      sensitivity: z.number().optional().describe('Traced pictures, 0–1: higher picks up fainter lines'),
+      new_description: z.string().optional().describe('Draw a new picture of this instead'),
+    }),
+    label: (i) => (i.new_description ? `Drawing a new picture: ${i.new_description}` : 'Adjusting the picture'),
+    run: async (i, ctx) => {
+      const { scene, sub } = findScene(i.scene_id)
+      const li = Math.round(i.layer_index ?? 0)
+      const layer = scene.layers[li]
+      if (!layer || layer.shape.kind !== 'image') throw new ToolError('That layer is not a drawing or picture.')
+      let shape = layer.shape
+      const count = allocate(sub.droneCount, scene.layers.map((l) => l.weight))[li]!
+      if (i.new_description?.trim()) {
+        shape = imagesConfigured() ? await pictureFor(i.new_description, count, sub.limits, ctx.signal) : (await drawAndCheck(i.new_description, count, ctx.signal)).shape
+      } else if (shape.picture && (i.detail !== undefined || i.sensitivity !== undefined)) {
+        const source = { ...shape.picture, ...(i.detail !== undefined ? { detail: Math.max(0, Math.min(1, i.detail)) } : {}), ...(i.sensitivity !== undefined ? { threshold: thresholdFor(i.sensitivity) } : {}) }
+        shape = { ...(await traceSource(source, shape.name)), ...(shape.style ? { style: shape.style } : {}) }
+      } else if (i.detail !== undefined) {
+        shape = { ...shape, detail: Math.max(0, Math.min(1, i.detail)) }
+      }
+      if (i.style) shape = { ...shape, style: i.style }
+      let s: Scene = { ...scene, layers: scene.layers.map((l, k) => (k === li ? { ...l, shape: { ...shape, size: layer.shape.size }, ...(i.new_description ? { effect: defaultEffect('image') } : {}) } : l)) }
+      s = fitToAirspace(fitScene(s, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'exact'), sub)
+      replaceScene(scene.id, s, `Adjust ${shape.name}`)
+      const after = s.layers[li]!.shape as typeof shape
+      return ok(`Adjusted “${after.name}”`, `Layer ${li} of “${s.name}”: ${after.lines?.length ?? 0} strokes, style ${after.style ?? 'lines'}, ${s.layers[li]!.shape.size} m wide. Use look_at_scenes to see it.`)
     },
   }),
   tool({
@@ -765,12 +854,14 @@ export const TOOLS = [
       const share = Math.max(0.05, Math.min(0.8, i.share ?? 1 / (main.length + 1)))
       const total = main.reduce((a, l) => a + l.weight, 0)
       const custom = await resolveCustom(i.shape, ctx.signal, Math.round(sub.droneCount * share))
-      const shape = custom ?? shapeFromInput(i.shape)
+      const shape = custom ? withDrawingStyle(custom, i.shape) : shapeFromInput(i.shape)
       const effect = custom && (i.light.effect === 'image' || (i.light.effect === 'solid' && !i.light.color)) ? effectFromInput({ ...i.light, effect: 'image' }) : effectFromInput(i.light.effect === 'image' ? { ...i.light, effect: 'solid' } : i.light)
-      const layer = { ...newLayer(shape, effect), weight: (total * share) / (1 - share), offset: [i.across ?? 0, i.up ?? 0, 0] as [number, number, number] }
+      const joint = jointFromInput(i.shape.moves)
+      const layer = { ...newLayer(shape, effect), weight: (total * share) / (1 - share), offset: [i.across ?? 0, i.up ?? 0, 0] as [number, number, number], ...(joint ? { joint } : {}) }
       const roles = scene.layers.filter((l) => l.role)
       let s: Scene = { ...scene, layers: [...main, layer, ...roles] }
       s = fitToAirspace(fitScene(s, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'grow'), sub)
+      if (hasMovingParts(s)) s = settleParts(s, sub, { prefer: 'calm' })
       replaceScene(scene.id, s, `Add a shape to ${scene.name}`)
       return ok(`Added a ${shape.kind} to “${scene.name}”`, `"${scene.name}" now has ${s.layers.length} layer(s); the new one is layer ${s.layers.indexOf(s.layers.find((l) => l.id === layer.id)!)}.`)
     },

@@ -170,6 +170,7 @@ export interface PictureAttempt {
 export const PictureReview = z.object({
   critique: z.string().describe('What reads well and what doesn’t, in one to three sentences, for the designer'),
   done: z.boolean().describe('true if the drones already read clearly as the subject'),
+  style: z.enum(['lines', 'filled', 'adaptive']).optional().describe('Switch the drawing style: lines (every line a line of drones — usually best), filled (drones over the whole figure — when the lines can’t hold this many drones within the airspace, or for bold silhouettes), adaptive (lines if they fit, filled if not)'),
   detail: z.number().optional().describe('New detail 0–1 (lower: fewer, bolder lines — fixes clutter where lines blur together; higher: more of the picture’s lines — brings back missing features)'),
   sensitivity: z.number().optional().describe('New line sensitivity 0–1 (higher picks up fainter lines; lower ignores faint glow and background specks)'),
   format: z.enum(['square', 'landscape', 'portrait']).optional().describe('Shape for a new picture (landscape suits wide subjects and the usually wide sky)'),
@@ -181,7 +182,7 @@ export function thresholdFor(sensitivity: number | undefined): number | null {
   return sensitivity === undefined ? null : Math.max(0.05, Math.min(0.7, 0.7 - 0.6 * sensitivity))
 }
 
-const SYSTEM = `You check drone light show formations made from pictures. A picture (glowing line art on black) is traced into drones: every bright line becomes one evenly spaced line of drones, in the picture's colours. With fewer drones, lines that would blur together at their spacing are left out (lower detail leaves out more). Judge the drones as an audience would at night, compared with the picture and the subject, and choose the smallest fix: approve, change detail or sensitivity, or (only when the picture itself is wrong or far too intricate for the drone count) describe a new picture.`
+const SYSTEM = `You check drone light show formations made from pictures. A picture (glowing line art on black) is traced into drones: in the lines style every bright line becomes one evenly spaced line of drones, in the picture's colours (filled spreads them over the whole figure instead). With fewer drones, lines that would blur together at their spacing are left out (lower detail leaves out more). Judge the drones as an audience would at night, compared with the picture and the subject, and choose the smallest fix: approve, change detail, sensitivity or style, or (only when the picture itself is wrong or far too intricate for the drone count) describe a new picture.`
 
 /** Claude compares the picture with the drones and decides (one look). */
 export async function reviewPicture(description: string, attempt: PictureAttempt, n: number, signal?: AbortSignal, limits?: Limits) {
@@ -246,10 +247,11 @@ export async function createPicture(description: string, opts: { n: number; roun
       attempts.push(await newPicture(current.name, r.new_picture, opts.n, r.detail ?? current.source.detail, opts.signal, r.format ?? current.source.format ?? 'square'))
       continue
     }
-    if (r.detail === undefined && r.sensitivity === undefined) { current.verdict = 'good'; break }
+    if (r.detail === undefined && r.sensitivity === undefined && !r.style) { current.verdict = 'good'; break }
     current.verdict = 'adjusted'
     const source: PictureSource = { ...current.source, detail: Math.max(0, Math.min(1, r.detail ?? current.source.detail)), threshold: r.sensitivity === undefined ? current.source.threshold : thresholdFor(r.sensitivity) }
-    attempts.push({ name: current.name, source, shape: await traceSource(source, current.name) })
+    const style = r.style ?? current.shape.style
+    attempts.push({ name: current.name, source, shape: { ...(await traceSource(source, current.name)), ...(style ? { style } : {}) } })
   }
   emit(null)
   return attempts

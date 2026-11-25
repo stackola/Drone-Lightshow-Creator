@@ -191,6 +191,9 @@ export interface PictureSource {
   format?: 'square' | 'landscape' | 'portrait'
 }
 
+/** lines: strokes as lines of drones; filled: drones over the whole silhouette; adaptive: lines, filling the inside only when there are more drones than the lines hold. */
+export type DrawingStyle = 'lines' | 'filled' | 'adaptive'
+
 /** A stroke of a drawing: flat [u, v, u, v, …] in 0..1 of the picture (v down), drawn in order. */
 export interface DrawnLine {
   p: number[]
@@ -222,7 +225,7 @@ export type ShapeSpec =
    * strokes (each becomes one evenly spaced line of drones along its path),
    * `colors` an RGB raster the drones take their colours from.
    */
-  | { kind: 'image'; size: number; name: string; mask: Mask; colors: string | null; cw: number; ch: number; lines?: DrawnLine[]; detail?: number; picture?: PictureSource }
+  | { kind: 'image'; size: number; name: string; mask: Mask; colors: string | null; cw: number; ch: number; lines?: DrawnLine[]; detail?: number; style?: DrawingStyle; picture?: PictureSource }
   /** relief: drones only on the side the audience sees (twice as dense there); leave off for models that turn. */
   | { kind: 'model'; size: number; name: string; parts: ModelPart[]; joints?: ModelJoint[]; relief?: boolean }
 

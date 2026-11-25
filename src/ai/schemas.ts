@@ -78,6 +78,7 @@ export const ShapeInput = z.object({
   columns: z.number().optional().describe('led_sign: panel width in drones (default: as wide as the fleet allows; 3–5 letters visible per 20 columns)'),
   scale: z.number().optional().describe('Size relative to the smallest safe size: 1 = smallest safe (default), 1.4 = 40% larger. Never below 1.'),
   moves: PartMotionInput.optional(),
+  drawing_style: z.enum(['lines', 'filled', 'adaptive']).optional().describe('custom: lines (default — every line of the drawing is a line of drones, crisp, usually best), filled (drones spread over the whole figure — bold silhouettes, logos), adaptive (lines while they fit the sky, a filled silhouette when there are more drones than the lines can hold — good for formations with many drones)'),
 })
 export type ShapeInput = z.infer<typeof ShapeInput>
 

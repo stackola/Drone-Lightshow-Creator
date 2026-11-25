@@ -8,7 +8,7 @@ import { Check, ImagePlus, Loader2, RefreshCw, Sparkles, Upload, Wrench } from '
 import { findScene, sceneDroneCount } from '@/core/groups'
 import { generateShape } from '@/core/shapes'
 import { defaultEffect } from '@/core/effects'
-import type { PictureSource } from '@/core/types'
+import type { DrawingStyle, PictureSource } from '@/core/types'
 import { aiConfigured, describeError } from '@/ai/client'
 import { imagesConfigured } from '@/ai/openai'
 import { compactPicture, createPicture, describeFit, expandPrompt, newPicture, pictureFit, reviewPicture, thresholdFor, traceSource, type PictureAttempt } from '@/ai/picture'
@@ -16,7 +16,7 @@ import { dronesPng } from '@/ai/render'
 import { getState, useStore } from '@/state/store'
 import { addPictureScene, setLayerShape, updateScene } from '@/state/actions'
 import { pickFile } from '@/state/persist'
-import { Modal, NumberField, Row, Toggle } from '../components/controls'
+import { Modal, NumberField, Row, Segmented, Toggle } from '../components/controls'
 import { ApiKeyForm, ImageKeyForm } from './AiSettings'
 
 const EXAMPLES = ['bride and groom dancing', 'a bridal bouquet of roses', 'a champagne bottle popping', 'a phoenix rising', 'a lighthouse with beams', 'a dragon']
@@ -96,7 +96,8 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
     if (!current) return
     const source = { ...current.source, ...patch }
     setBusy('tracing')
-    void traceSource(source, current.name).then((shape) => {
+    void traceSource(source, current.name).then((traced) => {
+      const shape = { ...traced, ...(current.shape.style ? { style: current.shape.style } : {}) }
       setAttempts((a) => a.map((x, i) => (i === selected ? { ...x, source, shape, critique: undefined, verdict: undefined } : x)))
       setBusy(null)
     }, (err) => { setError(describeError(err)); setBusy(null) })
@@ -108,7 +109,7 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
     const r = await reviewPicture(description || current.name, current, drones, signal, getState().doc.limits)
     const marked = attempts.map((x, i) => (i === selected ? { ...x, critique: r.critique, verdict: r.done ? ('good' as const) : r.new_picture ? ('redrawn' as const) : ('adjusted' as const) } : x))
     setAttempts(marked)
-    if (r.done || (!r.new_picture && r.detail === undefined && r.sensitivity === undefined)) return
+    if (r.done || (!r.new_picture && r.detail === undefined && r.sensitivity === undefined && !r.style)) return
     if (r.new_picture?.trim()) {
       setBusy('drawing')
       const next = await newPicture(current.name, r.new_picture, drones, r.detail ?? current.source.detail, signal, r.format ?? current.source.format ?? 'square')
@@ -117,7 +118,9 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
       return
     }
     const source = { ...current.source, detail: r.detail ?? current.source.detail, threshold: r.sensitivity === undefined ? current.source.threshold : thresholdFor(r.sensitivity) }
-    const next = { name: current.name, source, shape: await traceSource(source, current.name) }
+    const traced = await traceSource(source, current.name)
+    const style = r.style ?? current.shape.style
+    const next = { name: current.name, source, shape: { ...traced, ...(style ? { style } : {}) } }
     setAttempts([...marked, next])
     setSelected(marked.length)
   })
@@ -211,6 +214,9 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
                   <input type="range" min={50} max={2000} step={10} value={drones} aria-label="Drones" onChange={(e) => setDrones(Number(e.target.value))} style={{ flex: 1 }} />
                   <span className="hint" style={{ width: 44, textAlign: 'right' }}>{drones}</span>
                 </Row>
+                <Row label="Style" title="Lines: every line of the picture is a line of drones. Filled: drones spread over the whole figure. Adaptive: lines while they fit the sky, a filled silhouette when there are more drones than the lines can hold.">
+                  <Segmented full value={current.shape.style ?? 'lines'} onChange={(style: DrawingStyle) => setAttempts((a) => a.map((x, i) => (i === selected ? { ...x, shape: { ...x.shape, style } } : x)))} options={[{ value: 'lines', label: 'Lines' }, { value: 'filled', label: 'Filled' }, { value: 'adaptive', label: 'Adaptive' }]} />
+                </Row>
                 <Row label="Detail" title="Lower: fewer, bolder lines. Higher: more of the picture’s lines (lines that would blur together at this drone count are always left out).">
                   <input type="range" min={0} max={1} step={0.05} value={current.source.detail} aria-label="Detail" onChange={(e) => retrace({ detail: Number(e.target.value) })} style={{ flex: 1 }} />
                   <span className="hint" style={{ width: 44, textAlign: 'right' }}>{Math.round(current.source.detail * 100)}%</span>
@@ -219,7 +225,14 @@ export function PictureDialog({ onClose }: { onClose: () => void }) {
                   <Toggle checked={sensitivity === null} onChange={(auto) => retrace({ threshold: auto ? null : thresholdFor(0.5) })} label="Automatic" />
                   {sensitivity !== null && <input type="range" min={0} max={1} step={0.05} value={sensitivity} aria-label="Line sensitivity" onChange={(e) => retrace({ threshold: thresholdFor(Number(e.target.value)) })} style={{ flex: 1 }} />}
                 </Row>
-                {fit && <p className={`hint ${fit.fits ? 'ok' : 'err'}`}>{describeFit(fit, drones)}{!fit.fits && <> <button className="btn ghost sm" onClick={() => setDrones(fit.maxDrones)}>Use {fit.maxDrones}</button></>}</p>}
+                {fit && <p className={`hint ${fit.fits ? 'ok' : 'err'}`}>{describeFit(fit, drones)}</p>}
+                {fit && !fit.fits && (
+                  <div className="pic-actions">
+                    <button className="btn sm" onClick={() => setDrones(fit.maxDrones)}>Use {fit.maxDrones} drones</button>
+                    {(current.shape.style ?? 'lines') !== 'filled' && <button className="btn sm" onClick={() => setAttempts((a) => a.map((x, i) => (i === selected ? { ...x, shape: { ...x.shape, style: 'filled' } } : x)))}>Fill it</button>}
+                    {(current.shape.style ?? 'lines') === 'lines' && <button className="btn ghost sm" onClick={() => setAttempts((a) => a.map((x, i) => (i === selected ? { ...x, shape: { ...x.shape, style: 'adaptive' } } : x)))}>Adaptive</button>}
+                  </div>
+                )}
                 <div className="pic-actions">
                   <button className="btn ai sm" disabled={!!busy} onClick={lookAndFix}><Wrench size={12} /> Look &amp; fix</button>
                 </div>

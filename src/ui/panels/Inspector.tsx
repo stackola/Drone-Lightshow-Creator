@@ -445,6 +445,11 @@ function LayerCard({ scene, layer, count, counts, multi }: { scene: Scene; layer
             </button>
           </Row>
         )}
+        {shape.kind === 'image' && !!shape.lines?.length && (
+          <Row label="Drawing" title="Lines: every line is a line of drones. Filled: drones spread over the whole figure. Adaptive: lines while they fit the sky, a filled silhouette when there are more drones than the lines can hold.">
+            <Segmented full value={shape.style ?? 'lines'} onChange={(v) => upShape({ style: v }, 'Drawing style')} options={[{ value: 'lines', label: 'Lines' }, { value: 'filled', label: 'Filled' }, { value: 'adaptive', label: 'Adaptive' }]} />
+          </Row>
+        )}
         {shape.kind === 'image' && !shape.picture && (
           <Row label="Image">
             <span className="hint" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{shape.name}</span>

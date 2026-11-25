@@ -30,7 +30,7 @@ describe('tracing a picture', () => {
     expect(filled / m.length).toBeLessThan(0.09)
   })
   it('becomes drones in the picture’s colours at any count', () => {
-    const shape: ShapeSpec = { kind: 'image', size: 10, name: 'test', mask: t.mask, colors: t.colors, cw: t.cw, ch: t.ch, lines: t.lines }
+    const shape: ShapeSpec = { kind: 'image', size: 10, name: 'test', mask: t.mask, colors: t.colors, cw: t.cw, ch: t.ch, lines: t.lines, style: 'lines' }
     for (const n of [60, 240]) {
       const g = generateShape(shape, n)
       expect(g.points.length).toBe(n * 3)

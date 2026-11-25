@@ -59,3 +59,26 @@ describe('drawings in project files', () => {
     expect((back.scenes[0]!.layers[0]!.shape as { lines?: unknown }).lines).toEqual([square])
   })
 })
+
+describe('drawing styles', () => {
+  const ring = { p: Array.from({ length: 82 }, (_, k) => { const a = (Math.floor(k / 2) / 40) * 2 * Math.PI; return k % 2 ? 0.5 + 0.4 * Math.sin(a) : 0.5 + 0.4 * Math.cos(a) }), closed: true }
+  const empty = encodeMask(100, 100, () => false)
+  const radii = (g: { points: Float32Array }, n: number) => Array.from({ length: n }, (_, k) => Math.hypot(g.points[k * 3]!, g.points[k * 3 + 1]!) / 10)
+  it('lines: every drone on the ring', () => {
+    const g = generateShape({ ...image([ring], empty), style: 'lines' } as ShapeSpec, 120)
+    for (const r of radii(g, 120)) expect(Math.abs(r - 0.4)).toBeLessThan(0.01)
+  })
+  it('filled: the drones spread over the whole disc the ring encloses', () => {
+    const g = generateShape({ ...image([ring], empty), style: 'filled' } as ShapeSpec, 200)
+    const r = radii(g, 200)
+    expect(r.filter((x) => x < 0.2).length).toBeGreaterThan(30)
+    expect(Math.max(...r)).toBeLessThan(0.43)
+  })
+  it('adaptive: lines while the figure fits the sky, a filled silhouette beyond — so it stays compact', () => {
+    const adaptive = (n: number) => generateShape({ ...image([ring], empty), style: 'adaptive' } as ShapeSpec, n)
+    const few = radii(adaptive(60), 60)
+    expect(few.every((x) => Math.abs(x - 0.4) < 0.01)).toBe(true)
+    const r = radii(adaptive(400), 400)
+    expect(r.filter((x) => x < 0.3).length).toBeGreaterThan(150)
+  })
+})

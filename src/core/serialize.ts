@@ -257,6 +257,7 @@ function shapeSpec(v: unknown): ShapeSpec | null {
     })
     if (lines.length) out.lines = lines
     if (typeof v.detail === 'number') out.detail = num(v.detail, 0.5, 0, 1)
+    if (v.style === 'lines' || v.style === 'filled' || v.style === 'adaptive') out.style = v.style
     const pic = v.picture
     if (isObj(pic) && typeof pic.image === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(pic.image) && pic.image.length < 1_500_000) {
       out.picture = {

@@ -2,12 +2,12 @@
 // on the origin, in the XY "picture plane" (facing the audience) unless the
 // shape is 3D. Every generator is linear in `size`.
 
-import type { Fill, ModelJoint, ModelPart, ShapeKind, ShapeSpec } from './types'
+import type { Fill, Mask, ModelJoint, ModelPart, ShapeKind, ShapeSpec } from './types'
 import { sampleModel, solidsKey } from './model3d'
 import { hash01 } from './math'
 import { glyphMap, textPointOrder, type GlyphMap } from './textOrder'
 import {
-  base64ToBytes, decodeMask, gather, maskCandidates, polygonCandidates, readingOrder, sampleCurve,
+  base64ToBytes, decodeMask, encodeMask, gather, maskCandidates, polygonCandidates, readingOrder, sampleCurve,
   samplePolygonOutline, spreadPick,
 } from './sample'
 
@@ -506,7 +506,7 @@ function imageShape(spec: Extract<ShapeSpec, { kind: 'image' }>, n: number): Sha
   const { mask } = spec
   if (!mask.w || !mask.h) return plain(sunflower(n))
   const [w, h] = maskSize(mask.w, mask.h)
-  if (spec.lines?.length) return drawingShape(spec, n, w, h)
+  if (spec.lines?.length || (spec.style && spec.style !== 'lines')) return drawingShape(spec, n, w, h)
   const cand = maskCandidates(mask, w, h, Math.max(n * 30, 3000))
   if (cand.length === 0) return plain(sunflower(n))
   const pts = readingOrder(gather(cand, spreadPick(cand, n)), 0.02)
@@ -568,8 +568,147 @@ function strokesForSpacing(lines: [number, number][][], lens: number[], s: numbe
   return kept.sort((a, b) => a - b)
 }
 
-function drawingShape(spec: Extract<ShapeSpec, { kind: 'image' }>, n: number, w: number, h: number): ShapePoints {
-  const all = spec.lines!.map((l) => { const out: [number, number][] = []; for (let i = 0; i + 1 < l.p.length; i += 2) out.push([(l.p[i]! - 0.5) * w, (0.5 - l.p[i + 1]!) * h]); return { pts: out, closed: !!l.closed } }).filter((l) => l.pts.length >= 2)
+type Picture = Extract<ShapeSpec, { kind: 'image' }>
+
+/**
+ * A drawing as drones, in its style:
+ * - lines (default): every stroke one evenly spaced line of drones (fills only where the picture has solid areas);
+ * - filled: drones spread evenly over the whole silhouette (what the lines enclose), in the lines' colours;
+ * - adaptive: lines while the figure they make fits a typical show sky (about 100 m tall
+ *   and 200 m wide at 3 m between drones); with more drones than the lines can hold within it, a
+ *   clean filled silhouette instead, so the figure stays compact.
+ */
+function drawingShape(spec: Picture, n: number, w: number, h: number): ShapePoints {
+  const style = spec.style ?? 'lines'
+  if (style === 'lines') return layoutDrawing(spec, n, w, h).shape
+  const sil = silhouetteOf(spec, w, h)
+  if (style === 'filled' || !spec.lines?.length) {
+    let cand = maskCandidates(sil.inside, w, h, Math.max(n * 30, 3000))
+    if (cand.length / 3 < n) cand = maskCandidates(spec.mask, w, h, Math.max(n * 30, 3000))
+    if (cand.length / 3 < n) return layoutDrawing({ ...spec, style: 'lines' }, n, w, h).shape
+    const points = readingOrder(gather(cand, spreadPick(cand, n)), 0.02)
+    return { points, colors: insideColors(spec, sil, points, 0, n, w, h, 1) }
+  }
+  // Lines while the figure they make stays within a typical show sky (about 100 m tall and 200 m wide
+  // at 3 m between drones); beyond that, fill the inside so it stays compact.
+  const linesOnly = layoutDrawing(spec, n, w, h)
+  if (linesOnly.spacing >= Math.max((3 * h) / 100, (3 * w) / 200)) return linesOnly.shape
+  // More drones than the lines can hold within the sky: a clean filled silhouette instead.
+  return drawingShape({ ...spec, style: 'filled' }, n, w, h)
+}
+
+interface Silhouette {
+  /** Everything the drawing encloses (lines, their insides and the picture's fills). */
+  inside: Mask
+  /** Its area in shape units. */
+  area: number
+  /** Points along the lines with their colours, for colouring the inside. */
+  samples: { x: Float32Array; y: Float32Array; c: Float32Array }
+}
+
+const silhouettes = new WeakMap<object, Silhouette>()
+
+/**
+ * The drawing's silhouette: its lines (thickened a little to close small
+ * gaps) and the picture's fills, plus everything they enclose — what is
+ * not reachable from the border.
+ */
+function silhouetteOf(spec: Picture, w: number, h: number): Silhouette {
+  const cacheKey = spec.lines ?? spec.mask
+  const hit = silhouettes.get(cacheKey)
+  if (hit) return hit
+  const gw = 256, gh = Math.max(1, Math.round((256 * h) / w))
+  const ink = new Uint8Array(gw * gh)
+  const mpx = decodeMask(spec.mask)
+  for (let y = 0; y < gh; y++)
+    for (let x = 0; x < gw; x++) {
+      const mx = Math.min(spec.mask.w - 1, Math.floor(((x + 0.5) / gw) * spec.mask.w)), my = Math.min(spec.mask.h - 1, Math.floor(((y + 0.5) / gh) * spec.mask.h))
+      if (mpx[my * spec.mask.w + mx]) ink[y * gw + x] = 1
+    }
+  // Lines, drawn 3 px wide (closes small gaps before the flood fill).
+  const sx: number[] = [], sy: number[] = []
+  for (const l of spec.lines ?? []) {
+    for (let i = 0; i + 3 < l.p.length; i += 2) {
+      const ax = l.p[i]! * gw, ay = l.p[i + 1]! * gh, bx = l.p[i + 2]! * gw, by = l.p[i + 3]! * gh
+      const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) * 2))
+      for (let k = 0; k <= steps; k++) {
+        const x = ax + ((bx - ax) * k) / steps, y = ay + ((by - ay) * k) / steps
+        sx.push(x); sy.push(y)
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const px = Math.floor(x) + dx, py = Math.floor(y) + dy
+          if (px >= 0 && py >= 0 && px < gw && py < gh) ink[py * gw + px] = 1
+        }
+      }
+    }
+  }
+  // Outside: flood from the border through everything that isn't ink.
+  const outside = new Uint8Array(gw * gh)
+  const stack: number[] = []
+  const push = (i: number) => { if (!ink[i] && !outside[i]) { outside[i] = 1; stack.push(i) } }
+  for (let x = 0; x < gw; x++) { push(x); push((gh - 1) * gw + x) }
+  for (let y = 0; y < gh; y++) { push(y * gw); push(y * gw + gw - 1) }
+  while (stack.length) {
+    const i = stack.pop()!
+    const x = i % gw, y = (i - x) / gw
+    if (x > 0) push(i - 1)
+    if (x < gw - 1) push(i + 1)
+    if (y > 0) push(i - gw)
+    if (y < gh - 1) push(i + gw)
+  }
+  let count = 0
+  for (let i = 0; i < gw * gh; i++) if (!outside[i]) count++
+  const inside = encodeMask(gw, gh, (x, y) => !outside[y * gw + x])
+  // Colours along the lines (a sample every few pixels).
+  const k = Math.max(1, Math.floor(sx.length / 4000))
+  const m = Math.ceil(sx.length / k)
+  const pts = new Float32Array(m * 3)
+  const X = new Float32Array(m), Y = new Float32Array(m)
+  for (let j = 0; j < m; j++) {
+    X[j] = (sx[j * k]! / gw - 0.5) * w; Y[j] = (0.5 - sy[j * k]! / gh) * h
+    pts[j * 3] = X[j]!; pts[j * 3 + 1] = Y[j]!
+  }
+  const c = rasterColors(spec, pts, m, w, h) ?? new Float32Array(m * 3).fill(1)
+  const out: Silhouette = { inside, area: (count / (gw * gh)) * w * h, samples: { x: X, y: Y, c } }
+  silhouettes.set(cacheKey, out)
+  return out
+}
+
+/**
+ * Colours for drones from index `from` on: the picture's own colour inside its
+ * solid fills, otherwise the colour of the nearest line (× brightness).
+ */
+function insideColors(spec: Picture, sil: Silhouette, pts: Float32Array, from: number, n: number, w: number, h: number, brightness: number): Float32Array | null {
+  const raster = rasterColors(spec, pts, n, w, h)
+  const out = raster ? raster.slice() : new Float32Array(n * 3).fill(1)
+  const { x: X, y: Y, c } = sil.samples
+  if (!X.length) return out
+  const mpx = decodeMask(spec.mask)
+  const cell = 0.02 * Math.max(w, h)
+  const grid = new Map<number, number[]>()
+  const key = (a: number, b: number) => a * 100003 + b
+  for (let j = 0; j < X.length; j++) { const kk = key(Math.floor(X[j]! / cell), Math.floor(Y[j]! / cell)); const l = grid.get(kk); if (l) l.push(j); else grid.set(kk, [j]) }
+  for (let i = from; i < n; i++) {
+    const x = pts[i * 3]!, y = pts[i * 3 + 1]!
+    // In the picture's own solid fills, keep its colour.
+    const mx = Math.min(spec.mask.w - 1, Math.max(0, Math.floor((x / w + 0.5) * spec.mask.w))), my = Math.min(spec.mask.h - 1, Math.max(0, Math.floor((0.5 - y / h) * spec.mask.h)))
+    if (mpx[my * spec.mask.w + mx]) continue
+    const cx = Math.floor(x / cell), cy = Math.floor(y / cell)
+    let best = -1, bd = Infinity
+    for (let r = 0; r < 40 && best < 0; r++) {
+      for (let a = -r; a <= r; a++) for (let b = -r; b <= r; b++) {
+        if (Math.max(Math.abs(a), Math.abs(b)) !== r) continue
+        for (const j of grid.get(key(cx + a, cy + b)) ?? []) { const d = (X[j]! - x) ** 2 + (Y[j]! - y) ** 2; if (d < bd) { bd = d; best = j } }
+      }
+    }
+    if (best < 0) continue
+    for (let a = 0; a < 3; a++) out[i * 3 + a] = c[best * 3 + a]! * brightness
+  }
+  return out
+}
+
+/** Strokes (and the fills of `spec.mask`) for n drones; also returns the spacing and how many drones are on strokes. */
+function layoutDrawing(spec: Picture, n: number, w: number, h: number, fixedSpacing?: number): { shape: ShapePoints; spacing: number; strokes: number; ok: boolean } {
+  const all = (spec.lines ?? []).map((l) => { const out: [number, number][] = []; for (let i = 0; i + 1 < l.p.length; i += 2) out.push([(l.p[i]! - 0.5) * w, (0.5 - l.p[i + 1]!) * h]); return { pts: out, closed: !!l.closed } }).filter((l) => l.pts.length >= 2)
   const lens = all.map((l) => l.pts.slice(1).reduce((a, q, i) => a + Math.hypot(q[0] - l.pts[i]![0], q[1] - l.pts[i]![1]), 0))
   const px = decodeMask(spec.mask)
   let on = 0
@@ -594,14 +733,15 @@ function drawingShape(spec: Extract<ShapeSpec, { kind: 'image' }>, n: number, w:
     for (let k = 0; k < n2; k++) for (let a = 0; a < 3; a++) avg[a] = avg[a]! + c[k * 3 + a]! / n2
     return avg
   })
-  let s = solve()
+  let s = fixedSpacing ?? solve()
   // Fewer drones, less detail: drop strokes that would blur into stronger ones at this spacing, then re-solve.
   for (let it = 0; it < 4; it++) {
     const keep = strokesForSpacing(all.map((l) => l.pts), lens, s, 1.9 - 1.1 * Math.max(0, Math.min(1, spec.detail ?? 0.5)), all.map((l) => l.closed), lineColors)
     if (keep.length === lines.length) break
     lines = keep.map((i) => all[i]!.pts)
     closed = keep.map((i) => all[i]!.closed)
-    s = solve()
+    if (fixedSpacing === undefined) s = solve()
+    else break
   }
   const ld = lineDrones(lines, closed, s)
   let strokes = ld.pts.length / 3
@@ -637,8 +777,9 @@ function drawingShape(spec: Extract<ShapeSpec, { kind: 'image' }>, n: number, w:
     }
     if (cand.length / 3 >= fillN) fill = readingOrder(gather(cand, spreadPick(cand, fillN)), 0.02)
     else {
-      // No room left to fill: more drones along the strokes instead.
-      return drawingShape({ ...spec, mask: { ...spec.mask, bits: '' } }, n, w, h)
+      // No room left to fill (at this spacing): let the caller decide, or put more drones on the strokes.
+      if (fixedSpacing !== undefined) return { shape: { points: new Float32Array(n * 3), colors: null }, spacing: s, strokes, ok: false }
+      return layoutDrawing({ ...spec, mask: { ...spec.mask, bits: '' } }, n, w, h)
     }
   }
   const points = new Float32Array(n * 3)
@@ -648,10 +789,10 @@ function drawingShape(spec: Extract<ShapeSpec, { kind: 'image' }>, n: number, w:
   const order = new Float32Array(n)
   for (let k = 0; k < strokes; k++) order[k] = ld.order[k]! * (fillN ? 0.7 : 1)
   for (let k = 0; k < fillN; k++) order[strokes + k] = 0.7 + (0.3 * k) / Math.max(1, fillN - 1)
-  return { points, colors: rasterColors(spec, points, n, w, h), order }
+  return { shape: { points, colors: rasterColors(spec, points, n, w, h), order }, spacing: s, strokes, ok: true }
 }
 
-function rasterColors(spec: Extract<ShapeSpec, { kind: 'image' }>, pts: Float32Array, n: number, w: number, h: number): Float32Array | null {
+function rasterColors(spec: Picture, pts: Float32Array, n: number, w: number, h: number): Float32Array | null {
   let colors: Float32Array | null = null
   if (spec.colors && spec.cw && spec.ch) {
     const rgb = base64ToBytes(spec.colors)

@@ -36,7 +36,7 @@ export const DEFAULT_TRACE: TraceOptions = { threshold: null, fillWidth: 0.08, m
 /** Detail 0 (bold, simple) … 1 (every line) as trace options. */
 export function traceDetail(detail: number): Pick<TraceOptions, 'minLength' | 'blur'> {
   const d = Math.max(0, Math.min(1, detail))
-  return { minLength: 0.05 - 0.045 * d, blur: 3 - 2 * d }
+  return { minLength: 0.05 - 0.045 * d, blur: 1.6 - d }
 }
 
 export interface Traced {
@@ -401,7 +401,7 @@ export function traceImage(rgba: Uint8ClampedArray | Uint8Array, width: number, 
   const ink = new Uint8Array(n)
   const stack: number[] = []
   for (let i = 0; i < n; i++) if (soft[i]! > thr) { ink[i] = 1; stack.push(i) }
-  const weak = thr * 0.5
+  const weak = thr * 0.75
   while (stack.length) {
     const i = stack.pop()!
     const x = i % w, y = (i - x) / w

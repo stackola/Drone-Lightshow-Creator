@@ -91,8 +91,13 @@ export type CustomShapes = Map<unknown, ShapeSpec>
 
 /** A shape from model input: built-in, or a custom drawing / 3D model generated beforehand (else a placeholder). */
 function resolveShape(shapeIn: ShapeInput, custom: ShapeSpec | null | undefined): ShapeSpec {
-  if (shapeIn.kind === 'custom' || shapeIn.kind === 'model3d') return custom ?? newShape(shapeIn.kind === 'model3d' ? 'model' : 'sphere')
+  if (shapeIn.kind === 'custom' || shapeIn.kind === 'model3d') return withDrawingStyle(custom ?? newShape(shapeIn.kind === 'model3d' ? 'model' : 'sphere'), shapeIn)
   return shapeFromInput(shapeIn)
+}
+
+/** A drawing's style (lines / filled / adaptive), as the AI asked. */
+export function withDrawingStyle(shape: ShapeSpec, input: ShapeInput): ShapeSpec {
+  return shape.kind === 'image' && input.drawing_style ? { ...shape, style: input.drawing_style } : shape
 }
 
 /** A shape's own motion inside the formation. */
