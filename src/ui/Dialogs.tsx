@@ -135,6 +135,7 @@ const SHORTCUTS: [string, string][] = [
   ['Alt ← → ↑ ↓', 'Nudge the formation across / up and down (Shift: 5 m)'],
   ['Alt PgUp / PgDn', 'Nudge the formation away from / toward the audience'],
   ['F', 'Frame the selected formation'],
+  ['K', 'Auto-key: moving, turning or resizing a formation sets a keyframe at the playhead'],
   ['Click a drone', 'Select the formation it belongs to'],
   ['P', 'Present fullscreen'],
   ['Ctrl S', 'Save project'],

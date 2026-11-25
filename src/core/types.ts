@@ -290,6 +290,8 @@ export interface HoldKey {
   rotate: Vec3
   /** Uniform size (1 = as designed). Below 1 the drones close in, never below safe spacing. */
   scale: number
+  /** Flow through this key without stopping (a smooth curve through the keys). The last key always stops. */
+  through?: boolean
 }
 
 /**

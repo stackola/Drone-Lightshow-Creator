@@ -316,7 +316,7 @@ function KeyframeEditor({ scene }: { scene: Scene }) {
         <span>Keyframes</span>
         <button className="btn ghost sm" title={inHold ? 'Add a keyframe at the playhead' : 'Add a keyframe at the end of the hold (move the playhead into the hold to place one there)'} onClick={addKey}><Plus size={12} /> Key {inHold ? 'at playhead' : 'at end of hold'}</button>
       </div>
-      {!keys.length && <p className="hint" style={{ margin: '2px 0 0' }}>Move, turn or resize the whole formation while it’s held. It eases into each key and rests there; the next flight starts from the last key.</p>}
+      {!keys.length && <p className="hint" style={{ margin: '2px 0 0' }}>Move, turn or resize the whole formation while it’s held. It eases into each key and rests there, or flows through it on a smooth curve; the next flight starts from the last key.</p>}
       {keys.map((k, i) => (
         <div key={i} className="key-card">
           <div className="key-row">
@@ -327,6 +327,11 @@ function KeyframeEditor({ scene }: { scene: Scene }) {
           </div>
           <Vec3Field value={k.move} labels={['X', 'Up', 'Z']} onChange={(v) => upKey(i, { move: v }, 'Keyframe move')} />
           <Vec3Field value={k.rotate} labels={['Tilt', 'Turn', 'Roll']} step={5} onChange={(v) => upKey(i, { rotate: v }, 'Keyframe turn')} />
+          {i < keys.length - 1 ? (
+            <Toggle checked={!!k.through} onChange={(v) => upKey(i, { through: v }, v ? 'Flow through keyframe' : 'Stop at keyframe')} label="Flow through (don’t stop here)" />
+          ) : (
+            <span className="hint">Last key: the formation rests here.</span>
+          )}
         </div>
       ))}
     </div>

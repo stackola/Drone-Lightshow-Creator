@@ -555,3 +555,6 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent-2); c
 .key-diamond { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0; }
 .blk .key-mark, .split-row .sub .key-mark { position: absolute; top: 50%; width: 9px; height: 9px; margin: -5px 0 0 -5px; transform: rotate(45deg); background: var(--accent); border: 1px solid rgba(0,0,0,0.6); cursor: ew-resize; z-index: 3; }
 .blk .key-mark:hover { background: #fff; }
+.blk .key-mark.through, .split-row .sub .key-mark.through { background: transparent; border: 2px solid var(--accent); }
+.toolbar .autokey.on { color: #111; background: var(--accent); }
+.toolbar .autokey-status { align-self: center; font-size: 11.5px; color: var(--accent); padding: 0 6px 0 2px; white-space: nowrap; }

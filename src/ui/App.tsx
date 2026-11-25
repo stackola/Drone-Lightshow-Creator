@@ -1,7 +1,10 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 
 const CopilotPanel = lazy(() => import('./ai/CopilotPanel').then((m) => ({ default: m.CopilotPanel })))
-import { Users, Orbit, Map as MapIcon, AlertTriangle, Wind, MousePointer2, Move3d, Rotate3d, Scaling, Focus } from 'lucide-react'
+import { findSceneTime } from '@/core/compile'
+import { findScene } from '@/core/groups'
+import { MIN_KEY_TIME } from '@/core/keys'
+import { Users, Orbit, Map as MapIcon, AlertTriangle, Wind, MousePointer2, Move3d, Rotate3d, Scaling, Focus, Diamond } from 'lucide-react'
 import { TopBar } from './TopBar'
 import { ScenesPanel } from './panels/ScenesPanel'
 import { Inspector } from './panels/Inspector'
@@ -18,7 +21,7 @@ import { useCopilot } from '@/ai/copilotStore'
 
 const useCopilotRunning = () => useCopilot((s) => s.running)
 import { seek, togglePlay } from '@/state/playback'
-import { addCue, addScene, deleteCue, deleteScene, duplicateCue, duplicateScene, frameScene, nudgeScene, selectedSceneId, stepScene } from '@/state/actions'
+import { addCue, addScene, deleteCue, deleteScene, duplicateCue, duplicateScene, frameScene, nudgeScene, selectedSceneId, stepScene, autoKeyTau, nudgeKey } from '@/state/actions'
 import { loadMusic, openProjectFile, saveProject } from '@/state/persist'
 import { imageShape } from './content'
 import { sceneAt } from '@/core/evaluate'
@@ -102,7 +105,35 @@ function ToolBar() {
     <div className="glass toolbar" style={{ padding: 3, display: 'flex', gap: 3 }}>
       <Segmented<Tool> value={tool} onChange={(t) => getState().set({ tool: t })} options={TOOLS} />
       <button className="btn ghost sm icon" title="Frame the formation (F)" aria-label="Frame the formation" onClick={() => frameScene(id)}><Focus size={13} /></button>
+      <AutoKeyToggle id={id} />
     </div>
+  )
+}
+
+/** Auto-key (K): with the playhead inside the selected formation's hold, the gizmo sets keyframes. */
+function AutoKeyToggle({ id }: { id: string }) {
+  const on = useStore((s) => s.autoKey)
+  const status = useStore((s) => {
+    if (!s.autoKey || !s.compiled) return null
+    const t = findSceneTime(s.compiled, id)
+    const ref = findScene(s.doc, id)
+    if (!t || !ref) return null
+    const tau = s.time - t.holdStart
+    return tau >= MIN_KEY_TIME - 1e-6 && tau <= ref.scene.hold + 1e-6 ? `Keying “${ref.scene.name}” at ${tau.toFixed(1)} s` : 'Move the playhead into this hold to key it'
+  })
+  return (
+    <>
+      <button
+        className={`btn ghost sm icon autokey${on ? ' on' : ''}`}
+        aria-pressed={on}
+        aria-label="Auto-key"
+        title="Auto-key (K): with the playhead inside the formation’s hold, moving, turning or resizing it sets a keyframe there instead of moving the formation"
+        onClick={() => getState().set({ autoKey: !on })}
+      >
+        <Diamond size={13} />
+      </button>
+      {status && <span className="autokey-status">{status}</span>}
+    </>
   )
 }
 
@@ -204,7 +235,14 @@ export function App() {
           PageUp: [0, 0, -step], PageDown: [0, 0, step],
         }
         const delta = d[e.key]
-        if (delta) { e.preventDefault(); nudgeScene(target, delta); return }
+        if (delta) {
+          e.preventDefault()
+          // Auto-key with the playhead in the hold: nudge the keyframe there instead of the formation.
+          const tau = autoKeyTau(target)
+          if (tau !== null) nudgeKey(target, tau, delta)
+          else nudgeScene(target, delta)
+          return
+        }
       }
       switch (e.key) {
         case 'q': case 'Q': s.set({ tool: 'select' }); break
@@ -212,6 +250,7 @@ export function App() {
         case 'e': case 'E': s.set({ tool: 'rotate' }); break
         case 'r': case 'R': s.set({ tool: 'scale' }); break
         case 'f': case 'F': if (target) frameScene(target); break
+        case 'k': case 'K': s.set({ autoKey: !s.autoKey }); break
         case ' ': e.preventDefault(); togglePlay(); break
         case 'ArrowLeft': e.preventDefault(); seek(s.time - (e.shiftKey ? 5 : 1)); break
         case 'ArrowRight': e.preventDefault(); seek(s.time + (e.shiftKey ? 5 : 1)); break

@@ -98,6 +98,7 @@ export const KeyframeInput = z.object({
   turn: z.number().optional().describe('Extra turn about the vertical axis (degrees)'),
   roll: z.number().optional().describe('Extra roll in the audience’s view (degrees)'),
   scale: z.number().optional().describe('Size: 1 = as designed (default), 1.2 = 20% larger; below 1 only as far as safe spacing allows'),
+  flow_through: z.boolean().optional().describe('Sweep through this key on a smooth curve without stopping (for paths: arcs, loops, swoops). The last key always stops.'),
 })
 export type KeyframeInput = z.infer<typeof KeyframeInput>
 

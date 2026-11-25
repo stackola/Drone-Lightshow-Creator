@@ -13,7 +13,8 @@ import { getState, useStore } from '@/state/store'
 import { findCompiledScene, findSceneTime, sceneGeometry } from '@/core/compile'
 import { findScene, sceneDroneCount } from '@/core/groups'
 import { comfortableSpacing } from '@/core/validate'
-import { transformScene } from '@/state/actions'
+import { autoKeyTau, setKeyAt, transformScene } from '@/state/actions'
+import { keyPose, normalizeKeys } from '@/core/keys'
 import { DEG } from '@/core/math'
 
 let dotTexture: THREE.Texture | null = null
@@ -78,15 +79,29 @@ export function Manipulator() {
   }, [local])
   const material = useMemo(() => new THREE.PointsMaterial({ size: 1.6, map: dot(), color: GHOST, transparent: true, opacity: 0.5, depthWrite: false, sizeAttenuation: true, alphaTest: 0.01 }), [])
 
-  // Keep the gizmo on the scene's transform while not dragging.
-  useEffect(() => {
+  const keys = useMemo(() => (scene ? normalizeKeys(scene.keys, scene.hold) : []), [scene])
+  /** Hold time of the playhead when auto-key applies to this formation, else null. */
+  const keyTau = (): number | null => (id ? autoKeyTau(id) : null)
+  const baseQuat = () => new THREE.Quaternion().setFromEuler(new THREE.Euler(scene!.rotation[0] * DEG, scene!.rotation[1] * DEG, scene!.rotation[2] * DEG, 'ZYX'))
+
+  // Keep the gizmo on the formation while not dragging: as placed, or (auto-key) at its keyed pose at the playhead.
+  useFrame(() => {
     const g = group.current
     if (!g || !scene || dragging) return
-    g.position.set(...scene.position)
+    const tau = keyTau()
     g.rotation.order = 'ZYX'
-    g.rotation.set(scene.rotation[0] * DEG, scene.rotation[1] * DEG, scene.rotation[2] * DEG)
-    g.scale.setScalar(1)
-  }, [scene, dragging])
+    if (tau === null) {
+      g.position.set(...scene.position)
+      g.quaternion.copy(baseQuat())
+      g.scale.setScalar(1)
+      return
+    }
+    const kp = keyPose(keys, tau)
+    const qk = new THREE.Quaternion().setFromEuler(new THREE.Euler(kp.rotate[0] * DEG, kp.rotate[1] * DEG, kp.rotate[2] * DEG, 'ZYX'))
+    g.position.set(scene.position[0] + kp.move[0], scene.position[1] + kp.move[1], scene.position[2] + kp.move[2])
+    g.quaternion.copy(qk.multiply(baseQuat()))
+    g.scale.setScalar(kp.scale)
+  })
 
   // Alt toggles snapping off while held.
   useEffect(() => {
@@ -108,7 +123,8 @@ export function Manipulator() {
   })
 
   if (!scene || !local) return null
-  const minScale = spacing && spacing > 0 ? Math.min(1, comfortableSpacing(safeSpacing(limits)) / spacing) : 0.2
+  // Resizing the formation keeps a comfortable spacing; a keyframe may go down to the exact safe spacing.
+  const minScale = spacing && spacing > 0 ? Math.min(1, (keyTau() !== null ? safeSpacing(limits) * 1.01 : comfortableSpacing(safeSpacing(limits))) / spacing) : 0.2
 
   /** Check the dragged formation against the airspace and describe the change. */
   const inspect = () => {
@@ -131,14 +147,15 @@ export function Manipulator() {
     }
     const bad = lo < limits.minAltitude ? `Below the ${limits.minAltitude} m floor` : hi > limits.maxAltitude ? `Above the ${limits.maxAltitude} m ceiling` : far > limits.maxRadius ? `Outside the ${limits.maxRadius} m flight area` : null
     material.color.copy(bad ? BAD : GHOST)
-    let text = ''
-    if (tool === 'move') text = `x ${g.position.x.toFixed(1)} · alt ${g.position.y.toFixed(1)} · z ${g.position.z.toFixed(1)} m`
+    const tau = keyTau()
+    let text = tau !== null ? `◆ key at ${tau.toFixed(1)} s · ` : ''
+    if (tool === 'move') text += `x ${g.position.x.toFixed(1)} · alt ${g.position.y.toFixed(1)} · z ${g.position.z.toFixed(1)} m`
     else if (tool === 'rotate') {
       const e = new THREE.Euler().setFromQuaternion(g.quaternion, 'ZYX')
-      text = `tilt ${(e.x / DEG).toFixed(0)}° · turn ${(e.y / DEG).toFixed(0)}° · roll ${(e.z / DEG).toFixed(0)}°`
+      text += `tilt ${(e.x / DEG).toFixed(0)}° · turn ${(e.y / DEG).toFixed(0)}° · roll ${(e.z / DEG).toFixed(0)}°`
     } else if (tool === 'scale') {
       const k = g.scale.x
-      text = `×${k.toFixed(2)}${spacing ? ` · drones ${(spacing * k).toFixed(1)} m apart` : ''}${k <= minScale + 1e-6 && minScale < 1 ? ' (smallest safe size)' : ''}`
+      text += `×${k.toFixed(2)}${spacing ? ` · drones ${(spacing * k).toFixed(1)} m apart` : ''}${k <= minScale + 1e-6 && minScale < 1 ? ' (smallest safe size)' : ''}`
     }
     setInfo({ text, bad })
   }
@@ -146,6 +163,18 @@ export function Manipulator() {
   const commit = () => {
     const g = group.current
     if (!g || !id) return
+    const tau = keyTau()
+    if (tau !== null) {
+      // Auto-key: the gizmo's pose relative to the formation as placed becomes the keyframe at the playhead.
+      const qk = g.quaternion.clone().multiply(baseQuat().invert())
+      const ek = new THREE.Euler().setFromQuaternion(qk, 'ZYX')
+      setKeyAt(id, tau, {
+        move: [g.position.x - scene.position[0], g.position.y - scene.position[1], g.position.z - scene.position[2]],
+        rotate: [ek.x / DEG, ek.y / DEG, ek.z / DEG],
+        scale: Math.max(minScale, g.scale.x),
+      })
+      return
+    }
     const e = new THREE.Euler().setFromQuaternion(g.quaternion, 'ZYX')
     if (tool === 'move') transformScene(id, { position: [g.position.x, g.position.y, g.position.z] }, 'Move scene')
     else if (tool === 'rotate') transformScene(id, { rotation: [e.x / DEG, e.y / DEG, e.z / DEG] }, 'Rotate scene')

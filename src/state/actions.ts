@@ -11,6 +11,7 @@ import { seek } from './playback'
 import { SHAPE_BY_KIND } from '@/core/shapes'
 import { allocate, findCompiledScene, findSceneTime } from '@/core/compile'
 import { SPLIT_MODES, splitSceneDoc, type SplitMode } from '@/core/splits'
+import { MIN_KEY_TIME, keyPose, normalizeKeys } from '@/core/keys'
 import { findGroup, findScene, groupSizes, pruneGroups, replaceSceneIn, sceneDroneCount } from '@/core/groups'
 
 /**
@@ -324,6 +325,42 @@ export function stepScene(dir: 1 | -1) {
     seekToScene(target.id)
   } else if (dir < 0) seek(0)
   else seek(c.duration)
+}
+
+// --- Keyframes ----------------------------------------------------------------------------
+
+/** Set the keyframe at hold time tau (rounded to 0.1 s): update the key there, or add one. One undo step. */
+export function setKeyAt(id: string, tau: number, v: { move: [number, number, number]; rotate: [number, number, number]; scale: number }, mergeKey?: string) {
+  const t = Math.round(Math.max(MIN_KEY_TIME, tau) * 10) / 10
+  const r = (x: number, d = 10) => Math.round(x * d) / d
+  const values = { move: v.move.map((x) => r(x)) as [number, number, number], rotate: v.rotate.map((x) => r(x)) as [number, number, number], scale: r(v.scale, 1000) }
+  updateScene(id, (s) => {
+    const keys = s.keys ?? []
+    const k = keys.findIndex((x) => Math.abs(x.t - t) < 0.051)
+    if (k >= 0) Object.assign(keys[k]!, values)
+    else keys.push({ t, ...values })
+    keys.sort((a, b) => a.t - b.t)
+    s.keys = keys
+  }, 'Keyframe', mergeKey)
+}
+
+/** Hold time of the playhead if auto-key applies to this formation (playhead inside its hold), else null. */
+export function autoKeyTau(id: string): number | null {
+  const s = getState()
+  if (!s.autoKey || !s.compiled) return null
+  const ref = findScene(s.doc, id)
+  const t = findSceneTime(s.compiled, id)
+  if (!ref || !t) return null
+  const tau = s.time - t.holdStart
+  return tau >= MIN_KEY_TIME - 1e-6 && tau <= ref.scene.hold + 1e-6 ? tau : null
+}
+
+/** Nudge the keyframe at the playhead (auto-key), starting from the pose there; consecutive nudges merge. */
+export function nudgeKey(id: string, tau: number, delta: [number, number, number]) {
+  const ref = findScene(getState().doc, id)
+  if (!ref) return
+  const p = keyPose(normalizeKeys(ref.scene.keys, ref.scene.hold), tau)
+  setKeyAt(id, tau, { move: [p.move[0] + delta[0], p.move[1] + delta[1], p.move[2] + delta[2]], rotate: p.rotate, scale: p.scale }, `nudgekey:${id}`)
 }
 
 // --- Groups (splits and merges) -------------------------------------------------------

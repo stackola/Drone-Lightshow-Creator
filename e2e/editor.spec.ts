@@ -156,6 +156,29 @@ test('keyframes: a formation rises and turns while held, shown on the timeline',
   await expect(page.locator('.status-btn')).toContainText('Safe to fly', { timeout: 15000 })
 })
 
+test('auto-key: moving the formation with the playhead in its hold keys it there', async ({ page }) => {
+  await fresh(page)
+  await page.locator('.slist .srow:not(.fixed)', { hasText: 'Globe' }).first().click()
+  await page.getByRole('button', { name: 'Auto-key' }).click()
+  // Clicking a scene puts the playhead half a second into its hold: step 4 s further in.
+  for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight')
+  await expect(page.locator('.autokey-status')).toContainText(/Keying “Globe” at 4\.5 s/)
+  // With auto-key on, Alt+arrows nudge the keyframe at the playhead (not the formation).
+  const alt = page.getByLabel('Alt').first()
+  const altBefore = await alt.inputValue()
+  await page.keyboard.press('Alt+ArrowUp')
+  await page.keyboard.press('Alt+ArrowUp')
+  await expect(page.locator('.key-card')).toHaveCount(1)
+  await expect(alt).toHaveValue(altBefore)
+  await expect(page.locator('.key-card .grid3').first().locator('input').nth(1)).toHaveValue('2')
+  // One undo step for both nudges.
+  await page.keyboard.press('Control+z')
+  await expect(page.locator('.key-card')).toHaveCount(0)
+  await page.keyboard.press('Control+Shift+z')
+  await expect(page.locator('.key-card input').first()).toHaveValue('4.5')
+  await expect(page.locator('.blk.hold .key-mark')).toHaveCount(1)
+})
+
 test('logo import becomes a safe formation with image colours', async ({ page }) => {
   await fresh(page)
   await page.locator('.panel-head .btn.primary').click()

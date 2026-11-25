@@ -565,9 +565,9 @@ function KeyMarks({ sceneId, keys, hold, holdStart, pps, drag, snapT }: { sceneI
       {keys.map((k, ki) => (
         <span
           key={ki}
-          className="key-mark"
+          className={`key-mark${k.through ? ' through' : ''}`}
           style={{ left: Math.min(Math.max(0, k.t), hold) * pps }}
-          title={`Keyframe at ${k.t.toFixed(1)} s into the hold — drag to retime`}
+          title={`Keyframe at ${k.t.toFixed(1)} s into the hold${k.through ? ', flowed through' : ''} — drag to retime`}
           onPointerDown={(e) => {
             e.stopPropagation()
             drag(e, (tt, ev) => {

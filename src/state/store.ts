@@ -62,6 +62,8 @@ interface State {
   rightTab: 'inspector' | 'copilot'
   /** Viewport manipulation tool. */
   tool: Tool
+  /** Auto-key: with the playhead inside the selected formation's hold, the gizmo sets keyframes. */
+  autoKey: boolean
   /** Ask the camera to fly to a region (F: frame selection). */
   frameRequest: { center: [number, number, number]; radius: number; nonce: number } | null
 }
@@ -113,6 +115,7 @@ export const useStore = create<State & Actions>()((set, get) => ({
   rightTab: 'inspector',
   aiTarget: null,
   tool: 'move',
+  autoKey: false,
   frameRequest: null,
 
   update(recipe, label = 'Edit', key) {

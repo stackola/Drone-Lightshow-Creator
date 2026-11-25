@@ -4,7 +4,7 @@ import { compile, findCompiledScene } from './compile'
 import { evaluate } from './evaluate'
 import { validate } from './validate'
 import { autoFix } from './fixes'
-import { ease, keyPose, normalizeKeys } from './keys'
+import { ease, keyPose, minScale, normalizeKeys } from './keys'
 import { parseProjectFile, toProjectFile } from './serialize'
 import type { HoldKey, ShowDoc } from './types'
 
@@ -93,5 +93,56 @@ describe('keyframes while held', () => {
     const back = parseProjectFile(JSON.stringify(toProjectFile(doc, null))).doc
     expect(back.scenes[0]!.keys).toEqual(doc.scenes[0]!.keys)
     expect(findCompiledScene(compile(back), back.scenes[0]!.id)!.keys.length).toBe(1)
+  })
+})
+
+describe('flowing through keyframes', () => {
+  const path = [k(6, [10, 0, 0]), k(12, [10, 0, 10]), k(18, [0, 0, 10])]
+  const flowing = path.map((x, i) => (i < path.length - 1 ? { ...x, through: true } : x))
+
+  it('passes through each key without stopping, smoothly (continuous velocity and acceleration)', () => {
+    const keys = normalizeKeys(flowing, 22)
+    expect(keys[keys.length - 1]!.through).toBeFalsy() // the last key always stops
+    // Exactly at the keys…
+    for (const key of keys) expect(keyPose(keys, key.t).move).toEqual(key.move.map((v) => expect.closeTo(v, 6)))
+    // …moving at them (not stopped), and smooth: velocity and acceleration continuous across each key.
+    const at = (t: number) => keyPose(keys, t).move
+    const vel = (t: number, h = 1e-3) => at(t + h).map((v, i) => (v - at(t - h)[i]!) / (2 * h))
+    const acc = (t: number, h = 1e-3) => at(t + h).map((v, i) => (v - 2 * at(t)[i]! + at(t - h)[i]!) / (h * h))
+    for (const t of [6, 12]) {
+      expect(Math.hypot(...vel(t))).toBeGreaterThan(1)
+      const [a0, a1] = [acc(t - 0.01), acc(t + 0.01)]
+      for (let i = 0; i < 3; i++) expect(Math.abs(a0[i]! - a1[i]!)).toBeLessThan(0.2)
+    }
+    // Stopping keys rest; the whole thing ends at rest.
+    expect(Math.hypot(...vel(18))).toBeLessThan(1e-3)
+    const stopped = normalizeKeys(path, 22)
+    expect(Math.hypot(...vel(6))).toBeGreaterThan(1)
+    expect(Math.hypot(...(() => { const h = 1e-3; const a = keyPose(stopped, 6 + h).move, b = keyPose(stopped, 6 - h).move; return a.map((v, i) => (v - b[i]!) / (2 * h)) })())).toBeLessThan(1e-3)
+  })
+
+  it('a flowing path is safe, checked like any hold, and quicker than stopping at every key', () => {
+    const smooth = show(flowing, { hold: 22 })
+    const v = validate(smooth, compile(smooth))
+    expect(v.issues.map((i) => `${i.title}: ${i.detail}`)).toEqual([])
+    // Flowing through avoids stop-and-go: the path's peak acceleration is lower than stopping at each key.
+    const peakAcc = (keys: HoldKey[]) => {
+      let m = 0
+      const h = 0.01
+      for (let t = h; t < 22 - h; t += 0.05) {
+        const a = keyPose(keys, t + h).move.map((x, i) => (x - 2 * keyPose(keys, t).move[i]! + keyPose(keys, t - h).move[i]!) / (h * h))
+        m = Math.max(m, Math.hypot(...a))
+      }
+      return m
+    }
+    expect(peakAcc(normalizeKeys(flowing, 22))).toBeLessThan(peakAcc(normalizeKeys(path, 22)))
+  })
+
+  it('a size dip between flowed-through keys is caught even when no key is that small', () => {
+    // 100% → 120% → 60% (flowed) → 100%: the curve can dip below the 60% key; spacing is checked on the whole curve.
+    const keys = normalizeKeys([{ ...k(3, [0, 0, 0], [0, 0, 0], 1.2), through: true }, { ...k(6, [0, 0, 0], [0, 0, 0], 0.6), through: true }, k(9)], 12)
+    let lo = 1
+    for (let t = 0; t <= 12; t += 0.001) lo = Math.min(lo, keyPose(keys, t).scale)
+    expect(minScale(keys, 12).scale).toBeLessThanOrEqual(lo + 1e-9)
   })
 })

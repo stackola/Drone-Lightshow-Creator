@@ -21,7 +21,7 @@ import { findScene } from './groups'
 import { choreoPairs, choreoPeaks, sampledPeaks, scalePeaks, wrapPos, type Choreo, type PairResult, type UPeaks } from './transitions'
 import { NO_MOTION, holdPeaks, holdPose, holdRange, isMoving, moveExtents, profileInverse, profilePeaks, type HoldRange, type MotionPeaks } from './motion'
 import type { HoldKey, HoldMotion, Limits, Scene, ShowDoc } from './types'
-import { applyKey, keyMatrix, keyPose, minKeyScale, scaleKeys } from './keys'
+import { applyKey, keyMatrix, keyPose, minScale, scaleKeys } from './keys'
 import { DEG } from './math'
 
 export type FixAction =
@@ -419,9 +419,10 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
           })
         } else if (cs.keys.length) {
           // Keyframes move the formation as a whole: only their scale changes spacing (exactly by that factor).
-          const ms = minKeyScale(cs.keys)
+          const low = minScale(cs.keys, cs.hold)
+          const ms = low.scale
           const d = cp.d * ms
-          const atKey = cs.keys.reduce((a, k) => (k.scale < a.scale ? k : a), cs.keys[0]!)
+          const atKey = { t: low.t }
           if (d < stats.minDistance) { stats.minDistance = d; stats.minDistanceTime = ts.holdStart + atKey.t }
           if (d + EPS < L.minSpacing) {
             const need = L.minSpacing / cp.d
@@ -429,7 +430,7 @@ export function validate(doc: ShowDoc, c: Compiled): Validation {
             issues.push({
               id: `key-scale:${cs.id}`, severity: 'error', kind: 'spacing', sceneId: cs.id,
               title: `“${name}” shrinks too far while held`,
-              detail: `A keyframe scales it to ${Math.round(ms * 100)}%, bringing drones ${fmt(d, 2)} m apart (limit ${fmt(L.minSpacing)} m). It can shrink to ${Math.floor(need * 1000) / 10}% at most.`,
+              detail: `Its keyframes shrink it to ${Math.round(ms * 100)}%, bringing drones ${fmt(d, 2)} m apart (limit ${fmt(L.minSpacing)} m). It can shrink to ${Math.ceil(need * 1000) / 10}% at the smallest.`,
               time: ts.holdStart + atKey.t, drones: [droneOfPoint[cp.i]!, droneOfPoint[cp.j]!],
               fix: { label: `Calm keyframes to ${Math.round(Math.max(0, f) * 100)}%`, action: { kind: 'calm-hold', sceneId: cs.id, factor: Math.max(0, f) } },
             })

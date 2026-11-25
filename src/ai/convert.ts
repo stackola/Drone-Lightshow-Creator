@@ -194,6 +194,7 @@ export function keysFromInput(list: KeyframeInput[], hold: number): HoldKey[] {
     move: [clamp(k.across, -500, 500, 0), clamp(k.up, -300, 300, 0), clamp(k.toward, -500, 500, 0)] as Vec3,
     rotate: [clamp(k.tilt, -360, 360, 0), clamp(k.turn, -1080, 1080, 0), clamp(k.roll, -360, 360, 0)] as Vec3,
     scale: clamp(k.scale, 0.2, 5, 1),
+    ...(k.flow_through ? { through: true } : {}),
   })).sort((a, b) => a.t - b.t)
 }
 
