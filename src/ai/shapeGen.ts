@@ -6,6 +6,8 @@ import type { ShapeSpec } from '@/core/types'
 import { SvgShape } from './schemas'
 import { submitObject } from './submit'
 import { imageShape } from '@/ui/content'
+import { generateShape } from '@/core/shapes'
+import { shapePreview } from './render'
 
 const SYSTEM = `You draw formations for drone light shows: hundreds of drones, each a single point of coloured light about 3 metres from its neighbours, seen from far away against a night sky. You draw each formation as an SVG silhouette that is then filled evenly with drones.
 
@@ -57,6 +59,19 @@ export async function formationFromSvg(drawn: DrawnFormation, size = 40): Promis
   const file = new File([drawn.svg], `${drawn.name.replace(/[^\w-]+/g, '-').toLowerCase() || 'custom'}.svg`, { type: 'image/svg+xml' })
   const shape = await imageShape(file, size)
   return { ...shape, name: drawn.name }
+}
+
+/**
+ * Describe → draw → look at the drones → fix, like the 3D models' look-and-fix:
+ * Claude sees how its drawing actually came out as `n` drones and redraws
+ * whatever doesn't read (thin parts, lost details, muddy colours).
+ */
+export async function drawAndCheck(description: string, n: number, signal?: AbortSignal): Promise<{ drawn: DrawnFormation; shape: Extract<ShapeSpec, { kind: 'image' }> }> {
+  const first = await describeToShape(description, signal)
+  const dots = generateShape({ ...first.shape, size: 10 }, Math.max(20, n))
+  const previewPng = shapePreview(dots.points, dots.colors, first.drawn.name)
+  const drawn = await drawFormation(description, { previous: first.drawn, previewPng, signal, feedback: 'Look at how it came out as drones and fix anything that doesn’t read: thin parts, lost details, muddy or dark colours. If it already reads clearly, keep it and only make it bolder.' })
+  return { drawn, shape: await formationFromSvg(drawn) }
 }
 
 /** Describe → draw → shape, in one call. */

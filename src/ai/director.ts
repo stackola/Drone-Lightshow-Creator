@@ -2,14 +2,12 @@
 // structured plan (scenes, lights, cues); the engine builds it safely, lands
 // arrivals on the music's downbeats, and applies automatic safety fixes.
 
-import type { ShapeSpec, ShowDoc } from '@/core/types'
+import type { ShowDoc } from '@/core/types'
 import { ShowPlan } from './schemas'
 import { submitObject } from './submit'
-import { describeMusic, estimateTimings } from './context'
-import { buildShowFromPlan, type BuiltShow } from './convert'
-import { describeToShape } from './shapeGen'
-import { createModel, modelShape } from './model3d'
-import { fourViews } from './render'
+import { describeMusic, describeSite, estimateTimings } from './context'
+import { buildShowFromPlan, type BuiltShow, type CustomShapes } from './convert'
+import { MAX_CUSTOM, customJobs, resolveCustoms } from './customs'
 import { newShow } from '@/core/defaults'
 import { formatTime } from '@/core/validate'
 import { getState } from '@/state/store'
@@ -21,10 +19,12 @@ The medium
 - Every drone takes part in every scene (or in its group during a split). Drones are points of coloured light a few metres apart, seen from hundreds of metres away. Bold, recognisable shapes read; fine detail and long words don't.
 - The engine sizes each formation automatically to the smallest safe size and keeps it inside the airspace; use shape.scale only to make a formation deliberately bigger. Flights between scenes are planned and timed by the engine for safety — you can't make them faster.
 - Text: keep it short (about 1 character per 15–25 drones for crisp letters). For digits or short words use spare_fraction (0.3–0.6) so the text stays compact while the remaining drones wait dark behind it.
-- For flat pictures that aren't built-in shapes (logos, symbols, silhouettes), use shape kind "custom" with a clear visual description. For 3D objects (a rocket, a trophy, a globe on a stand, an animal), use "model3d" — it is built from solid parts, checked visually from four angles, and looks best spinning. Use at most 4 custom or model3d shapes per show, for the moments that matter most.
+- For flat pictures that aren't built-in shapes (logos, symbols, silhouettes), use shape kind "custom" with a clear visual description. For 3D objects (a rocket, a trophy, a globe on a stand, an animal), use "model3d" — it is built from solid parts, checked visually from four angles, and looks best spinning. Use at most 10 custom or model3d shapes per show (counting extra shapes and group formations), for the moments that matter most; each is checked as drones and fixed before it is used.
 - 3D shapes (sphere, torus, cube, helix, cone) look best spinning slowly (spin 10–25 °/s). 2D shapes face the audience; tilt or turn them only for effect.
 - Transitions are part of the show: give 1–3 key flights a spectacle transition (cascade ripples, swirl, burst on a drop, an ant-walk column or rain for a big reveal). They take longer than direct flights (ant walk and rain ~1 min), so budget the battery and use direct for the rest.
-- Text can be revealed: light effects write (stroke-by-stroke handwriting), type (typewriter) and flip (split-flap board) on text formations; an LED sign is a grid 7 drones tall with the matrix effect scrolling text.
+- Text can be revealed: light effects write (stroke-by-stroke handwriting), type (typewriter) and flip (split-flap board) on text formations. For a scrolling marquee use shape kind led_sign (a dot-matrix panel; light.color is the LED colour, light.speed the scroll speed).
+- A formation can combine shapes: extra_shapes adds e.g. a name under a logo or a heart beside text, each with its own light, placed with across/up. Place whole formations left or right with across (keep them inside the airspace radius).
+- The flight home after the last formation can have its own transition (return_flight), e.g. rain for a gentle landing.
 - Long holds stay alive with a gentle idle_motion (breathe 4–8%, bob 1–2 m, sway 5–10°); use it on a few scenes, not all. When a formation uses only part of the fleet, give the spares a role instead of hiding them: a starfield behind a quiet scene, a halo or frame around a logo or name, a base band under text.
 - Light: each scene has a base light; cues add accents over time (flashes, washes, sweeps, blackouts), anchored to a scene's arrival. Use cues sparingly and with intent.
 
@@ -54,6 +54,8 @@ export interface DirectorResult {
   plan: ShowPlan
   built: BuiltShow
   customFailures: number
+  /** Custom formations beyond the limit, built as placeholders. */
+  customSkipped: number
 }
 
 function briefFor(req: DirectorRequest, base: ShowDoc): string {
@@ -65,6 +67,8 @@ function briefFor(req: DirectorRequest, base: ShowDoc): string {
     `Fleet: ${req.droneCount} drones. Limits: ${L.minSpacing} m spacing, speed ${L.maxSpeedH} m/s, climb ${L.maxSpeedUp} m/s, airspace ${L.minAltitude}–${L.maxAltitude} m, radius ${L.maxRadius} m, battery ${formatTime(L.maxFlightTime)}.`,
     `Timing with this fleet: takeoff and the first flight take about ${Math.round(t.takeoffAndFirst)} s before the first formation appears; flights between formations take roughly ${Math.round(t.typicalFlight)} s (longer between very different or large shapes); returning and landing take about ${Math.round(t.returnAndLand)} s.`,
   ]
+  const site = describeSite(base)
+  if (site.length) lines.push('', `The site (keep every formation and flight clear; formations are centred at x = 0 unless you set across):\n${site.join('\n')}`)
   const music = req.useMusic && base.audio ? describeMusic(base) : null
   if (music) lines.push('', `Music (the show is set to it):\n${music}`)
   if (req.targetSeconds) {
@@ -109,31 +113,19 @@ export async function directShow(req: DirectorRequest, onProgress: (p: DirectorP
   })
   if (!plan.scenes.length) throw new Error('The plan was incomplete. Try again.')
 
-  // Draw custom formations and build 3D models in parallel (capped).
-  const customIdx = plan.scenes.flatMap((s, i) => ((s.shape.kind === 'custom' || s.shape.kind === 'model3d') && s.shape.description ? [i] : [])).slice(0, 4)
-  const custom = new Map<number, ShapeSpec>()
-  let customFailures = 0
-  if (customIdx.length) {
-    onProgress({ phase: 'drawing', scenes: plan.scenes.map((s) => s.name), note: `Drawing ${customIdx.length} custom formation${customIdx.length > 1 ? 's' : ''} (3D models are checked from four angles)…` })
-    const results = await Promise.allSettled(
-      customIdx.map(async (i): Promise<{ shape: ShapeSpec }> => {
-        const s = plan.scenes[i]!.shape
-        if (s.kind === 'custom') return describeToShape(s.description!, signal)
-        const attempts = await createModel(s.description!, { n: req.droneCount, rounds: 1, render: fourViews, signal })
-        return { shape: modelShape(attempts[attempts.length - 1]!) }
-      }),
-    )
-    results.forEach((r, k) => {
-      if (r.status === 'fulfilled') custom.set(customIdx[k]!, r.value.shape)
-      else customFailures++
-    })
-    // Custom drawings carry their own colours unless the plan chose a light.
-    customIdx.forEach((i) => {
-      const s = plan.scenes[i]!
-      if (custom.has(i) && s.light.effect === 'solid' && !s.light.color) s.light = { ...s.light, effect: 'image' }
-    })
+  // Draw custom formations and build 3D models (main shapes, extra shapes and group formations), up to 10.
+  const jobs = customJobs(plan.scenes, req.droneCount)
+  let custom: CustomShapes = new Map()
+  let customFailures = 0, customSkipped = 0
+  if (jobs.length) {
+    const count = Math.min(MAX_CUSTOM, jobs.length)
+    onProgress({ phase: 'drawing', scenes: plan.scenes.map((s) => s.name), note: `Creating ${count} custom formation${count > 1 ? 's' : ''} and checking how each looks as drones…` })
+    const r = await resolveCustoms(jobs, signal)
+    custom = r.customs
+    customFailures = r.failed
+    customSkipped = r.skipped
   }
   onProgress({ phase: 'building', scenes: plan.scenes.map((s) => s.name) })
   const built = buildShowFromPlan(plan, base, custom, { alignToMusic: req.useMusic, composeScore: req.composeScore })
-  return { plan, built, customFailures }
+  return { plan, built, customFailures, customSkipped }
 }

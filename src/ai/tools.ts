@@ -10,23 +10,29 @@ import { getState } from '@/state/store'
 import { compile } from '@/core/compile'
 import { formatTime, validate } from '@/core/validate'
 import { comfortableSpacing } from '@/core/validate'
-import { fitScene, fitToAirspace, newId } from '@/core/defaults'
+import { fitScene, fitToAirspace, newId, newLayer } from '@/core/defaults'
 import { alignScenesToBars } from '@/core/music'
 import { MUSIC_TAG, arriveAt, composeScore, fitToSong, lightTheMusic, musicMoment } from '@/core/musicTools'
 import { autoFix, tidySplit } from '@/core/fixes'
 import { ceilTo } from '@/core/math'
 import { defaultEffect } from '@/core/effects'
 import { CueTiming, GroupInput, IdleMotionInput, LightInput, SceneInput, ShapeInput, SpareRoleInput, StepInput, TransitionInput } from './schemas'
-import { applySplit, cueFromInput, effectFromInput, motionFromInput, sceneFromInput, shapeFromInput, stepFromInput, transitionFromInput, withSpareRole } from './convert'
+import { type CustomShapes, applySplit, cueFromInput, effectFromInput, motionFromInput, sceneFromInput, shapeFromInput, stepFromInput, transitionFromInput, withSpareRole } from './convert'
 import { calmMotion } from '@/core/idle'
 import { describeMusic, summarizeShow } from './context'
 import { contactSheet, fourViews } from './render'
 import { createModel, lookAndFix, modelShape } from './model3d'
 import { sampleModel } from '@/core/model3d'
 import { allocate, findSceneTime, scenePointColors } from '@/core/compile'
-import { describeToShape } from './shapeGen'
+import { drawAndCheck } from './shapeGen'
+import { MAX_CUSTOM, customJobs, resolveCustoms } from './customs'
 import { findScene as findAnyScene, findGroup, groupSizes, replaceSceneIn, sceneDroneCount } from '@/core/groups'
 import { groupDoc, groupSpots, splitSceneDoc } from '@/core/splits'
+import { pruneGroups } from '@/core/groups'
+import { ACCURACY_PRESETS, ZONE_KINDS, reanchorSite } from '@/core/site'
+import { simVerdict } from '@/core/simulate'
+import { runSimAsync } from '@/state/sim'
+import { play, seek } from '@/state/playback'
 
 export type ToolContent = BetaToolResultBlockParam['content']
 
@@ -96,10 +102,22 @@ function ok(summary: string, detail?: string): ToolOutcome {
 async function resolveCustom(shape: z.infer<typeof ShapeInput>, signal?: AbortSignal, n = doc().droneCount): Promise<ShapeSpec | null> {
   if (shape.kind !== 'custom' && shape.kind !== 'model3d') return null
   if (!shape.description?.trim()) throw new ToolError(`A ${shape.kind} shape needs a description.`)
-  if (shape.kind === 'custom') return (await describeToShape(shape.description, signal)).shape
+  if (shape.kind === 'custom') return (await drawAndCheck(shape.description, n, signal)).shape
   // 3D: generate, then one look-and-fix round.
   const attempts = await createModel(shape.description, { n, rounds: 1, render: fourViews, signal })
   return modelShape(attempts[attempts.length - 1]!)
+}
+
+/** Custom drawings and 3D models anywhere in these scenes (main, extra shapes, group formations), up to 10. */
+async function customsFor(scenes: (SceneInput | StepInput)[], drones: number, signal?: AbortSignal): Promise<{ customs: CustomShapes; note: string }> {
+  const jobs = customJobs(scenes, drones)
+  if (!jobs.length) return { customs: new Map(), note: '' }
+  const r = await resolveCustoms(jobs, signal)
+  const parts = [
+    r.failed ? `${r.failed} custom formation(s) failed and show a placeholder sphere (${r.errors[0]})` : '',
+    r.skipped ? `${r.skipped} custom formation(s) were over the limit of ${MAX_CUSTOM} per request and show a placeholder: create them in another call` : '',
+  ].filter(Boolean)
+  return { customs: r.customs, note: parts.length ? ` Note: ${parts.join('; ')}.` : '' }
 }
 
 const sceneRef = z.string().describe('Scene id, e.g. "scene_abc123" (from get_show or <show_state>)')
@@ -163,15 +181,14 @@ export const TOOLS = [
     }),
     label: (i) => `Adding “${i.scene.name}”`,
     run: async (i, ctx) => {
-      const custom = await resolveCustom(i.scene.shape, ctx.signal)
-      const input = custom && i.scene.light.effect === 'solid' && !i.scene.light.color ? { ...i.scene, light: { ...i.scene.light, effect: 'image' as const } } : i.scene
-      const scene = sceneFromInput(doc(), input, { custom })
+      const { customs, note } = await customsFor([i.scene], doc().droneCount, ctx.signal)
+      const scene = sceneFromInput(doc(), i.scene, { customs })
       const at = i.after_scene_id === 'start' ? 0 : i.after_scene_id ? findMainScene(i.after_scene_id).index + 1 : doc().scenes.length
       let next: ShowDoc = { ...doc(), scenes: [...doc().scenes.slice(0, at), scene, ...doc().scenes.slice(at)] }
-      if (i.scene.split?.groups.length) next = applySplit(next, scene.id, i.scene.split)
+      if (i.scene.split?.groups.length) next = applySplit(next, scene.id, i.scene.split, customs)
       getState().replaceDoc(next, `Add ${scene.name}`)
       const main = scene.layers[0]!
-      return ok(`Added “${scene.name}” as scene ${at + 1}`, `Added scene ${at + 1} [${scene.id}] "${scene.name}": ${main.shape.kind}, size ${main.shape.size} m${scene.layers.length > 1 ? `, ${scene.layers.length - 1} extra layer(s)` : ''}.`)
+      return ok(`Added “${scene.name}” as scene ${at + 1}`, `Added scene ${at + 1} [${scene.id}] "${scene.name}": ${main.shape.kind}, size ${main.shape.size} m${scene.layers.length > 1 ? `, ${scene.layers.length - 1} extra layer(s)` : ''}.${note}`)
     },
   }),
   tool({
@@ -367,7 +384,7 @@ export const TOOLS = [
       groups: z.array(GroupInput).optional().describe('Per group, in order (by layer, left→right, or lower→upper): its formations. Omit for one default formation per group.'),
     }),
     label: (i) => (i.mode === 'merge' ? 'Merging groups back' : `Splitting a scene (${i.mode})`),
-    run: (i) => {
+    run: async (i, ctx) => {
       const { scene, step } = findScene(i.scene_id)
       if (step) throw new ToolError('Formations inside a group cannot split again; split a main scene.')
       if (i.mode === 'merge') {
@@ -377,14 +394,16 @@ export const TOOLS = [
         return ok(`Removed the groups of “${scene.name}”`)
       }
       const base: ShowDoc = { ...doc(), scenes: doc().scenes.map((s) => (s.id === scene.id ? { ...s, groups: undefined } : s)) }
+      const per = Math.max(20, Math.round(doc().droneCount / Math.max(1, i.groups?.length ?? 2)))
+      const { customs, note } = i.groups?.length ? await customsFor(i.groups.flatMap((g) => g.steps), per, ctx.signal) : { customs: new Map(), note: '' }
       const next = i.groups?.length
-        ? applySplit(base, scene.id, { mode: i.mode, groups: i.groups })
+        ? applySplit(base, scene.id, { mode: i.mode, groups: i.groups }, customs)
         : tidySplit(splitSceneDoc(base, scene.id, i.mode).doc, scene.id)
       const after = next.scenes.find((s) => s.id === scene.id)
       if (!after?.groups?.length) throw new ToolError('This scene has nothing to split (no shapes without a spare role).')
       getState().replaceDoc(next, `Split ${scene.name}`)
       const sizes = groupSizes(after, doc().droneCount)
-      return ok(`Split “${scene.name}” into ${after.groups.length} groups`, `Split "${scene.name}" (${i.mode}) into groups: ${after.groups.map((g, gi) => `[${g.id}] "${g.name}" ${sizes[gi]} drones → ${g.steps.map((st) => `[${st.id}] "${st.name}"`).join(', ') || 'no formations'}`).join('; ')}.`)
+      return ok(`Split “${scene.name}” into ${after.groups.length} groups`, `Split "${scene.name}" (${i.mode}) into groups: ${after.groups.map((g, gi) => `[${g.id}] "${g.name}" ${sizes[gi]} drones → ${g.steps.map((st) => `[${st.id}] "${st.name}"`).join(', ') || 'no formations'}`).join('; ')}.${note}`)
     },
   }),
   tool({
@@ -392,7 +411,7 @@ export const TOOLS = [
     description: 'Add a formation to a group’s own sequence (during a split). It is sized for the group’s drones. Place it on the group’s side (across) so groups stay apart.',
     schema: z.object({ group_id: z.string().describe('Group id from get_show'), step: StepInput, after_step_id: z.string().optional().describe('Insert after this formation of the group (default: at the end)') }),
     label: (i) => `Adding “${i.step.name}” to a group`,
-    run: (i) => {
+    run: async (i, ctx) => {
       const f = findGroup(doc(), i.group_id)
       if (!f) throw new ToolError(`No group with id "${i.group_id}". Call get_show for current ids.`)
       const sub = groupDoc(doc(), f.parent, f.index)
@@ -400,12 +419,13 @@ export const TOOLS = [
       const k = i.after_step_id ? f.group.steps.findIndex((s) => s.id === i.after_step_id) : f.group.steps.length - 1
       const prev = f.group.steps[k] ?? null
       const spot = prev ? prev.position : groupSpots(f.parent, f.parent.groups!, doc().droneCount)[f.index]!.out
-      const step = stepFromInput(sub, i.step, spot)
+      const { customs, note } = await customsFor([i.step], sub.droneCount, ctx.signal)
+      const step = stepFromInput(sub, i.step, spot, customs)
       getState().update((d) => {
         const g = findGroup(d as ShowDoc, i.group_id)
         if (g) g.group.steps.splice(k + 1, 0, step)
       }, `Add ${step.name} to ${f.group.name}`)
-      return ok(`Added “${step.name}” to ${f.group.name}`, `Added [${step.id}] "${step.name}" (${sub.droneCount} drones) to group "${f.group.name}".`)
+      return ok(`Added “${step.name}” to ${f.group.name}`, `Added [${step.id}] "${step.name}" (${sub.droneCount} drones) to group "${f.group.name}".${note}`)
     },
   }),
   tool({
@@ -585,15 +605,208 @@ export const TOOLS = [
   }),
   tool({
     name: 'set_show',
-    description: 'Rename the show or change the number of drones (every formation re-samples to the new count; run fix_safety afterwards).',
-    schema: z.object({ name: z.string().optional(), drone_count: z.number().optional() }),
+    description: 'Show-wide settings: name, number of drones, where the audience stands, when the music starts, the fleet’s safety limits (spacing, speeds, acceleration, jerk, battery), the airspace (floor, ceiling, radius), takeoff (pad spacing, climb height), landing (nearest pad or own pad) and the flight home (transition, dimming, duration). Change limits only when the user gives their fleet’s real values. Every formation re-checks; run fix_safety afterwards if issues appear.',
+    schema: z.object({
+      name: z.string().optional(),
+      drone_count: z.number().optional(),
+      audience_distance: z.number().optional().describe('Metres from the show centre to the audience'),
+      music_offset_seconds: z.number().optional().describe('Show time at which the music starts'),
+      limits: z.object({
+        min_spacing: z.number().optional().describe('Minimum distance between drones (m)'),
+        max_speed: z.number().optional().describe('Horizontal m/s'),
+        max_climb: z.number().optional().describe('m/s'),
+        max_descent: z.number().optional().describe('m/s'),
+        max_accel: z.number().optional().describe('m/s²'),
+        max_jerk: z.number().optional().describe('m/s³'),
+        floor: z.number().optional().describe('Lowest altitude for formations (m)'),
+        ceiling: z.number().optional().describe('Highest altitude (m)'),
+        radius: z.number().optional().describe('Horizontal limit from the centre (m)'),
+        battery_minutes: z.number().optional().describe('Total flight time budget'),
+      }).optional(),
+      takeoff: z.object({
+        pad_spacing: z.number().optional().describe('Distance between takeoff pads (m)'),
+        climb_height: z.number().optional().describe('Height drones climb to before the first flight (m)'),
+        landing: z.enum(['any', 'home']).optional().describe('any: each drone lands on the nearest free pad; home: its own pad'),
+      }).optional(),
+      return_flight: z.object({
+        transition: TransitionInput.optional(),
+        dim: z.boolean().optional(),
+        seconds: z.union([z.literal('auto'), z.number()]).optional(),
+      }).optional(),
+    }),
     label: () => 'Updating show settings',
     run: (i) => {
+      const changes: string[] = []
+      const c = (lo: number, hi: number, v: number) => Math.max(lo, Math.min(hi, v))
       getState().update((d) => {
-        if (i.name) d.name = i.name.slice(0, 120)
-        if (i.drone_count) d.droneCount = Math.max(1, Math.min(2000, Math.round(i.drone_count)))
+        if (i.name) { d.name = i.name.slice(0, 120); changes.push(`name “${d.name}”`) }
+        if (i.drone_count) { d.droneCount = Math.round(c(1, 2000, i.drone_count)); changes.push(`${d.droneCount} drones`) }
+        if (i.audience_distance !== undefined) { d.site.audienceDistance = c(10, 5000, i.audience_distance); changes.push(`audience at ${d.site.audienceDistance} m`) }
+        if (i.music_offset_seconds !== undefined && d.audio) { d.audio.offset = c(0, 3600, i.music_offset_seconds); changes.push(`music starts at ${formatTime(d.audio.offset)}`) }
+        const L = i.limits
+        if (L) {
+          const set = (k: keyof typeof d.limits, v: number | undefined, lo: number, hi: number, label: string, scale = 1) => {
+            if (v === undefined) return
+            ;(d.limits as unknown as Record<string, number>)[k] = c(lo, hi, v) * scale
+            changes.push(`${label} ${v}`)
+          }
+          set('minSpacing', L.min_spacing, 0.3, 50, 'min spacing')
+          set('maxSpeedH', L.max_speed, 0.5, 50, 'max speed')
+          set('maxSpeedUp', L.max_climb, 0.5, 50, 'max climb')
+          set('maxSpeedDown', L.max_descent, 0.5, 50, 'max descent')
+          set('maxAccel', L.max_accel, 0.5, 50, 'max accel')
+          set('maxJerk', L.max_jerk, 0.5, 500, 'max jerk')
+          set('minAltitude', L.floor, 0, 1000, 'floor')
+          set('maxAltitude', L.ceiling, 5, 5000, 'ceiling')
+          set('maxRadius', L.radius, 10, 10000, 'radius')
+          set('maxFlightTime', L.battery_minutes, 1, 600, 'battery (min)', 60)
+        }
+        if (i.takeoff) {
+          if (i.takeoff.pad_spacing !== undefined) { d.site.gridSpacing = c(0.5, 100, i.takeoff.pad_spacing); changes.push(`pads ${d.site.gridSpacing} m apart`) }
+          if (i.takeoff.climb_height !== undefined) { d.site.takeoffAltitude = c(0.5, 200, i.takeoff.climb_height); changes.push(`takeoff climb ${d.site.takeoffAltitude} m`) }
+          if (i.takeoff.landing) { d.site.landing = i.takeoff.landing; changes.push(`landing on ${i.takeoff.landing === 'any' ? 'the nearest pad' : 'own pads'}`) }
+        }
+        if (i.return_flight) {
+          const r = i.return_flight
+          if (r.transition) { const st = transitionFromInput(r.transition); if (st) d.site.returnFlight.style = st; else delete d.site.returnFlight.style; changes.push(`home flight ${r.transition.style}`) }
+          if (r.dim !== undefined) { d.site.returnFlight.dim = r.dim; changes.push(r.dim ? 'dimmed home flight' : 'lit home flight') }
+          if (r.seconds !== undefined) { d.site.returnFlight.duration = r.seconds === 'auto' ? null : c(0, 600, r.seconds); changes.push(`home flight ${r.seconds === 'auto' ? 'auto' : `${r.seconds} s`}`) }
+        }
       }, 'Show settings')
-      return ok(`Updated show${i.name ? ` name “${i.name}”` : ''}${i.drone_count ? `, ${doc().droneCount} drones` : ''}`)
+      if (i.music_offset_seconds !== undefined && !doc().audio) changes.push('(no music loaded: music start not set)')
+      return ok(`Updated show: ${changes.join(', ') || 'no change'}`)
+    },
+  }),
+  tool({
+    name: 'set_site',
+    description: 'The real site: positioning accuracy (spacing and every clearance widen by it), the location and the compass heading the audience faces, keep-out zones (audience areas, obstacles with a height, no-fly areas) and the permitted flight area. Zones and areas are in show metres: x across (+ = audience’s right), z toward the audience (the audience stands at z = audience distance). Only set a location from coordinates the user gave. Every drone is checked against zones for the whole show.',
+    schema: z.object({
+      accuracy: z.object({ preset: z.enum(['exact', 'rtk', 'rtk_plus', 'gps']).optional().describe('exact: plan positions; rtk: ±0.1/±0.15 m; rtk_plus: ±0.3/±0.5 m; gps: ±1.5/±3 m'), across: z.number().optional(), vertical: z.number().optional() }).optional(),
+      location: z.object({ lat: z.number(), lon: z.number() }).optional().describe('Centre of the takeoff grid'),
+      heading: z.number().optional().describe('Compass bearing the audience faces, degrees (0 = north)'),
+      add_zones: z.array(z.object({
+        name: z.string(),
+        kind: z.enum(['audience', 'building', 'no-fly']),
+        x: z.number().describe('Centre across (m)'),
+        z: z.number().describe('Centre toward the audience (m)'),
+        width: z.number().describe('Across (m)'),
+        depth: z.number().describe('Toward the audience (m)'),
+        top: z.number().optional().describe('Height of an obstacle (m); omit for no ceiling'),
+        buffer: z.number().optional().describe('Extra distance to keep (m); default by kind'),
+      })).optional(),
+      remove_zones: z.array(z.string()).optional().describe('Zone names or ids to remove'),
+      flight_area: z.union([z.literal('clear'), z.object({ x: z.number(), z: z.number(), width: z.number(), depth: z.number() })]).optional().describe('Rectangle drones must stay inside, or "clear"'),
+      map_in_view: z.boolean().optional().describe('Show the street map under the show in 3D (needs a location)'),
+    }),
+    label: () => 'Updating the site',
+    run: (i) => {
+      const changes: string[] = []
+      let next = doc()
+      if (i.accuracy) {
+        const p = i.accuracy.preset ? ACCURACY_PRESETS.find((x) => x.label.toLowerCase().replace('+', '_plus') === i.accuracy!.preset) : undefined
+        const h = Math.max(0, Math.min(20, i.accuracy.across ?? p?.h ?? 0)), v = Math.max(0, Math.min(20, i.accuracy.vertical ?? p?.v ?? h))
+        next = { ...next, limits: { ...next.limits, ...(h || v ? { accuracy: { h, v } } : {}) } }
+        if (!h && !v) { const { accuracy: _a, ...rest } = next.limits; void _a; next = { ...next, limits: rest } }
+        changes.push(h || v ? `accuracy ±${h} m across, ±${v} m vertical (drones now ${safeSpacing(next.limits).toFixed(2)} m apart)` : 'exact positions')
+      }
+      if (i.location || i.heading !== undefined) {
+        const g = next.site.geo
+        const lat = i.location?.lat ?? g?.lat, lon = i.location?.lon ?? g?.lon
+        if (lat === undefined || lon === undefined || Math.abs(lat) > 90 || Math.abs(lon) > 180) throw new ToolError('Give a location (lat, lon) before a heading.')
+        const heading = (((i.heading ?? g?.heading ?? 0) % 360) + 360) % 360
+        next = { ...next, site: reanchorSite(next.site, { lat, lon, heading }) }
+        changes.push(`site at ${lat.toFixed(5)}, ${lon.toFixed(5)}, audience facing ${Math.round(heading)}°`)
+      }
+      const zones = [...(next.site.zones ?? [])]
+      for (const r of i.remove_zones ?? []) {
+        const k = zones.findIndex((z) => z.id === r || z.name.toLowerCase() === r.toLowerCase())
+        if (k >= 0) { changes.push(`removed zone “${zones[k]!.name}”`); zones.splice(k, 1) }
+      }
+      for (const z of i.add_zones ?? []) {
+        const def = ZONE_KINDS.find((k) => k.kind === z.kind)!
+        const hw = Math.max(0.5, Math.abs(z.width) / 2), hd = Math.max(0.5, Math.abs(z.depth) / 2)
+        zones.push({ id: newId('zone'), name: z.name.slice(0, 80), kind: z.kind, points: [[z.x - hw, z.z - hd], [z.x + hw, z.z - hd], [z.x + hw, z.z + hd], [z.x - hw, z.z + hd]], top: z.top ?? (z.kind === 'building' ? def.top : null), buffer: Math.max(0, z.buffer ?? def.buffer) })
+        changes.push(`zone “${z.name}”`)
+      }
+      if (i.add_zones?.length || i.remove_zones?.length) next = { ...next, site: { ...next.site, zones: zones.length ? zones : undefined } }
+      if (i.flight_area === 'clear') { const { area: _a, ...rest } = next.site; void _a; next = { ...next, site: rest }; changes.push('flight area cleared') }
+      else if (i.flight_area) {
+        const a = i.flight_area, hw = Math.abs(a.width) / 2, hd = Math.abs(a.depth) / 2
+        next = { ...next, site: { ...next.site, area: [[a.x - hw, a.z - hd], [a.x + hw, a.z - hd], [a.x + hw, a.z + hd], [a.x - hw, a.z + hd]] } }
+        changes.push(`flight area ${a.width}×${a.depth} m`)
+      }
+      if (i.map_in_view !== undefined) { next = { ...next, site: { ...next.site, mapInView: i.map_in_view } }; changes.push(i.map_in_view ? 'map under the show' : 'no map') }
+      getState().replaceDoc(next, 'Site')
+      return ok(`Site: ${changes.join(', ') || 'no change'}`)
+    },
+  }),
+  tool({
+    name: 'add_shape',
+    description: 'Add another shape to an existing formation, sharing its drones (e.g. a name under a logo, a heart beside text). It is sized to safe spacing; use across/up to place it beside the others.',
+    schema: z.object({ scene_id: sceneRef, shape: ShapeInput, light: LightInput, across: z.number().optional().describe('Offset from the formation centre (m, + right)'), up: z.number().optional().describe('Offset from the formation centre (m, + up)'), share: z.number().optional().describe('Fraction of the formation’s drones for this shape (0.1–0.7, default an equal share)') }),
+    label: (i) => `Adding a ${i.shape.kind} shape`,
+    run: async (i, ctx) => {
+      const { scene, sub } = findScene(i.scene_id)
+      if (i.shape.kind === 'led_sign') throw new ToolError('An LED sign is a formation of its own: use add_scene with shape kind "led_sign".')
+      const main = scene.layers.filter((l) => !l.role)
+      const share = Math.max(0.05, Math.min(0.8, i.share ?? 1 / (main.length + 1)))
+      const total = main.reduce((a, l) => a + l.weight, 0)
+      const custom = await resolveCustom(i.shape, ctx.signal, Math.round(sub.droneCount * share))
+      const shape = custom ?? shapeFromInput(i.shape)
+      const effect = custom && (i.light.effect === 'image' || (i.light.effect === 'solid' && !i.light.color)) ? effectFromInput({ ...i.light, effect: 'image' }) : effectFromInput(i.light.effect === 'image' ? { ...i.light, effect: 'solid' } : i.light)
+      const layer = { ...newLayer(shape, effect), weight: (total * share) / (1 - share), offset: [i.across ?? 0, i.up ?? 0, 0] as [number, number, number] }
+      const roles = scene.layers.filter((l) => l.role)
+      let s: Scene = { ...scene, layers: [...main, layer, ...roles] }
+      s = fitToAirspace(fitScene(s, sub.droneCount, comfortableSpacing(safeSpacing(sub.limits)), 'grow'), sub)
+      replaceScene(scene.id, s, `Add a shape to ${scene.name}`)
+      return ok(`Added a ${shape.kind} to “${scene.name}”`, `"${scene.name}" now has ${s.layers.length} layer(s); the new one is layer ${s.layers.indexOf(s.layers.find((l) => l.id === layer.id)!)}.`)
+    },
+  }),
+  tool({
+    name: 'remove_shape',
+    description: 'Remove one shape (layer) from a formation; its drones go to the remaining shapes.',
+    schema: z.object({ scene_id: sceneRef, layer_index: z.number() }),
+    label: () => 'Removing a shape',
+    run: (i) => {
+      const { scene } = findScene(i.scene_id)
+      const li = Math.round(i.layer_index)
+      if (scene.layers.length < 2 || !scene.layers[li]) throw new ToolError(`“${scene.name}” has ${scene.layers.length} layer(s); can’t remove layer ${li}.`)
+      replaceScene(scene.id, pruneGroups({ ...scene, layers: scene.layers.filter((_, k) => k !== li) }), `Remove a shape from ${scene.name}`)
+      return ok(`Removed layer ${li} from “${scene.name}”`)
+    },
+  }),
+  tool({
+    name: 'wind_test',
+    description: 'Fly the whole show through a physical simulation with wind, gusts and turbulence, and report how close drones really come, how far they drift from the plan and how often they hit their control limits. Takes a little while on long shows.',
+    schema: z.object({ wind_speed: z.number().describe('Mean wind at 10 m (m/s), e.g. 3 light, 6 moderate, 9 strong'), from_degrees: z.number().optional().describe('Compass direction the wind blows from (default 270, west)'), gusts: z.number().optional().describe('Gust strength (m/s, default 40% of the wind)') }),
+    label: (i) => `Wind test at ${i.wind_speed} m/s`,
+    run: async (i) => {
+      const speed = Math.max(0, Math.min(25, i.wind_speed))
+      const r = await runSimAsync({ speed, from: i.from_degrees ?? 270, gust: i.gusts ?? speed * 0.4, turbulence: 0.6, seed: 1 })
+      const L = doc().limits
+      const verdict = simVerdict(r, L.minSpacing)
+      const planned = validate(doc(), compile(doc())).stats.minDistance
+      return ok(`Wind test (${speed} m/s): ${verdict.text}`, `Wind ${speed} m/s from ${i.from_degrees ?? 270}°. ${verdict.text} Closest approach in the wind ${r.minDistance === null ? `above ${r.checkRadius.toFixed(1)} m` : `${r.minDistance.toFixed(2)} m at ${formatTime(r.minDistanceTime)}`} (planned ${planned.toFixed(2)} m, limit ${L.minSpacing} m); ${r.closePairs} pair(s) closer than the limit. Largest drift ${r.maxDeviation.toFixed(2)} m (typical ${r.rmsDeviation.toFixed(2)} m); ${(r.saturated * 100).toFixed(1)}% of drone-time at the control limits. The user can watch it via Wind test → Watch in viewport.`)
+    },
+  }),
+  tool({
+    name: 'show_moment',
+    description: 'Show the user a moment: select a formation (or group formation) and move the playhead to it, or to a time; optionally switch the camera and start playing. Use after edits so the user sees the result.',
+    schema: z.object({ scene_id: z.string().optional(), time_seconds: z.number().optional(), camera: z.enum(['audience', 'orbit', 'top']).optional(), play: z.boolean().optional() }),
+    label: () => 'Showing the moment',
+    run: (i) => {
+      const st = getState()
+      if (i.scene_id) {
+        findScene(i.scene_id)
+        st.select({ kind: 'scene', id: i.scene_id })
+        const c = st.compiled ?? compile(doc())
+        const t = findSceneTime(c, i.scene_id)
+        if (t) seek(t.holdStart + Math.min(0.5, (t.holdEnd - t.holdStart) / 2))
+      }
+      if (i.time_seconds !== undefined) seek(Math.max(0, i.time_seconds))
+      if (i.camera) st.setCamera(i.camera)
+      if (i.play) play()
+      return { summary: `Showing ${i.scene_id ? findScene(i.scene_id).scene.name : formatTime(getState().time)}`, content: `Playhead at ${formatTime(getState().time)}${i.camera ? `, ${i.camera} view` : ''}${i.play ? ', playing' : ''}.` }
     },
   }),
 ] as const

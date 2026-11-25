@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import { findScene } from '@/core/groups'
 import { Loader2, Sparkles } from 'lucide-react'
 import { drawFormation, formationFromSvg, type DrawnFormation } from '@/ai/shapeGen'
 import { shapePreview } from '@/ai/render'
@@ -16,7 +17,7 @@ const EXAMPLES = ['a rocket taking off', 'a dolphin jumping', 'the Eiffel Tower'
 export function DescribeDialog({ onClose }: { onClose: () => void }) {
   const n = useStore((s) => s.doc.droneCount)
   const selection = useStore((s) => s.selection)
-  const selectedScene = useStore((s) => (s.selection.kind === 'scene' ? s.doc.scenes.find((x) => x.id === (s.selection as { id: string }).id) : undefined))
+  const selectedScene = useStore((s) => (s.selection.kind === 'scene' ? findScene(s.doc, (s.selection as { id: string }).id)?.scene : undefined))
   const [description, setDescription] = useState('')
   const [feedback, setFeedback] = useState('')
   const [drawn, setDrawn] = useState<DrawnFormation | null>(null)

@@ -67,11 +67,27 @@ A show is a sequence: **takeoff → scene → scene → … → return & land**.
 
 Optional, powered by Claude Opus 5.5. Open **AI** in the top bar or press **Ctrl K**.
 
-- **Generate a show from a brief.** Describe the occasion, story, colours and words. Claude writes a structured plan (scenes, lights and cues). With music, the song is the backbone: Claude reads its sections and accents and puts the hero formation exactly on the biggest drop. The engine lands every other formation on a bar, fits the finale to the end of the song, lights the music, and applies automatic safety fixes. With no song, Claude picks the hero formations and a tempo, and an original score is composed with its drops on them. You preview the result before it replaces your show, and it's one undo step.
-- **Copilot.** Edit by conversation: "make the heart pink and slow the globe", "add flashes on the drop", "review my show". It works through 24 tools that edit the show the same way the UI does. They include the music tools (read the song's structure, land a formation on a section or bar, fit to the song, light the music, compose a score) and the group tools (split a scene, add a formation to a group, edit a group). It sees the site's keep-out zones, flight area and position accuracy. Each tool reports the safety status back, so the model sees the consequences of its own edits. It can *look* at rendered formations (vision) to judge readability and colour. Everything it does for one request is a single undo step.
+- **Generate a show from a brief.** Describe the occasion, story, colours and words. Claude writes a complete plan and the engine builds it safely. You preview the result before it replaces your show, and applying it is one undo step. The plan can use every feature of the editor:
+  - scenes with built-in shapes, text, LED signs or several shapes at once;
+  - up to **10 custom formations**: 2D drawings and 3D models, including inside groups and as extra shapes. Each one is checked by looking at it as drones and fixed before it is used;
+  - spectacle transitions, idle motion and spare-drone roles;
+  - splits into groups;
+  - light cues and a flight home.
+
+  With music, the song is the backbone: Claude reads its sections and accents and puts the hero formation exactly on the biggest drop. The engine lands every other formation on a bar, fits the finale to the end of the song, lights the music, and applies automatic safety fixes. With no song, Claude picks the hero formations and a tempo, and an original score is composed with its drops on them. The site's keep-out zones and flight area are part of the brief.
+- **Copilot.** Edit by conversation: "make the heart pink and slow the globe", "add flashes on the drop", "split the heart and send the halves different ways", "the stage is 120 m out and 12 m tall", "how does it hold up in a 7 m/s wind?". It works through 29 tools that reach everything the editor can do:
+  - formations, including several shapes, LED signs, custom drawings and 3D models;
+  - lights and cues, groups, and music;
+  - show-wide settings (fleet limits, airspace, takeoff, landing, the flight home);
+  - the real site (accuracy, location, heading, zones, flight area);
+  - the wind test, and showing you the result in the preview.
+
+  Each tool reports the safety status back, so the model sees the consequences of its own edits. It can *look* at rendered formations to judge readability and colour. Everything it does for one request is a single undo step.
 - **Describe a formation.** Words become a bold SVG drawing, which becomes drones in the drawing's colours. "Refine" shows Claude how its drawing actually came out as drones, so it can fix what doesn't read.
 - **Create a 3D model — with look and fix.** Describe an object ("a hot-air balloon with a basket"). Claude builds it from solid parts (spheres, ellipsoids, boxes, cylinders, cones, capsules, tori, each with its own colour), and the engine spreads the drones evenly over the outer surface. Then Claude *looks* at the actual drones from the front, side, top and a three-quarter angle, says what doesn't read (a part that's too thin, a missing feature, wrong proportions), and fixes the model. It repeats until it's satisfied or the round limit (1–3) is reached. You can add your own feedback for more rounds, and reopen any 3D model from the inspector with **Improve**. The copilot and the show generator can create 3D models too, and the copilot can look at any scene from all four angles.
 - **Write a client pitch.** A proposal written from the real show: its formations (as images), timeline, music and exact safety figures. Unknowns like dates and prices become `[placeholders]`.
+
+**Big outputs as tool calls.** Plans, drawings and 3D models come back as a call to a regular tool, which Claude uses to hand over its result. Grammar-constrained structured output caps a request at 24 optional fields, and a show plan has well over a hundred. The input is validated against the same schema, and any problems go back to Claude to correct.
 
 **The model proposes; the engine decides.** Model output never bypasses the safety engine. Every number is clamped, every colour validated, and every formation goes through the same sizing, airspace and validation path as a manual edit. Tool inputs are schema-checked before they run, and a response cut off mid-tool-call is never executed.
 

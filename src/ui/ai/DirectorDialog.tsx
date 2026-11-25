@@ -139,7 +139,8 @@ export function DirectorDialog({ onClose }: { onClose: () => void }) {
             {result.built.doc.scenes.length} scenes · {result.built.doc.cues.length} light cues · {formatTime(preview.duration)}
             {result.built.composed ? ' · with an original score' : result.built.alignedToMusic ? ` · ${result.built.alignedToMusic} formations land on downbeats` : ''}
             {result.built.fixesApplied ? ` · ${result.built.fixesApplied} automatic safety fix${result.built.fixesApplied > 1 ? 'es' : ''}` : ''}
-            {result.customFailures ? ` · ${result.customFailures} custom drawing${result.customFailures > 1 ? 's' : ''} failed (replaced with a sphere)` : ''}
+            {result.customFailures ? ` · ${result.customFailures} custom formation${result.customFailures > 1 ? 's' : ''} failed (a placeholder sphere stands in — ask the copilot to redo ${result.customFailures > 1 ? 'them' : 'it'})` : ''}
+            {result.customSkipped ? ` · ${result.customSkipped} custom formation${result.customSkipped > 1 ? 's' : ''} over the limit of 10 (placeholders — ask the copilot to create ${result.customSkipped > 1 ? 'them' : 'it'})` : ''}
           </p>
           <div className={result.built.validation.issues.length ? 'cp-notice error' : 'okbox'} style={{ marginTop: 8 }}>
             {result.built.validation.issues.length ? `${result.built.validation.issues.length} safety issue(s) need a decision after you open it.` : <><Check size={14} /> Passes every safety check.</>}

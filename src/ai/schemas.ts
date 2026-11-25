@@ -41,10 +41,11 @@ export const LightInput = z.object({
 export type LightInput = z.infer<typeof LightInput>
 
 export const ShapeInput = z.object({
-  kind: z.enum([...SHAPE_KINDS, 'custom', 'model3d']).describe(
+  kind: z.enum([...SHAPE_KINDS, 'custom', 'model3d', 'led_sign']).describe(
     '2D (face the audience): circle, heart, star, polygon, grid, spiral, wave. 3D: sphere, torus, cube, helix (double helix), cone (tree). ' +
-      'text: letters/numbers. custom: any other flat picture, drawn from `description` (logos, symbols, silhouettes). ' +
-      'model3d: any other 3D object, built from `description` and checked visually from four angles (a rocket, a trophy, a globe on a stand) — slower, best for hero moments and spinning.',
+      'text: letters/numbers. custom: any other flat picture, drawn from `description` (logos, symbols, silhouettes) and checked as drones. ' +
+      'model3d: any other 3D object, built from `description` and checked visually from four angles (a rocket, a trophy, a globe on a stand) — slower, best for hero moments and spinning. ' +
+      'led_sign: a dot-matrix LED panel scrolling `text` like a marquee (one drone per LED; 7 rows, or 5 with light.font_dots 5; `columns` wide); remaining drones park dark behind it.',
   ),
   text: z.string().optional().describe('For text: the words. Keep it short (1–12 characters per line); use \\n for a second line.'),
   font: z.enum(['sans', 'serif', 'pixel']).optional().describe('For text. pixel = dot-matrix, great for digits'),
@@ -59,6 +60,7 @@ export const ShapeInput = z.object({
   amplitude: z.number().optional().describe('wave amplitude (0–0.5)'),
   thickness: z.number().optional().describe('torus tube thickness (0.1–0.8)'),
   radius: z.number().optional().describe('helix radius or cone base radius, relative to height (0.05–0.8)'),
+  columns: z.number().optional().describe('led_sign: panel width in drones (default: as wide as the fleet allows; 3–5 letters visible per 20 columns)'),
   scale: z.number().optional().describe('Size relative to the smallest safe size: 1 = smallest safe (default), 1.4 = 40% larger. Never below 1.'),
 })
 export type ShapeInput = z.infer<typeof ShapeInput>
@@ -87,10 +89,22 @@ export const TransitionInput = z.object({
 })
 export type TransitionInput = z.infer<typeof TransitionInput>
 
+/** A second (third, …) shape in the same formation, sharing its drones. */
+export const ExtraShapeInput = z.object({
+  shape: ShapeInput,
+  light: LightInput,
+  across: z.number().optional().describe('Offset from the formation centre in metres, + to the audience’s right'),
+  up: z.number().optional().describe('Offset from the formation centre in metres, + up'),
+  share: z.number().optional().describe('Fraction of the formation’s drones this shape takes (0.1–0.7, default an equal share)'),
+})
+export type ExtraShapeInput = z.infer<typeof ExtraShapeInput>
+
 const SceneBase = z.object({
   name: z.string().describe('Short scene name shown in the editor'),
   shape: ShapeInput,
   light: LightInput,
+  extra_shapes: z.array(ExtraShapeInput).optional().describe('More shapes in the same formation, e.g. a name under a logo or a heart beside text (1–3). Place them with across/up so they don’t overlap.'),
+  across: z.number().optional().describe('Horizontal centre of the formation in metres (+ = audience’s right, default 0). Group formations default to their group’s own side.'),
   hold_seconds: z.number().optional().describe('How long the formation is held (default 6). With music, holds are rounded to whole bars.'),
   spin: z.number().optional().describe('Degrees per second about the vertical axis while held (0 = still; 10–25 looks good on 3D shapes)'),
   tilt: z.number().optional().describe('Tilt toward the audience in degrees (rotation about the horizontal axis)'),
@@ -105,9 +119,7 @@ const SceneBase = z.object({
 })
 
 /** A formation flown by one group during a split. */
-export const StepInput = SceneBase.omit({ arrive_at_section: true }).extend({
-  across: z.number().optional().describe('Horizontal centre in metres (+ = the audience’s right). Default: fanned out on the group’s own side, so groups keep apart.'),
-})
+export const StepInput = SceneBase.omit({ arrive_at_section: true })
 export type StepInput = z.infer<typeof StepInput>
 
 export const GroupInput = z.object({
@@ -149,6 +161,10 @@ export const ShowPlan = z.object({
   cues: z.array(DirectorCue).describe('Light cues layered over the formations (accents, flashes, washes)'),
   music_lighting: z.enum(['none', 'subtle', 'bold']).optional().describe('With music: automatically light the music on top of your cues — breathing in quiet parts, sweeps into drops, flashes on every hit (bold) or gentler (subtle). Default bold when there is music.'),
   fit_to_song: z.boolean().optional().describe('With music: stretch or tighten holds (in whole bars) so the finale ends with the song. Default true.'),
+  return_flight: z.object({
+    transition: TransitionInput.optional(),
+    dim: z.boolean().optional().describe('Dim the lights on the way home'),
+  }).optional().describe('How the drones fly home after the last formation (default: direct, lit)'),
   original_score: z.object({
     bpm: z.number().optional().describe('Tempo 80–140 matching the mood (default 120)'),
     drops_at: z.array(z.number()).describe('0-based indices of the 2–5 hero formations: the score builds up and drops exactly as each arrives'),

@@ -103,7 +103,7 @@ export function summarizeShow(doc: ShowDoc, compiled: Compiled = compile(doc), v
 }
 
 /** The real site as the model needs it: accuracy, keep-out zones and the flight area, in show metres. */
-function describeSite(doc: ShowDoc): string[] {
+export function describeSite(doc: ShowDoc): string[] {
   const out: string[] = []
   const acc = doc.limits.accuracy
   if (acc && (acc.h || acc.v)) out.push(`Position accuracy ±${acc.h} m across, ±${acc.v} m up/down: drones are kept ${(doc.limits.minSpacing + 2 * Math.max(acc.h, acc.v)).toFixed(2)} m apart and further from every boundary.`)

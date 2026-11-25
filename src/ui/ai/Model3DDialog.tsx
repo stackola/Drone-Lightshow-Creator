@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import { findScene, sceneDroneCount } from '@/core/groups'
 import { Box, Check, Eye, Loader2, Sparkles, Wrench } from 'lucide-react'
 import { createModel, lookAndFix, modelShape, type ModelAttempt } from '@/ai/model3d'
 import { fourViews } from '@/ai/render'
@@ -18,10 +19,10 @@ const EXAMPLES = ['a rocket lifting off', 'a hot-air balloon', 'a trophy cup', '
 function initialAttempts(): { attempts: ModelAttempt[]; description: string; drones: number } {
   const s = getState()
   const t = s.aiTarget
-  const scene = t ? s.doc.scenes.find((x) => x.id === t.sceneId) : undefined
+  const scene = t ? findScene(s.doc, t.sceneId)?.scene : undefined
   const li = scene ? scene.layers.findIndex((l) => l.id === t!.layerId) : -1
   const layer = scene?.layers[li]
-  const drones = scene && li >= 0 ? allocate(s.doc.droneCount, scene.layers.map((l) => l.weight))[li]! : s.doc.droneCount
+  const drones = scene && li >= 0 ? allocate(sceneDroneCount(s.doc, scene.id), scene.layers.map((l) => l.weight))[li]! : s.doc.droneCount
   if (!layer || layer.shape.kind !== 'model') return { attempts: [], description: '', drones }
   const sample = sampleModel(layer.shape.parts, drones)
   if (!sample) return { attempts: [], description: layer.shape.name, drones }
@@ -36,7 +37,7 @@ export function Model3DDialog({ onClose }: { onClose: () => void }) {
   const init = useMemo(initialAttempts, [])
   const target = useStore((s) => s.aiTarget)
   const selection = useStore((s) => s.selection)
-  const selectedScene = useStore((s) => (s.selection.kind === 'scene' ? s.doc.scenes.find((x) => x.id === (s.selection as { id: string }).id) : undefined))
+  const selectedScene = useStore((s) => (s.selection.kind === 'scene' ? findScene(s.doc, (s.selection as { id: string }).id)?.scene : undefined))
   const [configured, setConfigured] = useState(aiConfigured())
   const [description, setDescription] = useState(init.description)
   const [rounds, setRounds] = useState<'0' | '1' | '2' | '3'>('2')
@@ -92,7 +93,7 @@ export function Model3DDialog({ onClose }: { onClose: () => void }) {
   }
 
   const replaceId = target?.sceneId ?? (selection.kind === 'scene' ? selectedScene?.id : undefined)
-  const replaceScene = replaceId ? getState().doc.scenes.find((x) => x.id === replaceId) : undefined
+  const replaceScene = replaceId ? findScene(getState().doc, replaceId)?.scene : undefined
 
   const add = () => {
     if (!current) return

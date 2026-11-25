@@ -3,14 +3,14 @@
 // suggests, the engine decides what is physically safe.
 
 import { safeSpacing } from '@/core/site'
-import type { Effect, LightCue, Scene, ShapeSpec, ShowDoc, Vec3 } from '@/core/types'
+import type { Effect, Layer, LightCue, Scene, ShapeSpec, ShowDoc, Vec3 } from '@/core/types'
 import type { IdleMotionInput, LightInput, SceneInput, ShapeInput, ShowPlan, SplitInput, StepInput, TransitionInput } from './schemas'
 import { separateGroups, splitSceneDoc } from '@/core/splits'
 import { sceneDroneCount } from '@/core/groups'
 import type { HoldMotion, SpareRole, TransitionStyle } from '@/core/types'
 import { applySpareRole, addSpareLayer, calmMotion, defaultMotion } from '@/core/idle'
 import { defaultEffect } from '@/core/effects'
-import { DEFAULT_CENTER, fitScene, fitToAirspace, newId, newScene, newShape, rasterizeText, withSpareDrones } from '@/core/defaults'
+import { DEFAULT_CENTER, fitScene, fitToAirspace, newId, newLayer, newLedSign, newScene, newShape, rasterizeText, withSpareDrones } from '@/core/defaults'
 import { SHAPE_BY_KIND } from '@/core/shapes'
 import { comfortableSpacing, type Validation } from '@/core/validate'
 import { compile } from '@/core/compile'
@@ -64,6 +64,7 @@ export function effectFromInput(l: LightInput, fallbackColor = '#38bdf8'): Effec
 /** Shape spec at unit size (it is fitted to safe spacing afterwards). Custom shapes are resolved by the caller. */
 export function shapeFromInput(s: ShapeInput): ShapeSpec {
   if (s.kind === 'custom' || s.kind === 'model3d') throw new Error('custom and 3D model shapes must be resolved before conversion')
+  if (s.kind === 'led_sign') return { kind: 'grid', size: 1, aspect: Math.max(1, (s.columns ?? 21) / 7), scatter: 0, fill: 'filled' }
   if (s.kind === 'text') {
     const font = s.font ?? 'sans'
     const text = (s.text ?? '').trim().slice(0, 60) || 'HELLO'
@@ -79,20 +80,40 @@ export function shapeFromInput(s: ShapeInput): ShapeSpec {
   return spec as unknown as ShapeSpec
 }
 
+/** Already-generated custom drawings and 3D models, keyed by the shape input they were made for. */
+export type CustomShapes = Map<unknown, ShapeSpec>
+
+/** A shape from model input: built-in, or a custom drawing / 3D model generated beforehand (else a placeholder). */
+function resolveShape(shapeIn: ShapeInput, custom: ShapeSpec | null | undefined): ShapeSpec {
+  if (shapeIn.kind === 'custom' || shapeIn.kind === 'model3d') return custom ?? newShape(shapeIn.kind === 'model3d' ? 'model' : 'sphere')
+  return shapeFromInput(shapeIn)
+}
+
+/** The light for a shape: custom drawings keep their own colours unless the model picked a colour. */
+function lightFor(light: LightInput, shape: ShapeSpec, fallbackColor: string): Effect {
+  const fromDrawing = (shape.kind === 'image' || shape.kind === 'model') && (light.effect === 'image' || (light.effect === 'solid' && !light.color))
+  if (fromDrawing) return effectFromInput({ ...light, effect: 'image' }, fallbackColor)
+  return effectFromInput(light.effect === 'image' ? { ...light, effect: 'solid' } : light, fallbackColor)
+}
+
 /**
- * Build a scene from model input. `custom` supplies already-generated shapes
- * for kind "custom" (from the SVG generator); otherwise it falls back to a sphere.
+ * Build a scene from model input. Custom drawings and 3D models come from
+ * `custom` (this shape) or `customs` (any shape of the scene, by its input);
+ * without one they fall back to a placeholder sphere.
  */
-export function sceneFromInput(doc: ShowDoc, input: SceneInput | StepInput, opts: { custom?: ShapeSpec | null; position?: Vec3 } = {}): Scene {
+export function sceneFromInput(doc: ShowDoc, input: SceneInput | StepInput, opts: { custom?: ShapeSpec | null; customs?: CustomShapes; position?: Vec3 } = {}): Scene {
   const shapeIn = input.shape
-  let shape: ShapeSpec
-  if (shapeIn.kind === 'custom' || shapeIn.kind === 'model3d') shape = opts.custom ?? newShape(shapeIn.kind === 'model3d' ? 'model' : 'sphere')
-  else shape = shapeFromInput(shapeIn)
   const fallbackColor = ['#38bdf8', '#f472b6', '#facc15', '#a78bfa', '#34d399', '#fb923c'][doc.scenes.length % 6]!
-  const wantsImage = input.light.effect === 'image' && (shape.kind === 'image' || shape.kind === 'model')
-  const effect = effectFromInput(wantsImage || input.light.effect !== 'image' ? input.light : { ...input.light, effect: 'solid' }, fallbackColor)
-  const position: Vec3 = opts.position ?? [DEFAULT_CENTER[0], clamp(input.altitude, 10, 1000, DEFAULT_CENTER[1]), DEFAULT_CENTER[2]]
-  let scene = newScene(doc, shape.kind, { name: input.name.slice(0, 60) || SHAPE_BY_KIND[shape.kind].label, shape, effect, position })
+  const position: Vec3 = opts.position ?? [clamp(input.across, -2000, 2000, DEFAULT_CENTER[0]), clamp(input.altitude, 10, 1000, DEFAULT_CENTER[1]), DEFAULT_CENTER[2]]
+  let scene: Scene
+  if (shapeIn.kind === 'led_sign') {
+    // A dot-matrix LED panel scrolling the text; the rest of the fleet parks dark behind it.
+    const text = (shapeIn.text ?? input.light.text ?? input.name).slice(0, 120)
+    scene = { ...newLedSign(doc, text, { color: input.light.color ? normalizeHex(input.light.color, '#ffb020') : undefined, speed: input.light.speed, position, font: input.light.font_dots === 5 ? 5 : 7, columns: shapeIn.columns }), name: input.name.slice(0, 60) || 'LED sign' }
+  } else {
+    const shape = resolveShape(shapeIn, opts.custom ?? opts.customs?.get(shapeIn))
+    scene = newScene(doc, shape.kind, { name: input.name.slice(0, 60) || SHAPE_BY_KIND[shape.kind].label, shape, effect: lightFor(input.light, shape, fallbackColor), position })
+  }
   scene = {
     ...scene,
     hold: clamp(input.hold_seconds, 0, 600, 6),
@@ -101,11 +122,26 @@ export function sceneFromInput(doc: ShowDoc, input: SceneInput | StepInput, opts
     flight: { duration: null, dim: input.dim_flight ?? false, ...(input.transition && transitionFromInput(input.transition) ? { style: transitionFromInput(input.transition) } : {}) },
   }
   if (input.idle_motion) scene = { ...scene, motion: motionFromInput(input.idle_motion) }
-  if (input.spare_fraction && input.spare_fraction > 0.02) scene = withSpareDrones(scene, doc, clamp(input.spare_fraction, 0, 0.7, 0))
+  if (shapeIn.kind !== 'led_sign' && input.spare_fraction && input.spare_fraction > 0.02) scene = withSpareDrones(scene, doc, clamp(input.spare_fraction, 0, 0.7, 0))
   const scale = clamp(shapeIn.scale, 1, 4, 1)
   if (scale > 1.001) {
     const [main, ...rest] = scene.layers
     scene = { ...scene, layers: [{ ...main!, shape: { ...main!.shape, size: ceilTo(main!.shape.size * scale, 0.1) } as ShapeSpec }, ...rest] }
+  }
+  // More shapes sharing the formation's drones (a name under a logo, a heart beside text).
+  const extras = (input.extra_shapes ?? []).slice(0, 3)
+  if (extras.length && shapeIn.kind !== 'led_sign') {
+    const shares = extras.map((e) => clamp(e.share, 0.05, 0.8, 1 / (extras.length + 1)))
+    const total = Math.min(0.9, shares.reduce((a, b) => a + b, 0))
+    const k = total / shares.reduce((a, b) => a + b, 0)
+    const [main, ...rest] = scene.layers
+    const mainWeight = (main?.weight ?? 1)
+    const unit = mainWeight / Math.max(0.1, 1 - total)
+    const added: Layer[] = extras.map((e, j) => {
+      const sh = resolveShape(e.shape, opts.customs?.get(e.shape))
+      return { ...newLayer(sh, lightFor(e.light, sh, fallbackColor)), weight: unit * shares[j]! * k, offset: [clamp(e.across, -500, 500, 0), clamp(e.up, -500, 500, 0), 0] as Vec3 }
+    })
+    scene = { ...scene, layers: [main!, ...added, ...rest] }
   }
   // Rotation changes the extent, so re-check spacing between layers, then make it fit the airspace.
   scene = fitScene(scene, doc.droneCount, comfortableSpacing(safeSpacing(doc.limits)), 'grow')
@@ -119,23 +155,23 @@ export function sceneFromInput(doc: ShowDoc, input: SceneInput | StepInput, opts
  * sized for its group's drones and placed on the group's own side unless it
  * says where (`across`).
  */
-export function applySplit(doc: ShowDoc, sceneId: string, split: SplitInput): ShowDoc {
+export function applySplit(doc: ShowDoc, sceneId: string, split: SplitInput, customs?: CustomShapes): ShowDoc {
   const first = splitSceneDoc(doc, sceneId, split.mode, (sub, gi, spot) => {
     const g = split.groups[gi]
-    return g?.steps.length ? stepFromInput(sub, g.steps[0]!, spot) : null
+    return g?.steps.length ? stepFromInput(sub, g.steps[0]!, spot, customs) : null
   })
-  const done = addRemainingSteps(first.doc, sceneId, split)
+  const done = addRemainingSteps(first.doc, sceneId, split, customs)
   const placed = split.groups.some((g) => g.steps.some((st) => st.across !== undefined))
   return placed ? done : separateGroups(done, sceneId)
 }
 
 /** A group formation from model input, at `spot` unless it gives its own position. */
-export function stepFromInput(sub: ShowDoc, input: StepInput, spot: Vec3): Scene {
+export function stepFromInput(sub: ShowDoc, input: StepInput, spot: Vec3, customs?: CustomShapes): Scene {
   const pos: Vec3 = [input.across ?? spot[0], input.altitude ?? spot[1], spot[2]]
-  return sceneFromInput(sub, input, { position: pos })
+  return sceneFromInput(sub, input, { position: pos, customs })
 }
 
-function addRemainingSteps(doc: ShowDoc, sceneId: string, split: SplitInput): ShowDoc {
+function addRemainingSteps(doc: ShowDoc, sceneId: string, split: SplitInput, customs?: CustomShapes): ShowDoc {
   const scene = doc.scenes.find((s) => s.id === sceneId)
   if (!scene?.groups) return doc
   const groups = scene.groups.map((g, gi) => {
@@ -144,7 +180,7 @@ function addRemainingSteps(doc: ShowDoc, sceneId: string, split: SplitInput): Sh
     const sub = { ...doc, droneCount: sceneDroneCount(doc, g.steps[0]!.id) }
     let prev = g.steps[0]!
     const steps = [prev]
-    for (const st of more) { prev = stepFromInput(sub, st, prev.position); steps.push(prev) }
+    for (const st of more) { prev = stepFromInput(sub, st, prev.position, customs); steps.push(prev) }
     return { ...g, steps, name: split.groups[gi]?.name?.slice(0, 40) || g.name, delay: clamp(split.groups[gi]?.delay_seconds, 0, 120, 0) }
   })
   return { ...doc, scenes: doc.scenes.map((s) => (s.id === sceneId ? { ...s, groups } : s)) }
@@ -206,13 +242,17 @@ export interface BuiltShow {
  * the music's bar lines (if there is music), anchor cues to arrivals, then
  * apply automatic safety fixes.
  */
-export function buildShowFromPlan(plan: ShowPlan, base: ShowDoc, custom: Map<number, ShapeSpec> = new Map(), opts: { alignToMusic?: boolean; composeScore?: boolean } = {}): BuiltShow {
+export function buildShowFromPlan(plan: ShowPlan, base: ShowDoc, custom: CustomShapes = new Map(), opts: { alignToMusic?: boolean; composeScore?: boolean } = {}): BuiltShow {
   let doc: ShowDoc = { ...base, name: plan.title.slice(0, 120) || base.name, scenes: [], cues: [] }
   plan.scenes.slice(0, 30).forEach((s, i) => {
-    const scene = sceneFromInput(doc, s, { custom: custom.get(i) })
+    const scene = sceneFromInput(doc, s, { custom: custom.get(i), customs: custom })
     doc = { ...doc, scenes: [...doc.scenes, scene] }
-    if (s.split?.groups.length) doc = applySplit(doc, scene.id, s.split)
+    if (s.split?.groups.length) doc = applySplit(doc, scene.id, s.split, custom)
   })
+  if (plan.return_flight) {
+    const style = plan.return_flight.transition ? transitionFromInput(plan.return_flight.transition) : undefined
+    doc = { ...doc, site: { ...doc.site, returnFlight: { ...doc.site.returnFlight, dim: plan.return_flight.dim ?? doc.site.returnFlight.dim, ...(style ? { style } : {}) } } }
+  }
   const composing = !!opts.composeScore && doc.scenes.length > 0
   const music = composing || (opts.alignToMusic !== false && !!doc.audio)
   let aligned: { aligned: number }

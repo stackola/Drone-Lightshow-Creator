@@ -118,6 +118,47 @@ describe('tools', () => {
     expect(getState().doc.scenes[1]!.groups).toBeUndefined()
   })
 
+  it('reaches every editor feature: settings, site, multi-shape formations, LED signs, the preview', async () => {
+    const first = getState().doc.scenes[0]!
+    // Show-wide settings, limits, takeoff and the flight home.
+    let out = await runTool('set_show', { audience_distance: 220, limits: { max_speed: 8, battery_minutes: 12 }, takeoff: { landing: 'home' }, return_flight: { transition: { style: 'rain' }, dim: true } })
+    expect(out.error, String(out.content)).toBeUndefined()
+    const d = getState().doc
+    expect(d.site.audienceDistance).toBe(220)
+    expect(d.limits.maxSpeedH).toBe(8)
+    expect(d.limits.maxFlightTime).toBe(720)
+    expect(d.site.landing).toBe('home')
+    expect(d.site.returnFlight.style?.kind).toBe('rain')
+    expect(d.site.returnFlight.dim).toBe(true)
+    // The site: accuracy, a keep-out zone and the flight area.
+    out = await runTool('set_site', { accuracy: { preset: 'rtk' }, add_zones: [{ name: 'Stage', kind: 'building', x: 0, z: 120, width: 30, depth: 10, top: 12 }], flight_area: { x: 0, z: 0, width: 400, depth: 300 } })
+    expect(out.error, String(out.content)).toBeUndefined()
+    expect(getState().doc.limits.accuracy).toEqual({ h: 0.1, v: 0.15 })
+    expect(getState().doc.site.zones?.[0]?.name).toBe('Stage')
+    expect(getState().doc.site.area?.length).toBe(4)
+    expect(summarizeShow(getState().doc)).toMatch(/"Stage" \(obstacle\)/)
+    // A second shape in a formation, then removing it.
+    out = await runTool('add_shape', { scene_id: first.id, shape: { kind: 'text', text: 'HI' }, light: { effect: 'solid', color: '#ffffff' }, up: -30, share: 0.4 })
+    expect(out.error, String(out.content)).toBeUndefined()
+    expect(getState().doc.scenes[0]!.layers.filter((l) => !l.role).length).toBe(2)
+    expect((await runTool('remove_shape', { scene_id: first.id, layer_index: 1 })).error).toBeUndefined()
+    expect(getState().doc.scenes[0]!.layers.filter((l) => !l.role).length).toBe(1)
+    // An LED sign, and a formation with an extra shape from the start.
+    out = await runTool('add_scene', { scene: { name: 'Marquee', shape: { kind: 'led_sign', text: 'WELCOME', columns: 20 }, light: { effect: 'matrix', color: '#ffcc00' } } })
+    expect(out.error, String(out.content)).toBeUndefined()
+    const sign = getState().doc.scenes.find((s) => s.name === 'Marquee')!
+    expect(sign.layers[0]!.effect.kind).toBe('matrix')
+    expect(sign.layers[0]!.shape.kind).toBe('grid')
+    out = await runTool('add_scene', { scene: { name: 'Love', shape: { kind: 'heart' }, light: { effect: 'solid', color: '#ff3366' }, extra_shapes: [{ shape: { kind: 'text', text: 'A+B' }, light: { effect: 'solid', color: '#ffffff' }, up: -35 }] } })
+    expect(out.error, String(out.content)).toBeUndefined()
+    expect(getState().doc.scenes.find((s) => s.name === 'Love')!.layers.length).toBeGreaterThanOrEqual(2)
+    // The preview follows.
+    out = await runTool('show_moment', { scene_id: sign.id, camera: 'orbit' })
+    expect(out.error).toBeUndefined()
+    expect(getState().selection).toEqual({ kind: 'scene', id: sign.id })
+    expect(getState().camera).toBe('orbit')
+  })
+
   it('summaries carry ids and the safety status', () => {
     const s = summarizeShow(getState().doc)
     expect(s).toContain(getState().doc.scenes[0]!.id)

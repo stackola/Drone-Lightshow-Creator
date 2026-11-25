@@ -75,3 +75,18 @@ export function simPositions(compiled: Compiled, t: number, out: Float32Array): 
   for (let i = 0; i < n * 3; i++) out[i] = f[oa + i]! + (f[ob + i]! - f[oa + i]!) * k
   return true
 }
+
+/** Run the wind test and wait for the result (for the copilot). */
+export function runSimAsync(wind: WindSpec): Promise<SimResult> {
+  return new Promise((resolve, reject) => {
+    if (!getState().compiled) { reject(new Error('The show is still being planned.')); return }
+    runSim(wind)
+    const unsub = useSim.subscribe((st) => {
+      if (st.running) return
+      unsub()
+      if (st.error) reject(new Error(st.error))
+      else if (st.result) resolve(st.result)
+      else reject(new Error('The wind test was stopped.'))
+    })
+  })
+}

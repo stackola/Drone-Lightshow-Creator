@@ -217,3 +217,48 @@ describe('director plans with splits', () => {
     expect(built.validation.issues).toEqual([])
   })
 })
+
+describe('plans use every feature', () => {
+  it('LED signs, extra shapes, placement and the flight home', () => {
+    const plan: Plan = {
+      title: 'All in', concept: 'Everything.',
+      scenes: [
+        { name: 'Sign', shape: { kind: 'led_sign', text: 'HELLO', columns: 18 }, light: { effect: 'matrix', color: '#00ffcc', speed: 5 } },
+        { name: 'Logo + name', shape: { kind: 'heart' }, light: { effect: 'solid', color: '#ff3366' }, across: 30, extra_shapes: [{ shape: { kind: 'text', text: 'ANA' }, light: { effect: 'solid', color: '#ffffff' }, up: -40, share: 0.4 }] },
+      ],
+      cues: [],
+      return_flight: { transition: { style: 'rain' }, dim: true },
+    }
+    expect(ShowPlan.safeParse(plan).success).toBe(true)
+    const built = buildShowFromPlan(plan, newShow(120))
+    const [sign, logo] = built.doc.scenes
+    expect(sign!.layers[0]!.effect).toMatchObject({ kind: 'matrix', text: 'HELLO', a: '#00ffcc' })
+    expect(logo!.layers.filter((l) => !l.role).map((l) => l.shape.kind)).toEqual(['heart', 'text'])
+    expect(logo!.position[0]).toBe(30)
+    expect(built.doc.site.returnFlight.style?.kind).toBe('rain')
+    expect(built.doc.site.returnFlight.dim).toBe(true)
+    expect(built.validation.issues).toEqual([])
+  })
+
+  it('custom drawings and 3D models reach group formations and extra shapes', async () => {
+    const { customJobs } = await import('./customs')
+    const plan: Plan = {
+      title: 'Customs', concept: '',
+      scenes: [{
+        name: 'Split', shape: { kind: 'custom', description: 'a logo' }, light: { effect: 'solid' },
+        extra_shapes: [{ shape: { kind: 'model3d', description: 'a trophy' }, light: { effect: 'image' } }],
+        split: { mode: 'halves', groups: [{ steps: [{ name: 'Cat', shape: { kind: 'custom', description: 'a cat' }, light: { effect: 'solid' } }] }, { steps: [{ name: 'Star', shape: { kind: 'star' }, light: { effect: 'solid' } }] }] },
+      }],
+      cues: [],
+    }
+    const jobs = customJobs(plan.scenes, 200)
+    expect(jobs.map((j) => j.shape.description)).toEqual(['a logo', 'a trophy', 'a cat'])
+    // A drawing made for the cat lands in the left group's formation, with its own colours.
+    const cat = { kind: 'image' as const, size: 1, name: 'cat', mask: { w: 2, h: 2, bits: '1111' }, colors: null, cw: 0, ch: 0 }
+    const customs = new Map<unknown, import('@/core/types').ShapeSpec>([[jobs[2]!.shape, cat]])
+    const built = buildShowFromPlan(plan, newShow(200), customs)
+    const step = built.doc.scenes[0]!.groups![0]!.steps[0]!
+    expect(step.layers[0]!.shape.kind).toBe('image')
+    expect(step.layers[0]!.effect.kind).toBe('image')
+  })
+})
